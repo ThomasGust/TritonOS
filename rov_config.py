@@ -265,7 +265,7 @@ MOTOR_PWM_CHANNELS = sorted(THRUSTER_CHANNELS.values())
 THRUSTER_REVERSED = {
       "H_FL": True,
     # "H_FR": True,
-      #"H_RL": True,
+      "H_RL": True,
     # "H_RR": True,
     # "V_FL": True,
       "V_FR": True,
