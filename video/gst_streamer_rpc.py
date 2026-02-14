@@ -125,6 +125,48 @@ def usb_rebind_port(port_hint: str, messages: list[str] | None = None) -> bool:
 
     return ok_any
 
+
+def usb_reset_all_cameras(port_hint: str, messages: list[str] | None = None) -> bool:
+    """Broader best-effort USB reset intended to recover multiple cameras.
+
+    Strategy (small + conservative):
+      1) If we can infer a *parent hub* for the failing camera (e.g. 1.3 from 1.3.4),
+         unbind/bind that hub device. This resets all downstream ports.
+      2) Fallback: unbind/bind each discovered camera port from /dev/v4l/by-path/*video-index0.
+
+    Returns True if we successfully issued at least one unbind+bind operation.
+    """
+    msgs = messages if messages is not None else []
+    port_hint = str(port_hint or "")
+
+    # 1) Try parent hub reset (e.g. 1.3 from 1.3.4)
+    parts = port_hint.split(".")
+    if len(parts) >= 2:
+        parent = ".".join(parts[:-1])
+        msgs.append(f"USB reset: attempting hub rebind on parent port {parent} (from {port_hint})")
+        if usb_rebind_port(parent, messages=msgs):
+            msgs.append("USB reset: hub rebind issued (downstream devices will re-enumerate)")
+            return True
+
+    # 2) Fallback: rebind all ports we can see in /dev/v4l/by-path
+    ok_any = False
+    paths = sorted(glob.glob("/dev/v4l/by-path/*video-index0"))
+    port_hints: set[str] = set()
+    for p in paths:
+        h = _extract_usb_port_hint(p)
+        if h:
+            port_hints.add(h)
+
+    if not port_hints:
+        msgs.append("USB reset: no camera ports discovered under /dev/v4l/by-path/*video-index0")
+        return False
+
+    msgs.append(f"USB reset: rebinding all discovered camera ports: {', '.join(sorted(port_hints))}")
+    for h in sorted(port_hints):
+        ok_any = usb_rebind_port(h, messages=msgs) or ok_any
+
+    return ok_any
+
 def _intervals_to_fps(interval_lines: list[str]) -> list[float]:
     """
     Turn lines like:
@@ -616,6 +658,25 @@ def start_video_rpc():
                             # try again
                             continue
                     else:
+                        # Rebind attempts exhausted. As a next (broader) step, try a hub-level
+                        # reset that should cause *all* downstream cameras to re-enumerate.
+                        messages.append(
+                            f"Video stream '{scfg.name}' still failed after {retries} USB rebind attempts. "
+                            f"Attempting broader USB reset…"
+                        )
+                        did_reset = usb_reset_all_cameras(port_hint, messages=messages)
+                        if did_reset:
+                            time.sleep(max(0.0, delay_s))
+                            try:
+                                _try_start_once()
+                                messages.append(f"Video stream '{scfg.name}' started after broader USB reset")
+                                sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
+                                continue
+                            except Exception as e3:
+                                last_err = str(e3)
+                        else:
+                            messages.append("Broader USB reset could not be issued (no matching sysfs devices)")
+
                         sock.send_json({"ok": False, "error": last_err or "failed to start stream", "messages": messages})
 
             elif cmd == "stop_stream":
