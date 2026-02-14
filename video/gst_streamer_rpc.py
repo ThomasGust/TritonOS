@@ -133,7 +133,7 @@ def build_structured_modes(parsed_formats: list[dict]) -> list[dict]:
 def streamconfig_from_dict(d: dict) -> StreamConfig:
     return StreamConfig(
         name=d["name"],
-        device=d.get("device", "/dev/video0"),
+        device=d.get("device", "/dev/v4l/by-path/*video-index0"),
         width=d.get("width", 1280),
         height=d.get("height", 720),
         fps=d.get("fps", 30),
@@ -340,7 +340,8 @@ def parse_v4l2_formats_ext(text: str) -> list[dict]:
 
 def device_label_from_sys(dev_path: str) -> str | None:
     try:
-        base = os.path.basename(dev_path)
+        real = os.path.realpath(dev_path)
+        base = os.path.basename(real)
         sys_name_path = f"/sys/class/video4linux/{base}/name"
         if os.path.exists(sys_name_path):
             with open(sys_name_path, "r") as f:
@@ -400,6 +401,12 @@ def probe_v4l2_device(dev_path: str) -> dict:
 
 
 def list_video_devices() -> list[dict]:
+    # Prefer stable, per-port symlinks (one per physical camera).
+    by_path = sorted(glob.glob("/dev/v4l/by-path/*video-index0"))
+    if by_path:
+        return [probe_v4l2_device(d) for d in by_path]
+
+    # Fallback: raw /dev/video* nodes (may include duplicates per camera).
     devices = sorted(glob.glob("/dev/video*"))
     return [probe_v4l2_device(d) for d in devices]
 
@@ -529,7 +536,7 @@ def start_video_rpc():
 
             # NEW: get caps for a single device
             elif cmd == "get_device_caps":
-                dev_path = args.get("device", "/dev/video0")
+                dev_path = args.get("device", "/dev/v4l/by-path/*video-index0")
                 info = probe_v4l2_device(dev_path)
                 sock.send_json({"ok": True, "data": info})
 

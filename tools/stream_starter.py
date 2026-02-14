@@ -8,7 +8,7 @@ if __name__ == "__main__":
     mgr = StreamManager()
     cfg = StreamConfig(
         name="cam0",
-        device="/dev/video0",
+        device="/dev/v4l/by-path/*video-index0",
         width=1280,
         height=720,
         fps=30,

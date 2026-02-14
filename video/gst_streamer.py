@@ -17,7 +17,7 @@ mgr = StreamManager()
 
 cfg0 = StreamConfig(
     name="cam0",
-    device="/dev/video0",
+    device="/dev/v4l/by-path/*video-index0",
     width=1280,
     height=720,
     fps=30,
@@ -30,7 +30,9 @@ mgr.start_stream(cfg0)
 """
 from __future__ import annotations
 
+import glob
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field, asdict
@@ -60,7 +62,7 @@ class StreamConfig:
     name: str
 
     # Capture
-    device: str = "/dev/video0"
+    device: str = "/dev/v4l/by-path/*video-index0"
     width: int = 1280
     height: int = 720
     fps: int = 30
@@ -106,6 +108,22 @@ class StreamConfig:
 
 class GstError(RuntimeError):
     pass
+
+
+def resolve_v4l2_device(device: str) -> str:
+    """Resolve a V4L2 device path, expanding /dev/v4l/by-path globs if present."""
+    dev = (device or "").strip()
+    if not dev:
+        return dev
+
+    # Allow configs like /dev/v4l/by-path/*1.3.4*video-index0
+    if any(ch in dev for ch in "*?[]"):
+        matches = sorted(glob.glob(dev))
+        if not matches:
+            raise GstError(f"No V4L2 device matches pattern: {dev}")
+        return matches[0]
+
+    return dev
 
 
 class GstStream:
@@ -231,7 +249,9 @@ class GstStream:
             raise ValueError("host is required for UDP transport")
 
         parts = []
-        parts.append(f"v4l2src device={cfg.device}")
+        dev = resolve_v4l2_device(cfg.device)
+
+        parts.append(f"v4l2src device={dev}")
 
         vf = cfg.video_format.lower()
 
@@ -404,7 +424,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Raspberry Pi GStreamer sender")
     ap.add_argument("--name", default="cam0")
-    ap.add_argument("--device", default="/dev/video0")
+    ap.add_argument("--device", default="/dev/v4l/by-path/*video-index0")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)

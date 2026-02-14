@@ -63,7 +63,11 @@ def list_dev_glob(pattern: str) -> List[str]:
 
 def collect_video_info(timeout_s: float = 4.0) -> Dict[str, Any]:
     info: Dict[str, Any] = {"devices": [], "v4l2ctl": None}
-    devices = list_dev_glob("video*")
+    by_path = Path("/dev/v4l/by-path")
+    if by_path.exists():
+        devices = sorted([str(p) for p in by_path.glob("*video-index0")])
+    else:
+        devices = list_dev_glob("video*")
     info["devices"] = devices
 
     v4l2 = which("v4l2-ctl")
@@ -185,7 +189,7 @@ def _print_report_human(report: Dict[str, Any]) -> None:
     print(f"Platform: {report.get('platform')}")
     print(f"Python: {report.get('python')}")
     print("")
-    print(f"Cameras (/dev/video*): {v['cameras_found']} found (min required: {v['min_cameras']})")
+    print(f"Cameras (/dev/v4l/by-path/*video-index0): {v['cameras_found']} found (min required: {v['min_cameras']})")
     for dev in report.get("video", {}).get("devices", []):
         print(f"  - {dev}")
     if report.get("video", {}).get("v4l2ctl"):
@@ -222,7 +226,7 @@ def _print_report_human(report: Dict[str, Any]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--min-cameras", type=int, default=1, help="Minimum number of /dev/video* devices expected")
+    ap.add_argument("--min-cameras", type=int, default=1, help="Minimum number of /dev/v4l/by-path/*video-index0 devices expected")
     ap.add_argument("--json", action="store_true", help="Print JSON instead of human report")
     ap.add_argument("--include-navigator", action="store_true", help="Also attempt a Navigator hardware read")
     args = ap.parse_args()

@@ -25,7 +25,7 @@ This patched build focuses on making H.264 streaming start reliably and stay low
 ```json
 {
   "name": "main",
-  "device": "/dev/video0",
+  "device": "/dev/v4l/by-path/*video-index0",
   "width": 1280,
   "height": 720,
   "fps": 30,
@@ -42,7 +42,7 @@ This patched build focuses on making H.264 streaming start reliably and stay low
 ```json
 {
   "name": "main",
-  "device": "/dev/video0",
+  "device": "/dev/v4l/by-path/*video-index0",
   "width": 1280,
   "height": 720,
   "fps": 30,
