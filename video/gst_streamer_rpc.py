@@ -15,6 +15,7 @@ import os
 import subprocess
 from shutil import which
 import re
+import time
 from collections import defaultdict
 
 
@@ -34,6 +35,95 @@ logger = logging.getLogger("gst_streamer_rpc")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
 FPS_RE = re.compile(r"\(([\d.]+)\s*fps\)")
+
+# USB port hint like "1.3.4" embedded in by-path patterns
+USB_PORT_RE = re.compile(r"(\d+(?:\.\d+){2,})")
+
+
+def _extract_usb_port_hint(device: str) -> str | None:
+    """Best-effort extraction of a hub port hint like '1.3.4' from a device string.
+
+    Works with patterns like:
+      /dev/v4l/by-path/*1.3.4*video-index0
+      usb-0000:01:00.0-1.3.4
+    """
+    s = str(device or "")
+    m = USB_PORT_RE.search(s)
+    return m.group(1) if m else None
+
+
+def _sysfs_write(path: str, value: str) -> None:
+    with open(path, "w") as f:
+        f.write(value)
+
+
+def _find_usb_device_ids_for_port(port_hint: str) -> list[str]:
+    """Find sysfs USB device IDs matching a port hint.
+
+    On Pi/Linux these often look like:
+      1-1.3.4
+    We return the basename(s) to be written into unbind/bind.
+    """
+    base = "/sys/bus/usb/devices"
+    if not port_hint:
+        return []
+
+    # Fast path: glob for "*-<port_hint>" (e.g. "1-1.3.4")
+    matches: list[str] = []
+    for p in glob.glob(os.path.join(base, f"*-{port_hint}")):
+        bn = os.path.basename(p)
+        if ":" in bn:
+            continue
+        matches.append(bn)
+
+    # If that didn't work, scan directories (some kernels name the root hub differently)
+    if not matches:
+        try:
+            for bn in os.listdir(base):
+                if ":" in bn:
+                    continue
+                if bn.endswith(f"-{port_hint}"):
+                    matches.append(bn)
+        except Exception:
+            pass
+
+    return sorted(set(matches))
+
+
+def usb_rebind_port(port_hint: str, messages: list[str] | None = None) -> bool:
+    """Best-effort unbind/bind for a USB device on a given port hint.
+
+    Returns True if we successfully issued unbind+bind to at least one matching
+    device ID. This does not guarantee the camera will enumerate.
+    """
+    msgs = messages if messages is not None else []
+    dev_ids = _find_usb_device_ids_for_port(port_hint)
+    if not dev_ids:
+        msgs.append(f"USB rebind: no /sys/bus/usb/devices/*-{port_hint} entry found")
+        return False
+
+    unbind_path = "/sys/bus/usb/drivers/usb/unbind"
+    bind_path = "/sys/bus/usb/drivers/usb/bind"
+
+    ok_any = False
+    for dev_id in dev_ids:
+        try:
+            msgs.append(f"USB rebind: unbind {dev_id}")
+            _sysfs_write(unbind_path, dev_id)
+            time.sleep(0.25)
+            msgs.append(f"USB rebind: bind {dev_id}")
+            _sysfs_write(bind_path, dev_id)
+            ok_any = True
+        except PermissionError:
+            msgs.append(
+                "USB rebind: permission denied writing to sysfs (run TritonOS video service as root / with CAP_SYS_ADMIN)"
+            )
+        except FileNotFoundError:
+            msgs.append("USB rebind: sysfs bind/unbind paths not found")
+        except Exception as e:
+            msgs.append(f"USB rebind: failed for {dev_id}: {e}")
+
+    return ok_any
 
 def _intervals_to_fps(interval_lines: list[str]) -> list[float]:
     """
@@ -487,8 +577,46 @@ def start_video_rpc():
                             "start_stream: failed to stop existing stream '%s' before restart",
                             scfg.name,
                         )
-                mgr.start_stream(scfg)
-                sock.send_json({"ok": True, "data": {"name": scfg.name}})
+
+                # Attempt start. If it fails (e.g., camera not enumerated yet),
+                # try a best-effort USB unbind/bind on the inferred hub port.
+                messages: list[str] = []
+                last_err: str | None = None
+
+                def _try_start_once() -> None:
+                    mgr.start_stream(scfg)
+
+                try:
+                    _try_start_once()
+                    sock.send_json({"ok": True, "data": {"name": scfg.name}})
+                except Exception as e:
+                    last_err = str(e)
+                    port_hint = _extract_usb_port_hint(scfg.device)
+                    if not port_hint:
+                        sock.send_json({"ok": False, "error": last_err})
+                        continue
+
+                    retries = int(getattr(rov_cfg, "VIDEO_USB_REBIND_RETRIES", 3))
+                    delay_s = float(getattr(rov_cfg, "VIDEO_USB_REBIND_DELAY_S", 1.0))
+
+                    for i in range(max(0, retries)):
+                        messages.append(
+                            f"Video start failed for '{scfg.name}' (device={scfg.device}). "
+                            f"Attempting USB rebind on port {port_hint} ({i+1}/{retries})…"
+                        )
+                        usb_rebind_port(port_hint, messages=messages)
+                        time.sleep(max(0.0, delay_s))
+                        try:
+                            _try_start_once()
+                            messages.append(f"Video stream '{scfg.name}' started after USB rebind")
+                            sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
+                            break
+                        except Exception as e2:
+                            last_err = str(e2)
+                            # try again
+                            continue
+                    else:
+                        sock.send_json({"ok": False, "error": last_err or "failed to start stream", "messages": messages})
 
             elif cmd == "stop_stream":
                 name = args["name"]
