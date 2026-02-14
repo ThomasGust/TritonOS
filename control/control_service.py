@@ -540,7 +540,7 @@ class ControlService:
                     payload["lights"] = float(lights_val)
                 self._send_to_hw(payload)
 
-                if (self.debug or self.dry_run) and (now - self._last_log) > self.log_every_s:
+                if self.debug and (now - self._last_log) > self.log_every_s:
                     reason = "no frames" if pilot is None else ("stale" if fresh_pilot is None else "DISARMED")
                     msg = f"[rov/control] NEUTRAL ({reason}, age={fresh_age:.3f}s armed={self.state.is_armed()})"
                     if arming_event:
@@ -588,7 +588,7 @@ class ControlService:
                     payload["lights"] = float(lights_val)
                 self._send_to_hw(payload)
 
-                if (self.debug or self.dry_run) and (now - self._last_log) > self.log_every_s:
+                if self.debug and (now - self._last_log) > self.log_every_s:
                     if self._mix_mode == "simple_groups":
                         msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr}"
                     else:

@@ -305,7 +305,7 @@ def start_control_service():
 
 
     # pilot receiver
-    pilot_rx = PilotReceiver(bind_endpoint=cfg.PILOT_SUB_ENDPOINT, debug=cfg.DEBUG)
+    pilot_rx = PilotReceiver(bind_endpoint=cfg.PILOT_SUB_ENDPOINT, debug=cfg.PILOT_RX_DEBUG)
     pilot_rx.start()
 
     # shared state (armed flag)
@@ -331,7 +331,7 @@ def start_control_service():
         control_state=state,
         rate_hz=cfg.CONTROL_RATE_HZ,
         ttl=cfg.PILOT_TTL,
-        debug=cfg.DEBUG,
+        debug=cfg.CONTROL_DEBUG,
         dry_run=(hw_sink is None),
     )
 
