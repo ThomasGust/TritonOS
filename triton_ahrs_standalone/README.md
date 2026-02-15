@@ -33,12 +33,17 @@ sudo apt-get install -y python3-spidev
 ## 3) Run AHRS (quick start)
 
 ```bash
-python3 -m triton_ahrs.run_ahrs --auto-gyro-cal --yaw-zero
+python3 -m triton_ahrs.run_ahrs --auto-gyro-cal --yaw-zero --zero-attitude
 ```
 
 You should see roll/pitch/yaw printing at ~20 Hz.
 
 ### Helpful options
+- Faster lock + less jitter (recommended defaults already):
+  - `--init-seconds` seeds initial attitude from averaged accel(+mag) so you don't wait ~30s to settle.
+  - `--warmup-seconds` / `--beta-init` converges quickly at startup then drops to steady beta.
+  - `--bias-adapt-tau` refines gyro bias only when stationary.
+
 
 - Log to CSV:
   ```bash

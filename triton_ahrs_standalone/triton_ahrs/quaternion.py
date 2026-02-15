@@ -30,6 +30,41 @@ class Quaternion:
     def identity() -> "Quaternion":
         return Quaternion(1.0, 0.0, 0.0, 0.0)
 
+
+@staticmethod
+def from_rotation_matrix(R: np.ndarray) -> "Quaternion":
+    """Create a quaternion from a 3x3 rotation matrix.
+
+    R must map BODY -> WORLD (same convention as this project).
+    """
+    R = np.asarray(R, dtype=float).reshape(3, 3)
+    tr = float(R[0, 0] + R[1, 1] + R[2, 2])
+    if tr > 0.0:
+        S = math.sqrt(tr + 1.0) * 2.0  # S=4*qw
+        qw = 0.25 * S
+        qx = (R[2, 1] - R[1, 2]) / S
+        qy = (R[0, 2] - R[2, 0]) / S
+        qz = (R[1, 0] - R[0, 1]) / S
+    else:
+        if (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
+            S = math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2.0
+            qw = (R[2, 1] - R[1, 2]) / S
+            qx = 0.25 * S
+            qy = (R[0, 1] + R[1, 0]) / S
+            qz = (R[0, 2] + R[2, 0]) / S
+        elif R[1, 1] > R[2, 2]:
+            S = math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2.0
+            qw = (R[0, 2] - R[2, 0]) / S
+            qx = (R[0, 1] + R[1, 0]) / S
+            qy = 0.25 * S
+            qz = (R[1, 2] + R[2, 1]) / S
+        else:
+            S = math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2.0
+            qw = (R[1, 0] - R[0, 1]) / S
+            qx = (R[0, 2] + R[2, 0]) / S
+            qy = (R[1, 2] + R[2, 1]) / S
+            qz = 0.25 * S
+    return Quaternion(float(qw), float(qx), float(qy), float(qz)).normalized()
     def normalized(self) -> "Quaternion":
         n = math.sqrt(self.w*self.w + self.x*self.x + self.y*self.y + self.z*self.z)
         if n <= 0.0:
