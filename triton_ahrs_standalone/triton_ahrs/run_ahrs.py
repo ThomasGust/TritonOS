@@ -4,7 +4,6 @@ import argparse
 import csv
 import json
 import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -15,93 +14,9 @@ import numpy as np
 from .calibration import GyroCalibration, MagCalibration, Mount, load_json, save_json
 from .madgwick import MadgwickAHRS, MadgwickConfig
 from .navigator import NavigatorIMU
-from .quaternion import quat_to_euler_deg, wrap_degrees, Quaternion
+from .quaternion import Quaternion, quat_to_euler_deg, wrap_degrees
 
 G = 9.80665
-
-
-UP_W = np.array([0.0, 0.0, 1.0], dtype=float)
-
-def _normalize3(v: np.ndarray) -> Optional[np.ndarray]:
-    n = float(np.linalg.norm(v))
-    if not math.isfinite(n) or n <= 1e-12:
-        return None
-    return v / n
-
-class LowPass3:
-    """Simple 3D first-order low-pass filter (exponential smoothing) with time constant tau."""
-
-    def __init__(self, tau_s: float):
-        self.tau = float(max(0.0, tau_s))
-        self.x: Optional[np.ndarray] = None
-
-    def reset(self) -> None:
-        self.x = None
-
-    def update(self, v: np.ndarray, dt: float) -> np.ndarray:
-        v = np.asarray(v, dtype=float).reshape(3)
-        if self.tau <= 0.0 or not math.isfinite(self.tau):
-            self.x = v.copy()
-            return v
-        if self.x is None:
-            self.x = v.copy()
-            return v
-        alpha = float(dt / (self.tau + dt))
-        self.x = (1.0 - alpha) * self.x + alpha * v
-        return self.x
-
-def _quat_from_two_unit_vectors(a: np.ndarray, b: np.ndarray) -> Quaternion:
-    """Return q such that q.rotate(a) == b (approximately), for unit a,b."""
-    a = np.asarray(a, dtype=float).reshape(3)
-    b = np.asarray(b, dtype=float).reshape(3)
-    c = float(np.dot(a, b))
-    v = np.cross(a, b)
-    vn = float(np.linalg.norm(v))
-    if vn <= 1e-12:
-        if c > 0.0:
-            return Quaternion.identity()
-        axis = np.array([1.0, 0.0, 0.0], dtype=float)
-        if abs(a[0]) > 0.9:
-            axis = np.array([0.0, 1.0, 0.0], dtype=float)
-        axis = np.cross(a, axis)
-        axis = axis / float(np.linalg.norm(axis))
-        return Quaternion(0.0, float(axis[0]), float(axis[1]), float(axis[2])).normalized()
-    q = Quaternion(1.0 + c, float(v[0]), float(v[1]), float(v[2])).normalized()
-    return q
-
-def initial_quaternion_from_accel_mag(accel_m_s2: np.ndarray, mag_uT: Optional[np.ndarray]) -> Quaternion:
-    """Compute an initial BODY->WORLD quaternion from averaged accel (+optional mag)."""
-    a = _normalize3(accel_m_s2)
-    if a is None:
-        return Quaternion.identity()
-
-    z_b = a  # body 'up' direction expressed in body coordinates
-    if mag_uT is None:
-        return _quat_from_two_unit_vectors(z_b, UP_W)
-
-    m = _normalize3(mag_uT)
-    if m is None:
-        return _quat_from_two_unit_vectors(z_b, UP_W)
-
-    mh = m - z_b * float(np.dot(m, z_b))
-    mh = _normalize3(mh)
-    if mh is None:
-        return _quat_from_two_unit_vectors(z_b, UP_W)
-
-    x_b = mh
-    y_b = np.cross(z_b, x_b)
-    y_b = _normalize3(y_b)
-    if y_b is None:
-        return _quat_from_two_unit_vectors(z_b, UP_W)
-
-    x_b = np.cross(y_b, z_b)
-    x_b = _normalize3(x_b)
-    if x_b is None:
-        return _quat_from_two_unit_vectors(z_b, UP_W)
-
-    B = np.stack([x_b, y_b, z_b], axis=1)
-    R = B.T
-    return Quaternion.from_rotation_matrix(R)
 
 
 def _now() -> float:
@@ -112,13 +27,34 @@ def _perf() -> float:
     return time.perf_counter()
 
 
+class EMA3:
+    """Simple 3D exponential moving average with time-constant tau."""
+
+    def __init__(self, tau_s: float):
+        self.tau = float(max(0.0, tau_s))
+        self.x: Optional[np.ndarray] = None
+
+    def reset(self) -> None:
+        self.x = None
+
+    def update(self, v: np.ndarray, dt: float) -> np.ndarray:
+        v = np.asarray(v, dtype=float)
+        if self.tau <= 0.0:
+            self.x = v
+            return v
+        if self.x is None:
+            self.x = v
+            return v
+        a = float(dt / (self.tau + dt))
+        self.x = (1.0 - a) * self.x + a * v
+        return self.x
+
+
 def calibrate_gyro_bias(board: NavigatorIMU, seconds: float, rate_hz: float, mount: Mount) -> GyroCalibration:
     """Estimate gyro bias (rad/s) from a stationary window."""
-    n = max(10, int(seconds * rate_hz))
-    dt = 1.0 / rate_hz
-
+    dt = 1.0 / max(10.0, float(rate_hz))
     acc = np.zeros(3, dtype=float)
-    t_end = _perf() + seconds
+    t_end = _perf() + float(seconds)
     k = 0
     while _perf() < t_end:
         g = board.read_gyro()
@@ -128,8 +64,7 @@ def calibrate_gyro_bias(board: NavigatorIMU, seconds: float, rate_hz: float, mou
         time.sleep(dt)
     if k <= 0:
         raise RuntimeError("gyro calibration failed: no samples")
-    bias = acc / float(k)
-    return GyroCalibration(bias_rad_s=bias)
+    return GyroCalibration(bias_rad_s=acc / float(k))
 
 
 def _mag_health(
@@ -158,55 +93,98 @@ def _mag_health(
     return (True, mag_norm, step)
 
 
+def _normalize3(v: np.ndarray) -> Optional[np.ndarray]:
+    n = float(np.linalg.norm(v))
+    if not math.isfinite(n) or n <= 1e-12:
+        return None
+    return v / n
+
+
+def _initial_quaternion_from_accel_mag(accel: np.ndarray, mag: Optional[np.ndarray]) -> Quaternion:
+    """Seed quaternion from accel (+ optional mag).
+
+    accel and mag are in BODY coordinates (after mount + calibration).
+
+    We set WORLD +Z to align with accel direction (i.e., "up" as seen by the IMU at rest).
+    Yaw is chosen so that the horizontal projection of mag points along WORLD +X.
+    """
+    a = _normalize3(accel)
+    if a is None:
+        return Quaternion.identity()
+
+    z_w = np.array([0.0, 0.0, 1.0], dtype=float)
+    q_tilt = Quaternion.from_two_vectors(a, z_w)
+
+    if mag is None:
+        return q_tilt
+
+    m = _normalize3(mag)
+    if m is None:
+        return q_tilt
+
+    m_w = q_tilt.rotate(m)
+    mh = np.array([m_w[0], m_w[1], 0.0], dtype=float)
+    mh_n = float(np.linalg.norm(mh))
+    if not math.isfinite(mh_n) or mh_n <= 1e-8:
+        return q_tilt
+    mh /= mh_n
+
+    # Rotate around WORLD Z so that mh aligns with +X
+    yaw = math.atan2(float(mh[1]), float(mh[0]))
+    q_yaw = Quaternion.from_axis_angle((0.0, 0.0, 1.0), -yaw)
+
+    return (q_yaw * q_tilt).normalized()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="Standalone AHRS for RPi + Navigator IMU")
+    p = argparse.ArgumentParser(description="Standalone AHRS for RPi + Navigator IMU (robust)")
 
     # Loop / output
     p.add_argument("--rate", type=float, default=200.0, help="AHRS update rate (Hz)")
     p.add_argument("--print-rate", type=float, default=20.0, help="Console print rate (Hz)")
     p.add_argument("--log-csv", type=str, default="", help="Write CSV log to this path")
-    p.add_argument("--json", action="store_true", help="Emit JSON lines to stdout instead of human text")
+    p.add_argument("--json", action="store_true", help="Emit JSON lines to stdout")
 
     # Filter
-    p.add_argument("--beta", type=float, default=0.08, help="Madgwick beta gain")
+    p.add_argument("--beta", type=float, default=0.08, help="Madgwick beta (steady-state)")
+    p.add_argument("--beta-init", type=float, default=0.60, help="Madgwick beta during warmup")
+    p.add_argument("--beta-stationary", type=float, default=0.12, help="Madgwick beta when stationary")
+    p.add_argument("--warmup-seconds", type=float, default=1.5, help="Seconds to use beta-init after startup")
 
-    # Startup convergence / stability
-    p.add_argument("--init-seconds", type=float, default=0.8, help="Seconds of samples to compute an initial attitude seed")
-    p.add_argument("--warmup-seconds", type=float, default=1.5, help="Seconds to use a higher beta for fast convergence")
-    p.add_argument("--beta-init", type=float, default=0.6, help="Madgwick beta during warmup (higher = faster lock)")
-    p.add_argument("--beta-stationary", type=float, default=0.12, help="Madgwick beta when stationary (helps keep lock)")
-
-    # Simple low-pass filtering (sensor noise reduction)
-    p.add_argument("--accel-lpf-tau", type=float, default=0.05, help="Accel low-pass tau seconds (0 disables)")
-    p.add_argument("--mag-lpf-tau", type=float, default=0.20, help="Mag low-pass tau seconds (0 disables)")
-    p.add_argument("--gyro-lpf-tau", type=float, default=0.00, help="Gyro low-pass tau seconds (0 disables)")
-
-    # Stationary detection / bias refinement
-    p.add_argument("--stationary-gyro-rad", type=float, default=0.03, help="Gyro norm (rad/s) below which we consider the system stationary")
-    p.add_argument("--bias-adapt-tau", type=float, default=60.0, help="Seconds time constant for in-run gyro bias adaptation when stationary (0 disables)")
-
-    # Orientation zeroing / accel sign
+    # Initialization / presentation
+    p.add_argument("--init-seconds", type=float, default=0.8, help="Seconds to average accel/mag for initial alignment")
+    p.add_argument("--yaw-zero", action="store_true", help="Zero yaw at startup (operator-friendly)")
     p.add_argument("--zero-attitude", action="store_true", help="Zero roll/pitch/yaw at startup (relative attitude output)")
-    p.add_argument("--accel-sign", choices=["auto", "normal", "invert"], default="auto", help="How to treat accel direction at rest (auto recommended)")
+    p.add_argument("--accel-sign", choices=["auto", "normal", "invert"], default="auto", help="Accel sign for gravity (fix 180deg roll issues)")
 
     # Calibration files
     p.add_argument("--gyro-cal", type=str, default="", help="Path to gyro calibration JSON")
     p.add_argument("--mag-cal", type=str, default="", help="Path to mag calibration JSON")
     p.add_argument("--mount", type=str, default="", help="Path to mount (axis mapping) JSON")
 
-    # Auto calibration
-    p.add_argument("--auto-gyro-cal", action="store_true", help="Auto-calibrate gyro bias at startup (recommended)")
+    # Auto gyro calibration
+    p.add_argument("--auto-gyro-cal", action="store_true", help="Auto-calibrate gyro bias at startup")
     p.add_argument("--gyro-cal-seconds", type=float, default=3.0, help="Stationary seconds for gyro bias")
     p.add_argument("--save-gyro-cal", type=str, default="", help="Save estimated gyro cal JSON to this path")
+
+    # Sensor filtering
+    p.add_argument("--accel-lpf-tau", type=float, default=0.05, help="Accel LPF time-constant (s), 0 disables")
+    p.add_argument("--mag-lpf-tau", type=float, default=0.20, help="Mag LPF time-constant (s), 0 disables")
+    p.add_argument("--gyro-lpf-tau", type=float, default=0.00, help="Gyro LPF time-constant (s), 0 disables")
+
+    # Stationary detection & bias adaptation
+    p.add_argument("--stationary-gyro-rad", type=float, default=0.03, help="Stationary threshold on |gyro| (rad/s)")
+    p.add_argument("--bias-adapt-tau", type=float, default=60.0, help="Gyro bias adaptation tau (s) when stationary, 0 disables")
 
     # Health gating
     p.add_argument("--accel-g-tol", type=float, default=0.20, help="Accel magnitude tolerance (fraction of 1g)")
     p.add_argument("--mag-tol", type=float, default=0.35, help="Mag magnitude tolerance ratio around baseline")
-    p.add_argument("--mag-max-step", type=float, default=8.0, help="Max per-sample |B| step in uT before marking unhealthy")
+    p.add_argument("--mag-max-step", type=float, default=8.0, help="Max per-sample |B| step in uT")
     p.add_argument("--mag-baseline-seconds", type=float, default=2.0, help="Seconds to estimate baseline |B| at startup")
 
-    # Yaw presentation
-    p.add_argument("--yaw-zero", action="store_true", help="Zero yaw at startup (operator-friendly)")
+    # Mag hysteresis
+    p.add_argument("--mag-enable-up", type=float, default=1.0, help="Seconds to ramp mag enable up")
+    p.add_argument("--mag-enable-down", type=float, default=0.3, help="Seconds to ramp mag enable down")
 
     # Sensor options
     p.add_argument("--imu-i2c-bus", type=int, default=1)
@@ -239,7 +217,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     try:
-        # Auto gyro cal if requested or if no file was provided
+        # ---- gyro bias init ----
         if args.auto_gyro_cal or gyro_cal is None:
             if not args.json:
                 print(f"[ahrs] Gyro bias calibration: hold still for {args.gyro_cal_seconds:.1f}s ...")
@@ -252,9 +230,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if not args.json:
                     print(f"[ahrs] Saved gyro cal -> {args.save_gyro_cal}")
 
-        # Estimate baseline mag magnitude for gating (after applying mag cal + mount)
+        gyro_bias = np.array(gyro_cal.bias_rad_s, dtype=float) if gyro_cal is not None else np.zeros(3, dtype=float)
+
+        # ---- estimate baseline mag norm for gating ----
         baseline_uT: Optional[float] = None
-        if args.mag_baseline_seconds > 0:
+        if float(args.mag_baseline_seconds) > 0.0:
             mags = []
             t_end = _perf() + float(args.mag_baseline_seconds)
             while _perf() < t_end:
@@ -267,75 +247,90 @@ def main(argv: Optional[list[str]] = None) -> int:
             if mags:
                 baseline_uT = float(np.median(np.array(mags)))
 
-        # Low-pass filters (reduces sensor noise / jitter at rest)
-        accel_lpf = LowPass3(float(args.accel_lpf_tau))
-        mag_lpf = LowPass3(float(args.mag_lpf_tau))
-        gyro_lpf = LowPass3(float(args.gyro_lpf_tau))
+        # ---- LPFs ----
+        lpf_a = EMA3(float(args.accel_lpf_tau))
+        lpf_m = EMA3(float(args.mag_lpf_tau))
+        lpf_g = EMA3(float(args.gyro_lpf_tau))
 
-        # Mutable gyro bias vector (can be refined online when stationary)
-        gyro_bias = gyro_cal.bias_rad_s.copy() if gyro_cal is not None else np.zeros(3, dtype=float)
+        # ---- filter ----
+        filt = MadgwickAHRS(cfg=MadgwickConfig(beta=float(args.beta)))
 
-        # Initial attitude seed from averaged accel (+mag if healthy).
-        # This removes the long "settling" time you saw from starting at identity.
-        accel_sign = 1.0
+        # ---- initial alignment ----
+        q_zero: Optional[Quaternion] = None
+        yaw0: Optional[float] = None
+        accel_sign_used = "normal"
+
         if float(args.init_seconds) > 0.0:
-            accs = []
-            mags_seed = []
-            t_end_seed = _perf() + float(args.init_seconds)
-            while _perf() < t_end_seed:
-                a0 = board.read_accel()
-                _src0, m0 = board.read_mag()
-                av0 = np.asarray(mount.apply((a0.x, a0.y, a0.z)), dtype=float)
-                mv0 = np.asarray(mount.apply((m0.x, m0.y, m0.z)), dtype=float)
+            a_s, m_s = [], []
+            t_end = _perf() + float(args.init_seconds)
+            while _perf() < t_end:
+                a = board.read_accel()
+                _src, m = board.read_mag()
+                av = mount.apply((a.x, a.y, a.z))
+                mv = mount.apply((m.x, m.y, m.z))
                 if mag_cal is not None:
-                    mv0 = mag_cal.apply(mv0)
-                accs.append(av0)
-                mags_seed.append(mv0)
+                    mv = mag_cal.apply(mv)
+                a_s.append(av)
+                m_s.append(mv)
                 time.sleep(0.005)
 
-            a_avg = np.median(np.stack(accs, axis=0), axis=0) if accs else np.array([0.0, 0.0, G], dtype=float)
-            m_avg = np.median(np.stack(mags_seed, axis=0), axis=0) if mags_seed else None
+            a_avg = np.mean(np.array(a_s), axis=0) if a_s else np.array([0.0, 0.0, G])
+            m_avg = np.mean(np.array(m_s), axis=0) if m_s else None
 
-            # Auto accel sign: if the board is "upright" but accel points strongly downward,
-            # invert it so +Z_world corresponds to "up" and level reads near 0 instead of ~180.
-            if args.accel_sign == "invert":
-                accel_sign = -1.0
-            elif args.accel_sign == "normal":
-                accel_sign = 1.0
+            # accel sign handling
+            if args.accel_sign == "normal":
+                a_use = a_avg
+                accel_sign_used = "normal"
+            elif args.accel_sign == "invert":
+                a_use = -a_avg
+                accel_sign_used = "invert"
             else:
-                au = _normalize3(a_avg)
-                if au is not None and float(np.dot(au, UP_W)) < -0.7:
-                    accel_sign = -1.0
+                # Heuristic: pick the sign that yields euler closer to (0,0,*)
+                q1 = _initial_quaternion_from_accel_mag(a_avg, m_avg)
+                r1, p1, _ = quat_to_euler_deg(q1)
+                q2 = _initial_quaternion_from_accel_mag(-a_avg, m_avg)
+                r2, p2, _ = quat_to_euler_deg(q2)
+                cost1 = abs(wrap_degrees(r1)) + abs(p1)
+                cost2 = abs(wrap_degrees(r2)) + abs(p2)
+                if cost2 < cost1:
+                    a_use = -a_avg
+                    accel_sign_used = "invert"
+                else:
+                    a_use = a_avg
+                    accel_sign_used = "normal"
 
-            a_avg = a_avg * accel_sign
-
-            mag_for_init = None
-            if m_avg is not None:
-                ok_init, _, _ = _mag_health(
-                    m_avg,
-                    baseline_uT,
-                    tol_ratio=float(args.mag_tol),
-                    max_step_uT=float(args.mag_max_step),
-                    prev_mag_norm_uT=None,
-                )
-                if ok_init:
+            # determine if mag is healthy for init
+            mag_for_init: Optional[np.ndarray] = None
+            if m_avg is not None and baseline_uT is not None:
+                ok, _, _ = _mag_health(m_avg, baseline_uT, float(args.mag_tol), float(args.mag_max_step), None)
+                if ok:
                     mag_for_init = m_avg
 
-            q_init = initial_quaternion_from_accel_mag(a_avg, mag_for_init)
-        else:
-            q_init = Quaternion.identity()
+            q_init = _initial_quaternion_from_accel_mag(a_use, mag_for_init)
+            filt.q = q_init
 
-        filt = MadgwickAHRS(cfg=MadgwickConfig(beta=float(args.beta)))
-        filt.q = q_init
+            if args.zero_attitude:
+                q_zero = q_init
 
-        yaw0: Optional[float] = None
+            # yaw-zero uses euler (after q init)
+            if args.yaw_zero:
+                _r, _p, y = quat_to_euler_deg(q_init)
+                yaw0 = y
+
+            if not args.json:
+                r, p_, y = quat_to_euler_deg(q_init)
+                print(
+                    f"[ahrs] init q: r={wrap_degrees(r):+.2f} p={p_:+.2f} y={wrap_degrees(y):+.2f} "
+                    f"(accel_sign={accel_sign_used}, mag_init={'yes' if mag_for_init is not None else 'no'})"
+                )
+
+        # ---- main loop ----
+        start_perf = _perf()
+        last_perf = start_perf
         last_print = 0.0
-        last_perf = _perf()
         prev_mag_norm: Optional[float] = None
-        t_start = _perf()
-        q_zero: Optional[Quaternion] = None
+        mag_enable = 1.0  # hysteresis state
 
-        # CSV logging
         csv_f = None
         csv_w = None
         if args.log_csv:
@@ -351,40 +346,56 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "mag_x","mag_y","mag_z",
                 "mag_src","accel_ok","mag_ok","mode",
                 "mag_norm_uT","baseline_uT","mag_step_uT",
-                "gyro_norm_rad_s","stationary","beta","gyro_bias_x","gyro_bias_y","gyro_bias_z","accel_sign",
+                "gyro_norm","stationary","beta","mag_enable",
+                "gyro_bias_x","gyro_bias_y","gyro_bias_z",
+                "accel_sign",
             ])
 
         while True:
             t0 = _perf()
             dt = t0 - last_perf
             last_perf = t0
-            # guard dt spikes
             if not math.isfinite(dt) or dt <= 0.0:
                 dt = dt_target
             dt = min(max(dt, 1e-4), 0.05)
 
+            # read sensors
             a = board.read_accel()
             g = board.read_gyro()
             mag_src, m = board.read_mag()
-            av_raw = np.asarray(mount.apply((a.x, a.y, a.z)), dtype=float) * accel_sign
-            gv_raw = np.asarray(mount.apply((g.x, g.y, g.z)), dtype=float)
-            mv_raw = np.asarray(mount.apply((m.x, m.y, m.z)), dtype=float)
 
+            av = mount.apply((a.x, a.y, a.z))
+            gv_raw = mount.apply((g.x, g.y, g.z))
+            mv = mount.apply((m.x, m.y, m.z))
+
+            # apply accel sign (same as init)
+            if accel_sign_used == "invert":
+                av = -av
+
+            # mag calibration
             if mag_cal is not None:
-                mv_raw = mag_cal.apply(mv_raw)
+                mv = mag_cal.apply(mv)
 
-            # Low-pass to reduce jitter. (Does not change mean values, only noise.)
-            av = accel_lpf.update(av_raw, dt)
-            gv_f = gyro_lpf.update(gv_raw, dt)
-            mv = mag_lpf.update(mv_raw, dt)
+            # LPF
+            av = lpf_a.update(av, dt)
+            mv = lpf_m.update(mv, dt)
+            gv_raw = lpf_g.update(gv_raw, dt)
 
-            gyro_norm = float(np.linalg.norm(gv_f))
-            # Health checks / stationarity
+            # stationary detection uses bias-corrected gyro
+            gv = gv_raw - gyro_bias
+            gyro_norm = float(np.linalg.norm(gv))
+
             a_norm = float(np.linalg.norm(av))
             accel_ok = bool(abs(a_norm - G) <= float(args.accel_g_tol) * G)
+            stationary = bool(accel_ok and gyro_norm <= float(args.stationary_gyro_rad))
 
-            stationary = bool(accel_ok and (gyro_norm <= float(args.stationary_gyro_rad)))
+            # gyro bias adaptation
+            if stationary and float(args.bias_adapt_tau) > 0.0:
+                alpha = float(dt / max(1e-3, float(args.bias_adapt_tau)))
+                gyro_bias = (1.0 - alpha) * gyro_bias + alpha * gv_raw
+                gv = gv_raw - gyro_bias
 
+            # mag health
             mag_ok, mag_norm, mag_step = _mag_health(
                 mv,
                 baseline_uT,
@@ -394,56 +405,54 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             prev_mag_norm = mag_norm
 
-            # Online gyro bias adaptation when stationary (helps real-world drift with minimal tuning).
-            tau_bias = float(args.bias_adapt_tau)
-            if tau_bias > 0.0 and stationary:
-                alpha_b = float(dt / (tau_bias + dt))
-                gyro_bias = (1.0 - alpha_b) * gyro_bias + alpha_b * gv_f
+            # mag hysteresis (prevents rapid toggling)
+            if mag_ok:
+                mag_enable = min(1.0, mag_enable + dt / max(1e-3, float(args.mag_enable_up)))
+            else:
+                mag_enable = max(0.0, mag_enable - dt / max(1e-3, float(args.mag_enable_down)))
 
-            gv = gv_f - gyro_bias
+            use_mag = bool(accel_ok and mag_enable >= 0.8)
 
-            # Beta schedule: fast converge at startup, then steady-state, with a small bump when stationary.
-            t_since_start = float(t0 - t_start)
-            beta_cur = float(args.beta)
-            if float(args.warmup_seconds) > 0.0 and t_since_start < float(args.warmup_seconds):
-                beta_cur = float(args.beta_init)
+            # beta scheduling
+            t_since = t0 - start_perf
+            beta = float(args.beta)
+            if t_since < float(args.warmup_seconds):
+                beta = float(args.beta_init)
             elif stationary:
-                beta_cur = float(args.beta_stationary)
-            filt.cfg.beta = beta_cur
+                beta = max(beta, float(args.beta_stationary))
+            filt.cfg.beta = beta
 
-            # Choose update mode
+            # choose update mode
             mode = "gyro"
-            if accel_ok and mag_ok:
+            if accel_ok and use_mag:
                 mode = "9dof"
                 q = filt.update(gv, av, dt, mag_uT=mv)
             elif accel_ok:
                 mode = "6dof"
                 q = filt.update(gv, av, dt, mag_uT=None)
             else:
-                # high dynamics: don't trust accel/mag. integrate gyro only.
                 q = filt.q.integrate_gyro(gv, dt)
                 filt.q = q
 
-            # Optional: zero the full attitude at startup (relative roll/pitch/yaw output).
+            # output quaternion relative to initial attitude if requested
             q_out = q
-            if args.zero_attitude:
-                if q_zero is None and accel_ok:
-                    q_zero = q.conj()
-                if q_zero is not None:
-                    q_out = q_zero * q
+            if q_zero is not None:
+                q_out = (q_zero.conj() * q).normalized()
 
             roll, pitch, yaw = quat_to_euler_deg(q_out)
 
-            # Zero yaw if requested (operator-friendly). Applied after zero-attitude if both are enabled.
+            # Yaw zeroing (operator-friendly)
             if args.yaw_zero:
-                if yaw0 is None and accel_ok:
+                if yaw0 is None and stationary:
                     yaw0 = yaw
                 if yaw0 is not None:
                     yaw = wrap_degrees(yaw - yaw0)
             yaw = wrap_degrees(yaw)
+            roll = wrap_degrees(roll)
 
             ts = _now()
 
+            # CSV
             if csv_w is not None:
                 csv_w.writerow([
                     f"{ts:.6f}",
@@ -455,48 +464,44 @@ def main(argv: Optional[list[str]] = None) -> int:
                     mag_src,
                     int(accel_ok), int(mag_ok), mode,
                     f"{mag_norm:.3f}", f"{baseline_uT if baseline_uT is not None else float('nan'):.3f}", f"{mag_step:.3f}",
-                    f"{gyro_norm:.6f}", int(stationary), f"{beta_cur:.4f}",
-                    f"{gyro_bias[0]:.6f}", f"{gyro_bias[1]:.6f}", f"{gyro_bias[2]:.6f}", f"{accel_sign:.1f}",
+                    f"{gyro_norm:.6f}",
+                    int(stationary),
+                    f"{beta:.5f}",
+                    f"{mag_enable:.3f}",
+                    f"{gyro_bias[0]:+.8f}", f"{gyro_bias[1]:+.8f}", f"{gyro_bias[2]:+.8f}",
+                    accel_sign_used,
                 ])
                 csv_f.flush()
 
-            # Print at print-rate
-            if float(args.print_rate) > 0:
-                if (t0 - last_print) >= (1.0 / float(args.print_rate)):
-                    last_print = t0
-                    if args.json:
-                        out = {
-                            "ts": ts,
-                            "rpy_deg": {"roll": roll, "pitch": pitch, "yaw": yaw},
-                            "q": {"w": q_out.w, "x": q_out.x, "y": q_out.y, "z": q_out.z},
-                            "accel": {"x": float(av[0]), "y": float(av[1]), "z": float(av[2])},
-                            "gyro": {"x": float(gv[0]), "y": float(gv[1]), "z": float(gv[2])},
-                            "mag": {"x": float(mv[0]), "y": float(mv[1]), "z": float(mv[2]), "source": mag_src},
-                            "health": {
-                                "accel_ok": accel_ok,
-                                "mag_ok": mag_ok,
-                                "mode": mode,
-                                "stationary": stationary,
-                                "gyro_norm_rad_s": gyro_norm,
-                                "beta": beta_cur,
-                                "gyro_bias_rad_s": {"x": float(gyro_bias[0]), "y": float(gyro_bias[1]), "z": float(gyro_bias[2])},
-                                "accel_sign": accel_sign,
-                                "mag_norm_uT": mag_norm,
-                                "mag_baseline_uT": baseline_uT,
-                                "mag_step_uT": mag_step,
-                            },
-                        }
-                        sys.stdout.write(json.dumps(out) + "\n")
-                        sys.stdout.flush()
-                    else:
-                        print(
-                            f"r={roll:+7.2f}  p={pitch:+7.2f}  y={yaw:+7.2f}  "
-                            f"mode={mode:4s} stat={int(stationary)} beta={beta_cur:0.3f} "
-                            f"accel_ok={int(accel_ok)} mag_ok={int(mag_ok)} "
-                            f"|B|={mag_norm:6.1f}uT src={mag_src}"
-                        )
+            # Print
+            if float(args.print_rate) > 0 and (t0 - last_print) >= (1.0 / float(args.print_rate)):
+                last_print = t0
+                if args.json:
+                    out = {
+                        "ts": ts,
+                        "rpy_deg": {"roll": roll, "pitch": pitch, "yaw": yaw},
+                        "q": {"w": q_out.w, "x": q_out.x, "y": q_out.y, "z": q_out.z},
+                        "health": {
+                            "accel_ok": accel_ok,
+                            "mag_ok": mag_ok,
+                            "mode": mode,
+                            "stationary": stationary,
+                            "gyro_norm": gyro_norm,
+                            "beta": beta,
+                            "mag_enable": mag_enable,
+                            "accel_sign": accel_sign_used,
+                        },
+                    }
+                    sys.stdout.write(json.dumps(out) + "\n")
+                    sys.stdout.flush()
+                else:
+                    print(
+                        f"r={roll:+7.2f}  p={pitch:+7.2f}  y={yaw:+7.2f}  "
+                        f"mode={mode:4s} stat={int(stationary)} beta={beta:0.3f} "
+                        f"mag_en={mag_enable:0.2f} |B|={mag_norm:6.1f}uT src={mag_src}"
+                    )
 
-            # Sleep to maintain loop rate
+            # rate control
             elapsed = _perf() - t0
             to_sleep = dt_target - elapsed
             if to_sleep > 0:
