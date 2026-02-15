@@ -68,6 +68,47 @@ THRUSTER_MAX_ABS = 1.0
 POWER_SCALE = 0.35
 
 # ---------------------------------------------------------------------------
+# 2c) depth hold (sticky / "walk target")
+# ---------------------------------------------------------------------------
+# Depth hold is enabled/disabled by the pilot via PilotFrame.modes["depth_hold"].
+# These parameters tune the onboard controller.
+
+# Master switch to compile/initialize depth-hold support.
+DEPTH_HOLD_ENABLE = True
+
+# If depth telemetry is older than this, depth-hold will disengage to manual.
+DEPTH_HOLD_SENSOR_STALE_S = 0.6
+
+# Low-pass filter time constant on depth (seconds).
+DEPTH_HOLD_LPF_TAU_S = 0.50
+
+# PI(D) gains (heave-command per meter / meter-second)
+DEPTH_HOLD_KP = 0.30
+DEPTH_HOLD_KI = 0.05
+DEPTH_HOLD_KD = 0.00
+
+# Error deadband in meters (reduces thruster chatter near setpoint)
+DEPTH_HOLD_ERROR_DEADBAND_M = 0.03
+
+# Integrator clamp (in heave-command units)
+DEPTH_HOLD_I_LIMIT = 0.25
+
+# Output clamp (in heave command units; keep < 1.0 while tuning)
+DEPTH_HOLD_OUT_LIMIT = 0.55
+
+# If the controller pushes the wrong way, flip this to -1.0.
+DEPTH_HOLD_SIGN = 1.0
+
+# "Walk target" behavior: stick commands move the target depth; releasing holds.
+DEPTH_HOLD_WALK_TARGET = True
+DEPTH_HOLD_WALK_DEADBAND = 0.08
+DEPTH_HOLD_WALK_RATE_MPS = 0.60  # full stick => ~0.6 m/s target change
+
+# Optional clamp on target depth (meters, depth positive down). Set to None to disable.
+DEPTH_HOLD_TARGET_MIN_M = None
+DEPTH_HOLD_TARGET_MAX_M = None
+
+# ---------------------------------------------------------------------------
 # 2b) arming safety
 # ---------------------------------------------------------------------------
 # If True, the ROV will refuse to ARM unless sticks are centered and triggers

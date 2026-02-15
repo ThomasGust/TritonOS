@@ -14,6 +14,8 @@ import rov_config as cfg
 from motion.channel_map import ChannelMap
 
 from control.mixer import EightThrusterMixer, SimpleGroupMixer, global_limit
+from control.depth_hold import DepthHoldController, DepthHoldConfig
+from control.sensor_tap import DepthSensorTap
 
 
 @dataclass
@@ -323,6 +325,43 @@ class ControlService:
         # Track & log lights toggles (edge-based)
         self._last_lights_event: Optional[str] = None
 
+        # --- depth hold ----------------------------------------------------
+        self._depth_hold: Optional[DepthHoldController] = None
+        self._depth_tap: Optional[DepthSensorTap] = None
+        self._last_depth_status: Dict[str, Any] = {}
+
+        if bool(getattr(cfg, "DEPTH_HOLD_ENABLE", True)):
+            try:
+                # Subscribe locally to the sensor PUB stream.
+                self._depth_tap = DepthSensorTap(getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001"))
+            except Exception as e:
+                if self.debug:
+                    print("[rov/control] depth hold disabled (sensor tap init failed):", e)
+                self._depth_tap = None
+
+            try:
+                dh_cfg = DepthHoldConfig(
+                    sensor_stale_s=float(getattr(cfg, "DEPTH_HOLD_SENSOR_STALE_S", 0.6)),
+                    depth_lpf_tau_s=float(getattr(cfg, "DEPTH_HOLD_LPF_TAU_S", 0.50)),
+                    kp=float(getattr(cfg, "DEPTH_HOLD_KP", 0.30)),
+                    ki=float(getattr(cfg, "DEPTH_HOLD_KI", 0.05)),
+                    kd=float(getattr(cfg, "DEPTH_HOLD_KD", 0.00)),
+                    error_deadband_m=float(getattr(cfg, "DEPTH_HOLD_ERROR_DEADBAND_M", 0.03)),
+                    i_limit=float(getattr(cfg, "DEPTH_HOLD_I_LIMIT", 0.25)),
+                    out_limit=float(getattr(cfg, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
+                    sign=float(getattr(cfg, "DEPTH_HOLD_SIGN", 1.0)),
+                    walk_target=bool(getattr(cfg, "DEPTH_HOLD_WALK_TARGET", True)),
+                    walk_deadband=float(getattr(cfg, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
+                    walk_rate_mps=float(getattr(cfg, "DEPTH_HOLD_WALK_RATE_MPS", 0.60)),
+                    target_min_m=getattr(cfg, "DEPTH_HOLD_TARGET_MIN_M", None),
+                    target_max_m=getattr(cfg, "DEPTH_HOLD_TARGET_MAX_M", None),
+                )
+                self._depth_hold = DepthHoldController(dh_cfg)
+            except Exception as e:
+                if self.debug:
+                    print("[rov/control] depth hold disabled (config/init failed):", e)
+                self._depth_hold = None
+
     def _handle_lights_toggle(self, pilot: PilotFrame) -> Optional[str]:
         """Handle edge-based lights toggling.
 
@@ -557,6 +596,32 @@ class ControlService:
                     thr = self._channels_to_named(thr)
                 else:
                     cmd6 = build_6dof(fresh_pilot, self.gains)
+
+                    # Depth hold: modify heave command in-place before mixing.
+                    if self._depth_tap is not None:
+                        try:
+                            self._depth_tap.poll()
+                        except Exception:
+                            pass
+                    if self._depth_hold is not None:
+                        modes = fresh_pilot.modes or {}
+                        enabled_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
+                        depth_m = self._depth_tap.last_depth_m if self._depth_tap is not None else None
+                        depth_age = self._depth_tap.age_s(now) if self._depth_tap is not None else None
+                        try:
+                            heave_out, st = self._depth_hold.step(
+                                enabled=enabled_cmd,
+                                manual_heave=float(cmd6.get("heave", 0.0)),
+                                depth_m=depth_m,
+                                depth_age_s=depth_age,
+                                dt=self.period,
+                            )
+                            cmd6["heave"] = float(heave_out)
+                            self._last_depth_status = st
+                        except Exception as e:
+                            # Fail open to manual heave if anything goes wrong.
+                            self._last_depth_status = {"enabled_cmd": enabled_cmd, "active": False, "reason": f"err:{e}"}
+
                     raw_thr = self.mixer.mix(cmd6)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
 
@@ -593,6 +658,14 @@ class ControlService:
                         msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr}"
                     else:
                         msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr}"
+                        try:
+                            st = self._last_depth_status or {}
+                            if bool(st.get("enabled_cmd", False)):
+                                msg += f" | depth_hold={'ON' if st.get('active') else 'OFF'}"
+                                if st.get("active") and ("target_m" in st):
+                                    msg += f" z={float(st.get('depth_f_m', 0.0)):.2f}m->t={float(st.get('target_m', 0.0)):.2f}m"
+                        except Exception:
+                            pass
                     if arming_event:
                         msg += f" | {arming_event}"
                     if lights_event:
