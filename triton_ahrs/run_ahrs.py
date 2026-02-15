@@ -99,6 +99,12 @@ def _normalize3(v: np.ndarray) -> Optional[np.ndarray]:
         return None
     return v / n
 
+def _normalize2(v: np.ndarray) -> Optional[np.ndarray]:
+    n = float(np.linalg.norm(v))
+    if not math.isfinite(n) or n <= 1e-12:
+        return None
+    return v / n
+
 
 def _initial_quaternion_from_accel_mag(accel: np.ndarray, mag: Optional[np.ndarray]) -> Quaternion:
     """Seed quaternion from accel (+ optional mag).
@@ -142,6 +148,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Loop / output
     p.add_argument("--rate", type=float, default=200.0, help="AHRS update rate (Hz)")
     p.add_argument("--print-rate", type=float, default=20.0, help="Console print rate (Hz)")
+    p.add_argument("--print-decimals", type=int, default=0, help="Decimals for printed angles (0 prints integer degrees)")
+    p.add_argument("--fusion", choices=["robust", "madgwick"], default="robust", help="Fusion mode: robust=6DOF Madgwick for roll/pitch + magnetometer yaw correction (recommended); madgwick=classic 6DOF/9DOF Madgwick")
+    p.add_argument("--yaw-tau", type=float, default=8.0, help="Yaw correction time constant in seconds for robust fusion (larger=smoother)")
+    p.add_argument("--yaw-max-err-deg", type=float, default=25.0, help="Clamp yaw error in degrees for robust yaw correction to reject spikes")
+
     p.add_argument("--log-csv", type=str, default="", help="Write CSV log to this path")
     p.add_argument("--json", action="store_true", help="Emit JSON lines to stdout")
 
@@ -193,6 +204,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--disable-mmc5983", action="store_true", help="Do not try to use MMC5983")
 
     args = p.parse_args(argv)
+    dec = int(max(0, min(6, getattr(args, 'print_decimals', 0))))
+    def _fmt_deg(v: float) -> str:
+        return f"{v:+7.{dec}f}"
+
 
     rate_hz = float(args.rate)
     dt_target = 1.0 / max(10.0, rate_hz)
@@ -258,6 +273,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # ---- initial alignment ----
         q_zero: Optional[Quaternion] = None
         yaw0: Optional[float] = None
+        mag_ref_h: Optional[np.ndarray] = None  # reference horizontal mag direction in WORLD
         accel_sign_used = "normal"
 
         if float(args.init_seconds) > 0.0:
@@ -312,6 +328,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             if args.zero_attitude:
                 q_zero = q_init
 
+            # set yaw reference from initial mag if available (robust fusion)
+            if mag_for_init is not None:
+                m_w0 = q_init.rotate(mag_for_init)
+                mh0 = _normalize2(np.array([m_w0[0], m_w0[1]], dtype=float))
+                if mh0 is not None:
+                    mag_ref_h = mh0
+
             # yaw-zero uses euler (after q init)
             if args.yaw_zero:
                 _r, _p, y = quat_to_euler_deg(q_init)
@@ -320,7 +343,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             if not args.json:
                 r, p_, y = quat_to_euler_deg(q_init)
                 print(
-                    f"[ahrs] init q: r={wrap_degrees(r):+.2f} p={p_:+.2f} y={wrap_degrees(y):+.2f} "
+                    f"[ahrs] init q: r={_fmt_deg(wrap_degrees(r))} p={_fmt_deg(p_)} y={_fmt_deg(wrap_degrees(y))} "
                     f"(accel_sign={accel_sign_used}, mag_init={'yes' if mag_for_init is not None else 'no'})"
                 )
 
@@ -424,15 +447,49 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             # choose update mode
             mode = "gyro"
-            if accel_ok and use_mag:
-                mode = "9dof"
-                q = filt.update(gv, av, dt, mag_uT=mv)
-            elif accel_ok:
-                mode = "6dof"
-                q = filt.update(gv, av, dt, mag_uT=None)
+            if args.fusion == "madgwick":
+                if accel_ok and use_mag:
+                    mode = "9dof"
+                    q = filt.update(gv, av, dt, mag_uT=mv)
+                elif accel_ok:
+                    mode = "6dof"
+                    q = filt.update(gv, av, dt, mag_uT=None)
+                else:
+                    q = filt.q.integrate_gyro(gv, dt)
+                    filt.q = q
             else:
-                q = filt.q.integrate_gyro(gv, dt)
-                filt.q = q
+                # Robust mode: use IMU-only Madgwick for roll/pitch, then correct yaw using mag horizontal reference.
+                if accel_ok:
+                    mode = "6dof"
+                    q = filt.update(gv, av, dt, mag_uT=None)
+                else:
+                    q = filt.q.integrate_gyro(gv, dt)
+                    filt.q = q
+
+                # Establish mag reference lazily if it was not available at init
+                if mag_ref_h is None and use_mag:
+                    m_w = q.rotate(mv)
+                    mh = _normalize2(np.array([m_w[0], m_w[1]], dtype=float))
+                    if mh is not None:
+                        mag_ref_h = mh
+
+                # Apply yaw correction (world Z) with a long time constant to avoid jitter
+                if use_mag and mag_ref_h is not None:
+                    m_w = q.rotate(mv)
+                    mh = _normalize2(np.array([m_w[0], m_w[1]], dtype=float))
+                    if mh is not None:
+                        cross = float(mh[0] * mag_ref_h[1] - mh[1] * mag_ref_h[0])
+                        dot = float(mh[0] * mag_ref_h[0] + mh[1] * mag_ref_h[1])
+                        yaw_err = math.atan2(cross, dot)  # angle from mh -> ref
+                        max_err = math.radians(float(args.yaw_max_err_deg))
+                        yaw_err = max(-max_err, min(max_err, yaw_err))
+                        tau = max(1e-3, float(args.yaw_tau))
+                        k = float(dt / tau)
+                        delta = k * yaw_err
+                        if abs(delta) > 1e-12:
+                            q = (Quaternion.from_axis_angle((0.0, 0.0, 1.0), delta) * q).normalized()
+                            filt.q = q
+                            mode = "yc6"
 
             # output quaternion relative to initial attitude if requested
             q_out = q
@@ -496,7 +553,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     sys.stdout.flush()
                 else:
                     print(
-                        f"r={roll:+7.2f}  p={pitch:+7.2f}  y={yaw:+7.2f}  "
+                        f"r={_fmt_deg(roll)}  p={_fmt_deg(pitch)}  y={_fmt_deg(yaw)}  "
                         f"mode={mode:4s} stat={int(stationary)} beta={beta:0.3f} "
                         f"mag_en={mag_enable:0.2f} |B|={mag_norm:6.1f}uT src={mag_src}"
                     )
