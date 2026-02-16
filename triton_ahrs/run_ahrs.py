@@ -178,7 +178,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--gyro-cal", type=str, default="", help="Path to gyro calibration JSON")
     p.add_argument("--mag-cal", type=str, default="", help="Path to mag calibration JSON")
     p.add_argument("--mount", type=str, default="", help="Path to mount (axis mapping) JSON")
-    p.add_argument("--auto-body-mount", action="store_true", help="Estimate sensor->ROV mount at startup assuming the ROV is level/forward; defines body frame so initial attitude is (0,0,0)")
+    p.add_argument("--auto-body-mount", action="store_true", help="Auto-estimate a mount transform at startup so outputs are in the ROV body frame even if the IMU board is tilted. Assumes the ROV is held level during init; startup attitude becomes (0,0,0).")
+    p.add_argument("--auto-body-mount-full", action="store_true", help="(with --auto-body-mount) Also align yaw at startup using magnetometer (assumes ROV forward is pointing magnetic +X during init).")
 
     # Auto gyro calibration
     p.add_argument("--auto-gyro-cal", action="store_true", help="Auto-calibrate gyro bias at startup")
@@ -331,32 +332,39 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             q_init = _initial_quaternion_from_accel_mag(a_use, mag_for_init)
 
-            # Auto-estimate a sensor->ROV mount so that the ROV body frame is the "reference"
+
+            # Auto-estimate a sensor->ROV mount so that the ROV body frame is the reference
             # frame at startup (i.e., initial attitude becomes roll=pitch=yaw=0).
             #
-            # Assumptions:
-            #   - The ROV is held in a known reference pose during init (level + pointing "forward"/desired heading).
-            #   - If magnetometer is healthy, we use it to resolve yaw; otherwise we can only align tilt.
+            # Key point: from a single "level" pose we can reliably infer *tilt* (roll/pitch)
+            # from gravity. Inferring the *yaw* component of the mount requires an additional
+            # assumption about heading (e.g., the ROV forward is aligned to magnetic north).
             #
-            # Implementation detail:
-            #   - We compute an initial orientation q_init in the current mount frame (call it "board").
-            #   - We use the initial quaternion (accel + optional mag) as the mount estimate.
-            #   - We then fold that rotation into mount.R and rotate gyro_bias to match.
+            # Default behavior (recommended): level/tilt-only mount from accel.
+            # Optional: --auto-body-mount-full uses magnetometer yaw (assumes forward == magnetic +X).
             if bool(args.auto_body_mount):
                 if float(args.init_seconds) <= 0.0:
                     raise RuntimeError("--auto-body-mount requires --init-seconds > 0")
 
-                q_mount = q_init
-                if mag_for_init is not None:
-                    _r0, _p0, _y0 = quat_to_euler_deg(q_init)
-                    # Define the WORLD X axis as the ROV's forward direction at startup by removing initial yaw.
-                    q_mount = (Quaternion.from_axis_angle((0.0, 0.0, 1.0), -math.radians(_y0)) * q_init).normalized()
+                # Tilt-only mount from gravity (robust, avoids x/y swapping when heading is unknown)
+                a_n = _normalize3(a_use)
+                q_mount = Quaternion.identity()
+                if a_n is not None:
+                    q_mount = Quaternion.from_two_vectors(a_n, (0.0, 0.0, 1.0))
 
-                R_extra = q_mount.to_rotation_matrix()  # maps current "board" vectors into the startup body/world frame
+                auto_mode = "tilt"
+                if bool(getattr(args, "auto_body_mount_full", False)) and mag_for_init is not None:
+                    # Full mount (includes yaw) using the same accel+mag init quaternion.
+                    # This is only correct if the ROV forward direction at init is aligned
+                    # with the WORLD +X direction defined by the magnetometer yaw init.
+                    q_mount = q_init
+                    auto_mode = "full"
+
+                R_extra = q_mount.to_rotation_matrix()  # v_newbody = R_extra @ v_oldbody
                 mount = Mount(R=R_extra @ mount.R)
                 gyro_bias = R_extra @ gyro_bias
 
-                # Rotate init averages into the new body/world frame for reference setup
+                # Rotate init averages into the new body frame for reference setup
                 a_use = R_extra @ a_use
                 if m_avg is not None:
                     m_avg = R_extra @ m_avg
@@ -367,10 +375,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 q_init = Quaternion.identity()
 
                 if not args.json:
-                    q_m = Quaternion.from_rotation_matrix(mount.R)
                     Rm = mount.R
-                    print("[ahrs] auto-body-mount: enabled (startup pose defines body/world frame)")
-                    print(f"[ahrs] mount sensor->body q(wxyz)=({q_m.w:+.6f},{q_m.x:+.6f},{q_m.y:+.6f},{q_m.z:+.6f})")
+                    print(f"[ahrs] auto-body-mount: enabled mode={auto_mode} (startup pose defines body frame)")
                     print("[ahrs] mount sensor->body R=")
                     print(f"        [{Rm[0,0]:+.6f} {Rm[0,1]:+.6f} {Rm[0,2]:+.6f}]")
                     print(f"        [{Rm[1,0]:+.6f} {Rm[1,1]:+.6f} {Rm[1,2]:+.6f}]")
