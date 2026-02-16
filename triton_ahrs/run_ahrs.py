@@ -507,6 +507,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     mh = _normalize2(np.array([m_w[0], m_w[1]], dtype=float))
                     if mh is not None:
                         alpha = float(dt / max(1e-3, float(args.mag_ref_tau)))
+                        # NOTE: _normalize2 returns either a 2-vector or None. Avoid using `or` with
+                        # numpy arrays (it raises "truth value is ambiguous").
                         new_ref = _normalize2((1.0 - alpha) * mag_ref_h + alpha * mh)
                         if new_ref is not None:
                             mag_ref_h = new_ref
