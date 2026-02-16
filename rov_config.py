@@ -65,7 +65,7 @@ THRUSTER_MAX_ABS = 1.0
 
 # Additional global scaling applied to pilot DOFs before mixing (0..1).
 # You can usually leave this at 1.0 and only use THRUSTER_MAX_ABS.
-POWER_SCALE = 0.35
+POWER_SCALE = 0.5
 
 # ---------------------------------------------------------------------------
 # 2c) depth hold (sticky / "walk target")
