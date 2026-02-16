@@ -152,6 +152,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--fusion", choices=["robust", "madgwick"], default="robust", help="Fusion mode: robust=6DOF Madgwick for roll/pitch + magnetometer yaw correction (recommended); madgwick=classic 6DOF/9DOF Madgwick")
     p.add_argument("--yaw-tau", type=float, default=8.0, help="Yaw correction time constant in seconds for robust fusion (larger=smoother)")
     p.add_argument("--yaw-max-err-deg", type=float, default=25.0, help="Clamp yaw error in degrees for robust yaw correction to reject spikes")
+    p.add_argument("--yaw-ki", type=float, default=0.02, help="(robust) Integral gain [1/s] to learn Z-gyro bias from mag yaw error (0 disables)")
+    p.add_argument("--yaw-bias-max-dps", type=float, default=5.0, help="(robust) Clamp learned Z-gyro bias magnitude (deg/s)")
+    p.add_argument("--yaw-bias-adapt-err-deg", type=float, default=10.0, help="(robust) Only adapt Z-gyro bias when |yaw error| is below this (deg)")
+    p.add_argument("--yaw-bias-adapt-gyro-rad", type=float, default=0.35, help="(robust) Only adapt Z-gyro bias when |gyro z| is below this (rad/s)")
+    p.add_argument("--yaw-bias-adapt-gyro-norm", type=float, default=0.5, help="(robust) Only adapt Z-gyro bias when total gyro norm is below this (rad/s)")
+    p.add_argument("--mag-ref-tau", type=float, default=300.0, help="(robust) Time constant to slowly update horizontal mag reference when stationary (0 disables)")
 
     p.add_argument("--log-csv", type=str, default="", help="Write CSV log to this path")
     p.add_argument("--json", action="store_true", help="Emit JSON lines to stdout")
@@ -372,6 +378,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "gyro_norm","stationary","beta","mag_enable",
                 "gyro_bias_x","gyro_bias_y","gyro_bias_z",
                 "accel_sign",
+                "yaw_err_deg","mag_qual","yaw_delta_deg",
             ])
 
         while True:
@@ -436,6 +443,19 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             use_mag = bool(accel_ok and mag_enable >= 0.8)
 
+            # Magnetometer quality weight (0..1). This is a soft weight (not a hard gate)
+            # that down-weights yaw correction + bias learning when the mag is borderline.
+            mag_qual = 0.0
+            if mag_ok:
+                q1 = 1.0
+                if baseline_uT is not None and baseline_uT > 1e-6:
+                    rel = abs(mag_norm - baseline_uT) / baseline_uT
+                    q1 = max(0.0, 1.0 - rel / max(1e-6, float(args.mag_tol)))
+                q2 = 1.0
+                if float(args.mag_max_step) > 1e-6:
+                    q2 = max(0.0, 1.0 - (mag_step / float(args.mag_max_step)))
+                mag_qual = max(0.0, min(1.0, q1 * q2))
+
             # beta scheduling
             t_since = t0 - start_perf
             beta = float(args.beta)
@@ -446,6 +466,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             filt.cfg.beta = beta
 
             # choose update mode
+            yaw_err = 0.0
+            yaw_delta = 0.0
             mode = "gyro"
             if args.fusion == "madgwick":
                 if accel_ok and use_mag:
@@ -473,6 +495,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                     if mh is not None:
                         mag_ref_h = mh
 
+                # Slowly update mag reference while stationary to reduce sensitivity to a bad
+                # initial snapshot and to track slow magnetic environment changes.
+                if (
+                    float(args.mag_ref_tau) > 0.0
+                    and stationary
+                    and use_mag
+                    and mag_ref_h is not None
+                ):
+                    m_w = q.rotate(mv)
+                    mh = _normalize2(np.array([m_w[0], m_w[1]], dtype=float))
+                    if mh is not None:
+                        alpha = float(dt / max(1e-3, float(args.mag_ref_tau)))
+                        mag_ref_h = _normalize2((1.0 - alpha) * mag_ref_h + alpha * mh) or mag_ref_h
+
                 # Apply yaw correction (world Z) with a long time constant to avoid jitter
                 if use_mag and mag_ref_h is not None:
                     m_w = q.rotate(mv)
@@ -484,12 +520,31 @@ def main(argv: Optional[list[str]] = None) -> int:
                         max_err = math.radians(float(args.yaw_max_err_deg))
                         yaw_err = max(-max_err, min(max_err, yaw_err))
                         tau = max(1e-3, float(args.yaw_tau))
-                        k = float(dt / tau)
-                        delta = k * yaw_err
-                        if abs(delta) > 1e-12:
-                            q = (Quaternion.from_axis_angle((0.0, 0.0, 1.0), delta) * q).normalized()
+                        # Down-weight correction when mag is borderline (still allows some correction).
+                        w = float(mag_enable) * float(mag_qual)
+                        k = float((dt / tau) * w)
+                        yaw_delta = k * yaw_err
+                        if abs(yaw_delta) > 1e-12:
+                            q = (Quaternion.from_axis_angle((0.0, 0.0, 1.0), yaw_delta) * q).normalized()
                             filt.q = q
                             mode = "yc6"
+
+                        # Learn Z-gyro bias from yaw error (Mahony-style integral term).
+                        # This reduces slow yaw drift even when not stationary.
+                        ki = float(args.yaw_ki)
+                        if ki > 0.0:
+                            err_gate = math.radians(float(args.yaw_bias_adapt_err_deg))
+                            if (
+                                abs(yaw_err) <= err_gate
+                                and abs(float(gv[2])) <= float(args.yaw_bias_adapt_gyro_rad)
+                                and gyro_norm <= float(args.yaw_bias_adapt_gyro_norm)
+                                and mag_qual >= 0.3
+                            ):
+                                gyro_bias[2] += ki * yaw_err * dt
+                                bmax = math.radians(float(args.yaw_bias_max_dps))
+                                gyro_bias[2] = max(-bmax, min(bmax, float(gyro_bias[2])))
+                                # refresh bias-corrected gyro for subsequent use this tick
+                                gv = gv_raw - gyro_bias
 
             # output quaternion relative to initial attitude if requested
             q_out = q
@@ -527,6 +582,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     f"{mag_enable:.3f}",
                     f"{gyro_bias[0]:+.8f}", f"{gyro_bias[1]:+.8f}", f"{gyro_bias[2]:+.8f}",
                     accel_sign_used,
+                    f"{math.degrees(yaw_err):+.3f}",
+                    f"{mag_qual:.3f}",
+                    f"{math.degrees(yaw_delta):+.6f}",
                 ])
                 csv_f.flush()
 
@@ -546,6 +604,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                             "gyro_norm": gyro_norm,
                             "beta": beta,
                             "mag_enable": mag_enable,
+                            "mag_qual": mag_qual,
+                            "yaw_err_deg": float(math.degrees(yaw_err)),
                             "accel_sign": accel_sign_used,
                         },
                     }
