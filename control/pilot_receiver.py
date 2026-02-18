@@ -10,6 +10,8 @@ from typing import Optional, Tuple, Dict, Any
 
 import zmq
 
+from utils.zmq_monitor import ZMQMonitor
+
 from schema.pilot_common import PilotFrame, PilotButtons  # reuse your topside/schema :contentReference[oaicite:3]{index=3}
 
 
@@ -100,6 +102,13 @@ class PilotReceiver:
         self.sock.setsockopt_string(zmq.SUBSCRIBE, "")
         self.sock.bind(self.bind_endpoint)
 
+        # Best-effort connection monitor (helps with hotplug UX/telemetry)
+        self._mon: ZMQMonitor | None = None
+        try:
+            self._mon = ZMQMonitor(self.sock, name="pilot_sub")
+        except Exception:
+            self._mon = None
+
         self._poller = zmq.Poller()
         self._poller.register(self.sock, zmq.POLLIN)
 
@@ -129,10 +138,39 @@ class PilotReceiver:
         if self._thread:
             self._thread.join(timeout=1.0)
 
+        try:
+            if self._mon is not None:
+                self._mon.stop()
+        except Exception:
+            pass
+        self._mon = None
+
+        try:
+            if self._poller is not None:
+                self._poller.unregister(self.sock)
+        except Exception:
+            pass
+
+        try:
+            self.sock.close(0)
+        except Exception:
+            pass
+
     def stats(self) -> PilotRxStats:
         # return a copy-like snapshot
         s = self._stats
         return PilotRxStats(**s.__dict__)
+
+
+    def connection_snapshot(self) -> Dict[str, Any]:
+        """Best-effort ZMQ connection state for UX/telemetry."""
+        try:
+            if self._mon is not None:
+                return self._mon.snapshot()
+        except Exception:
+            pass
+        return {"name": "pilot_sub", "state": "unknown", "connected": False, "peer_count": 0}
+
 
     def _handle_message(self, raw: str, arrival: float) -> None:
         self._stats.received += 1

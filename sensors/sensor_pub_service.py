@@ -29,7 +29,18 @@ class SensorPublisherService:
 
         ctx = zmq.Context.instance()
         self.sock = ctx.socket(zmq.PUB)
+        try:
+            self.sock.setsockopt(zmq.LINGER, 0)
+            self.sock.setsockopt(zmq.SNDHWM, 1000)
+        except Exception:
+            pass
         self.sock.bind(self.bind_endpoint)
+
+        self._mon: ZMQMonitor | None = None
+        try:
+            self._mon = ZMQMonitor(self.sock, name="sensor_pub")
+        except Exception:
+            self._mon = None
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -47,6 +58,26 @@ class SensorPublisherService:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.0)
+
+        try:
+            if self._mon is not None:
+                self._mon.stop()
+        except Exception:
+            pass
+        self._mon = None
+
+        try:
+            self.sock.close(0)
+        except Exception:
+            pass
+
+    def connection_snapshot(self) -> dict:
+        try:
+            if self._mon is not None:
+                return self._mon.snapshot()
+        except Exception:
+            pass
+        return {"name": "sensor_pub", "state": "unknown", "connected": False, "peer_count": 0}
 
     def _run(self):
         while not self._stop.is_set():

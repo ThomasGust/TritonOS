@@ -1,72 +1,93 @@
-#Later, this is the main file we start all the services/modules from
 #!/usr/bin/env python3
 """
 Main entry point for the ROV.
 
-Starts:
-  - video RPC server
-  - pilot/control loop
-  - sensor publisher
+Hotplug / resiliency goals:
+  - Start order doesn't matter (topside can come up first; ROV can come up first)
+  - If either side disappears (power cycle, tether unplug, Wi‑Fi drop), the link recovers
+    automatically once both are back online
+  - Clean shutdown: on SIGINT/SIGTERM we neutralize thrusters and stop pipelines
 
-Assumes your packages are laid out like:
-
-  control/
-    pilot_receiver.py
-    control_service.py
-    mixer.py
-  sensors/
-    navigator.py
-    sensor_pub_service.py
-    ms5837.py
-  video/
-    gst_streamer_rpc.py
-  motion/
-    pwm.py            (optional)
-
-And that schema/pilot_common.py is the same one the topside uses.
+Services:
+  - video RPC server (gst_streamer_rpc)
+  - pilot receiver + control loop
+  - sensor publisher (including heartbeat)
 """
 
-#UPD
 from __future__ import annotations
-import time
-import threading
+
 import sys
+import time
+import signal
+import threading
 import traceback
+from typing import Optional, Tuple
 
 import rov_config as cfg
 
+
+class RestartingThread:
+    """Run a long-lived target in a thread; restart it if it crashes."""
+
+    def __init__(self, name: str, target, stop_event: threading.Event, restart_delay_s: float = 1.0):
+        self.name = name
+        self.target = target
+        self.stop_event = stop_event
+        self.restart_delay_s = float(restart_delay_s)
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+
+        def _runner():
+            while not self.stop_event.is_set():
+                try:
+                    self.target()
+                except Exception:
+                    print(f"[rov/main] {self.name} crashed; restarting…")
+                    traceback.print_exc()
+                # backoff before restart (or to allow clean exit)
+                for _ in range(int(max(1.0, self.restart_delay_s) * 10)):
+                    if self.stop_event.is_set():
+                        break
+                    time.sleep(0.1)
+
+        self._thread = threading.Thread(target=_runner, daemon=True)
+        self._thread.start()
+
+    def join(self, timeout: float = 1.0):
+        if self._thread:
+            self._thread.join(timeout=timeout)
+
+
 # --- 1) video --------------------------------------------------------
-def start_video_service():
-    """
-    Start the existing gst_streamer RPC in a thread.
-    We assume video/gst_streamer_rpc.py exposes a start_video_rpc()
-    like in your original code.
-    """
+
+def start_video_service(stop_event: threading.Event) -> RestartingThread | None:
+    """Start gst_streamer RPC in a restartable thread."""
     try:
         from video import gst_streamer_rpc
     except Exception as e:
         print("[rov/main] video: could not import video.gst_streamer_rpc:", e)
         traceback.print_exc()
-        return
+        return None
 
-    def _runner():
-        try:
-            # your original code just called start_video_rpc() and blocked
-            gst_streamer_rpc.start_video_rpc()
-        except Exception:
-            print("[rov/main] video thread crashed:")
-            traceback.print_exc()
+    def _run_rpc():
+        # Do NOT parse argv here; pass bind explicitly.
+        gst_streamer_rpc.start_video_rpc(bind=cfg.VIDEO_RPC_ENDPOINT, stop_event=stop_event)
 
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
-    print(f"[rov/main] video RPC started on {cfg.VIDEO_RPC_ENDPOINT}")
+    rt = RestartingThread("video_rpc", _run_rpc, stop_event=stop_event, restart_delay_s=2.0)
+    rt.start()
+    print(f"[rov/main] video RPC starting on {cfg.VIDEO_RPC_ENDPOINT}")
+    return rt
 
 
 # --- 2) sensors ------------------------------------------------------
+
 def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     """
-    Create Navigator sensors and start the pub service.
-    Matches sensors/navigator.py + sensors/sensor_pub_service.py in your tree.
+    Create Navigator sensors and start the publisher service.
+    Returns the service instance (so it can be stopped cleanly).
     """
     try:
         from sensors.navigator import (
@@ -83,7 +104,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     except Exception as e:
         print("[rov/main] sensors: could not import sensors modules:", e)
         traceback.print_exc()
-        return
+        return None
 
     board = NavigatorBoard()
 
@@ -94,7 +115,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
         ADCSensor(board, rate_hz=5.0),
     ]
 
-    # Heartbeat (lets topside show link + armed state)
+    # Heartbeat (lets topside show link + armed state + pilot freshness)
     try:
         from sensors.heartbeat import HeartbeatSensor
 
@@ -102,20 +123,28 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
             armed = bool(state.is_armed()) if state is not None else False
             seq = None
             age = None
+            connected = None
             if pilot_rx is not None:
                 p, a = pilot_rx.get_latest()
                 age = float(a) if a is not None else None
                 seq = int(p.seq) if p is not None else None
+                try:
+                    cs = pilot_rx.connection_snapshot()
+                    connected = bool(cs.get("connected", False))
+                except Exception:
+                    connected = None
             return {
                 "armed": armed,
                 "pilot_age": age,
                 "pilot_seq": seq,
+                "topside_connected": connected,
             }
 
         sensor_list.append(HeartbeatSensor(state_fn=_hb_state, rate_hz=1.0))
     except Exception as e:
         if getattr(cfg, "DEBUG", False):
             print("[rov/main] heartbeat disabled:", e)
+
     # External depth sensor (Blue Robotics MS5837: Bar30 / Bar02)
     use_external = bool(getattr(cfg, "USE_EXTERNAL_DEPTH", False))
     use_bar02 = bool(getattr(cfg, "USE_BAR02", False))
@@ -127,7 +156,6 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                 buses = getattr(cfg, f"{prefix}_I2C_BUSES", None)
                 if buses is not None:
                     return buses
-                # fall back to a single bus number
                 return int(getattr(cfg, f"{prefix}_I2C_BUS", getattr(cfg, "BAR30_I2C_BUS", default_bus)))
 
             if use_bar02:
@@ -191,22 +219,19 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     srv = SensorPublisherService(
         bind_endpoint=cfg.SENSOR_PUB_ENDPOINT,
         sensors=sensor_list,
-        debug=cfg.DEBUG,
+        debug=getattr(cfg, "DEBUG", False),
     )
     srv.start()
     print(f"[rov/main] sensor PUB started on {cfg.SENSOR_PUB_ENDPOINT}")
+    return srv
 
 
 # --- 3) control / pilot ----------------------------------------------
+
 def start_control_service():
     """
-    Start the pilot SUB + control loop.
-    We expect control/control_service.py to contain:
-        - ControlService
-        - ControlGains
-        - ROVControlState
-    and control/pilot_receiver.py to contain:
-        - PilotReceiver
+    Start the pilot SUB + control loop, attach hardware sink if available.
+    Returns (ctrl, pilot_rx, state).
     """
     try:
         from control.pilot_receiver import PilotReceiver
@@ -225,11 +250,7 @@ def start_control_service():
         print("[rov/main] motion: not using hardware PWM (import failed):", e)
     else:
         try:
-            # expect pwm.py to give us something like write_thrust(dict)
             if hasattr(pwm, "ThrustWriter"):
-                # The ThrustWriter uses the official BlueRobotics Navigator Python
-                # bindings (bluerobotics_navigator). PWM outputs can be kept disabled until ARM
-                # and will hold neutral for ESC initialization when armed.
                 chanmap = ChannelMap.from_config(cfg)
 
                 thrust_cfg = pwm.ThrustConfig(
@@ -250,13 +271,10 @@ def start_control_service():
                     channel_base=getattr(cfg, "PWM_CHANNEL_BASE", "auto"),
                 )
 
-                # Merge reversal maps: allow either thruster-name keys or raw channel keys.
                 rev_map = {}
                 rev_map.update(getattr(cfg, "THRUSTER_REVERSED", {}) or {})
                 rev_map.update(getattr(cfg, "CHANNEL_REVERSED", {}) or {})
 
-                # Optional aux PWM outputs (e.g. lights). The ControlService provides a normalized
-                # value in [0..1] under the key "lights" (if enabled in config).
                 aux_channels = {}
                 aux_cfg = {}
                 if hasattr(cfg, "LIGHTS_PWM_CHANNEL") and getattr(cfg, "LIGHTS_PWM_CHANNEL") is not None:
@@ -294,32 +312,23 @@ def start_control_service():
             print("[rov/main] motion: hardware PWM init failed:", e)
             hw_sink = None
 
-
-    # Make it extremely clear whether we are in dry_run mode.
     if hw_sink is None:
-        print('[rov/main] motion: NO hardware PWM sink -> motors will NOT run (dry_run mode).')
-        if bool(getattr(cfg, 'REQUIRE_HARDWARE_PWM', False)):
-            raise SystemExit('[rov/main] FATAL: REQUIRE_HARDWARE_PWM is set, but hardware PWM could not be initialized. If tools/native_motor_test works, you are likely missing permissions here (run with sudo or fix /dev/i2c-* access).')
+        print("[rov/main] motion: NO hardware PWM sink -> motors will NOT run (dry_run mode).")
+        if bool(getattr(cfg, "REQUIRE_HARDWARE_PWM", False)):
+            raise SystemExit("[rov/main] FATAL: REQUIRE_HARDWARE_PWM is set, but hardware PWM could not be initialized.")
     else:
-        print('[rov/main] motion: hardware PWM sink ready.')
+        print("[rov/main] motion: hardware PWM sink ready.")
 
-
-    # pilot receiver
-    pilot_rx = PilotReceiver(bind_endpoint=cfg.PILOT_SUB_ENDPOINT, debug=cfg.PILOT_RX_DEBUG)
+    pilot_rx = PilotReceiver(bind_endpoint=cfg.PILOT_SUB_ENDPOINT, debug=getattr(cfg, "PILOT_RX_DEBUG", False))
     pilot_rx.start()
 
-    # shared state (armed flag)
     state = ROVControlState()
-    # Safety: start DISARMED. Use MENU on the controller to toggle armed.
     state.set_armed(False)
-
 
     gains = ControlGains(
         surge=1.0,
         sway=1.0,
         heave=1.0,
-        # 4-DOF layout: surge/sway (horizontals) + heave/pitch (verticals).
-        # Yaw is disabled by default; map it later if you want turning.
         yaw=1.0,
         pitch=1.0,
         roll=1.0,
@@ -329,29 +338,38 @@ def start_control_service():
         pilot_rx=pilot_rx,
         gains=gains,
         control_state=state,
-        rate_hz=cfg.CONTROL_RATE_HZ,
-        ttl=cfg.PILOT_TTL,
-        debug=cfg.CONTROL_DEBUG,
+        rate_hz=float(getattr(cfg, "CONTROL_RATE_HZ", 50.0)),
+        ttl=float(getattr(cfg, "PILOT_TTL", 0.5)),
+        debug=bool(getattr(cfg, "CONTROL_DEBUG", False)),
         dry_run=(hw_sink is None),
     )
 
-    # Attach hardware sink (thrusters) once, if available.
     if hw_sink is not None and hasattr(ctrl, "set_hw_sink"):
         try:
             ctrl.set_hw_sink(hw_sink)
-            # once we have a sink, disable dry_run so commands actually hit hardware
             ctrl.dry_run = False
         except Exception as e:
             print("[rov/main] warning: could not attach hw sink:", e)
 
     ctrl.start()
-    print(f"[rov/main] control loop started (rate={cfg.CONTROL_RATE_HZ} Hz)")
-
+    print(f"[rov/main] control loop started (rate={getattr(cfg, 'CONTROL_RATE_HZ', 50.0)} Hz)")
     return ctrl, pilot_rx, state
 
 
 def main():
     print("[rov/main] starting services…")
+
+    stop_event = threading.Event()
+
+    def _request_stop(signum=None, frame=None):
+        stop_event.set()
+
+    # SIGINT/SIGTERM => clean shutdown
+    try:
+        signal.signal(signal.SIGINT, _request_stop)
+        signal.signal(signal.SIGTERM, _request_stop)
+    except Exception:
+        pass
 
     # Optional: start netdiag server (UDP echo + TCP throughput)
     if getattr(cfg, "NETDIAG_ENABLE", False):
@@ -363,23 +381,53 @@ def main():
                 port=int(getattr(cfg, "NETDIAG_PORT", 7700)),
                 verbose=bool(getattr(cfg, "DEBUG", False)),
             )
-            print(f"[rov/main] netdiag server started on {getattr(cfg, 'NETDIAG_BIND_HOST', '0.0.0.0')}:{getattr(cfg, 'NETDIAG_PORT', 7700)}")
+            print(
+                f"[rov/main] netdiag server started on {getattr(cfg, 'NETDIAG_BIND_HOST', '0.0.0.0')}:{getattr(cfg, 'NETDIAG_PORT', 7700)}"
+            )
         except Exception as e:
             print("[rov/main] netdiag server disabled:", e)
 
-    # start each service in turn
-    start_video_service()
+    video_thread = start_video_service(stop_event)
     ctrl, pilot_rx, state = start_control_service()
-    start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
+    sensor_srv = start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
 
     print("[rov/main] all services started.")
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
+        while not stop_event.is_set():
+            time.sleep(0.5)
+    finally:
         print("[rov/main] shutting down…")
-        sys.exit(0)
+
+        # Stop in the safest order: disarm first via control loop.
+        try:
+            if ctrl is not None:
+                ctrl.stop()
+        except Exception:
+            pass
+
+        try:
+            if pilot_rx is not None:
+                pilot_rx.stop()
+        except Exception:
+            pass
+
+        try:
+            if sensor_srv is not None:
+                sensor_srv.stop()
+        except Exception:
+            pass
+
+        # Stop video RPC (and allow the restarting thread to exit)
+        stop_event.set()
+        try:
+            if video_thread is not None:
+                video_thread.join(timeout=2.0)
+        except Exception:
+            pass
+
+        print("[rov/main] shutdown complete.")
+        return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
