@@ -10,7 +10,6 @@ import argparse
 import json
 import logging
 import traceback
-import threading
 import glob
 import os
 import subprocess
@@ -21,12 +20,6 @@ from collections import defaultdict
 
 
 import zmq
-
-try:
-    # Optional: socket connection event monitoring (hotplug diagnostics)
-    from utils.zmq_monitor import ZMQMonitor  # type: ignore
-except Exception:
-    ZMQMonitor = None  # type: ignore
 
 from video.gst_streamer import StreamManager, StreamConfig
 import rov_config as rov_cfg
@@ -554,254 +547,198 @@ def list_video_devices() -> list[dict]:
 # main RPC loop
 # ---------------------------------------------------------------------------
 
-def start_video_rpc(bind: str | None = None, stop_event: threading.Event | None = None):
-    """Run the video RPC server.
-
-    - When called from main_rov, pass bind+stop_event so we don't parse argv and we can exit cleanly.
-    - When run as a script, bind is parsed from argv and the server runs until Ctrl+C.
-    """
-
-    if bind is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--bind", default="tcp://0.0.0.0:5555")
-        args = ap.parse_args()
-        bind = args.bind
+def start_video_rpc():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bind", default="tcp://0.0.0.0:5555")
+    args = ap.parse_args()
 
     ctx = zmq.Context()
     sock = ctx.socket(zmq.REP)
-    try:
-        sock.setsockopt(zmq.LINGER, 0)
-    except Exception:
-        pass
-    sock.bind(bind)
-    logger.info("RPC server listening on %s", bind)
-
-    mon = None
-    if ZMQMonitor is not None:
-        try:
-            mon = ZMQMonitor(sock, name="video_rpc")
-        except Exception:
-            mon = None
-
-    poller = zmq.Poller()
-    poller.register(sock, zmq.POLLIN)
+    sock.bind(args.bind)
+    logger.info("RPC server listening on %s", args.bind)
 
     mgr = StreamManager()
 
-    try:
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                break
-            try:
-                events = dict(poller.poll(timeout=200))
-            except KeyboardInterrupt:
-                break
-            except Exception:
-                time.sleep(0.1)
+    while True:
+        raw = sock.recv()
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except Exception:
+            sock.send_json({"ok": False, "error": "invalid json"})
+            continue
+
+        cmd = req.get("cmd")
+        args = req.get("args", {}) or {}
+
+        try:
+            if cmd == "ping":
+                sock.send_json({"ok": True, "data": "pong"})
                 continue
 
-            if sock not in events:
-                continue
+            elif cmd == "net_info":
+                # Helpful for topside diagnostics (which iface is tether, what IPs exist).
+                try:
+                    import os
 
-            raw = sock.recv()
-            try:
-                req = json.loads(raw.decode("utf-8"))
-            except Exception:
-                sock.send_json({"ok": False, "error": "invalid json"})
-                continue
-
-            cmd = req.get("cmd")
-            args = req.get("args", {}) or {}
-
-            try:
-                if cmd == "ping":
-                    sock.send_json({"ok": True, "data": "pong"})
-                    continue
-
-                elif cmd == "net_info":
-                    # Helpful for topside diagnostics (which iface is tether, what IPs exist).
-                    try:
-                        import os
-
-                        ifaces = []
-                        for iface in os.listdir("/sys/class/net"):
-                            if iface == "lo":
-                                continue
-                            ifaces.append({
-                                "iface": iface,
-                                "is_wifi": bool(is_wifi_iface(iface)),
-                                "state": iface_operstate(iface) or "unknown",
-                                "ip": iface_ipv4_addr(iface),
-                            })
-                        tif = pick_tether_iface(getattr(rov_cfg, "VIDEO_TETHER_IFACE", None))
-                        sock.send_json({
-                            "ok": True,
-                            "data": {
-                                "ifaces": ifaces,
-                                "tether_iface": tif,
-                                "tether_ip": iface_ipv4_addr(tif) if tif else None,
-                                "enforce_tether": bool(getattr(rov_cfg, "VIDEO_ENFORCE_TETHER", False)),
-                            },
-                        })
-                    except Exception:
-                        sock.send_json({"ok": True, "data": {"ifaces": []}})
-                    continue
-
-                elif cmd == "start_stream":
-                    scfg = streamconfig_from_dict(args)
-                    scfg = _enforce_tether_for_video(scfg)
-                    current = mgr.list_streams()
-                    if scfg.name in current:
-                        logger.warning(
-                            "start_stream: stream '%s' already exists, restarting it", scfg.name
-                        )
-                        try:
-                            mgr.stop_stream(scfg.name)
-                        except Exception:
-                            logger.exception(
-                                "start_stream: failed to stop existing stream '%s' before restart",
-                                scfg.name,
-                            )
-
-                    # Attempt start. If it fails (e.g., camera not enumerated yet),
-                    # try a best-effort USB unbind/bind on the inferred hub port.
-                    messages: list[str] = []
-                    last_err: str | None = None
-
-                    def _try_start_once() -> None:
-                        mgr.start_stream(scfg)
-
-                    try:
-                        _try_start_once()
-                        sock.send_json({"ok": True, "data": {"name": scfg.name}})
-                    except Exception as e:
-                        last_err = str(e)
-                        port_hint = _extract_usb_port_hint(scfg.device)
-                        if not port_hint:
-                            sock.send_json({"ok": False, "error": last_err})
+                    ifaces = []
+                    for iface in os.listdir("/sys/class/net"):
+                        if iface == "lo":
                             continue
+                        ifaces.append({
+                            "iface": iface,
+                            "is_wifi": bool(is_wifi_iface(iface)),
+                            "state": iface_operstate(iface) or "unknown",
+                            "ip": iface_ipv4_addr(iface),
+                        })
+                    tif = pick_tether_iface(getattr(rov_cfg, "VIDEO_TETHER_IFACE", None))
+                    sock.send_json({
+                        "ok": True,
+                        "data": {
+                            "ifaces": ifaces,
+                            "tether_iface": tif,
+                            "tether_ip": iface_ipv4_addr(tif) if tif else None,
+                            "enforce_tether": bool(getattr(rov_cfg, "VIDEO_ENFORCE_TETHER", False)),
+                        },
+                    })
+                except Exception:
+                    sock.send_json({"ok": True, "data": {"ifaces": []}})
+                continue
 
-                        retries = int(getattr(rov_cfg, "VIDEO_USB_REBIND_RETRIES", 3))
-                        delay_s = float(getattr(rov_cfg, "VIDEO_USB_REBIND_DELAY_S", 1.0))
+            elif cmd == "start_stream":
+                scfg = streamconfig_from_dict(args)
+                scfg = _enforce_tether_for_video(scfg)
+                current = mgr.list_streams()
+                if scfg.name in current:
+                    logger.warning(
+                        "start_stream: stream '%s' already exists, restarting it", scfg.name
+                    )
+                    try:
+                        mgr.stop_stream(scfg.name)
+                    except Exception:
+                        logger.exception(
+                            "start_stream: failed to stop existing stream '%s' before restart",
+                            scfg.name,
+                        )
 
-                        for i in range(max(0, retries)):
-                            messages.append(
-                                f"Video start failed for '{scfg.name}' (device={scfg.device}). "
-                                f"Attempting USB rebind on port {port_hint} ({i+1}/{retries})…"
-                            )
-                            usb_rebind_port(port_hint, messages=messages)
+                # Attempt start. If it fails (e.g., camera not enumerated yet),
+                # try a best-effort USB unbind/bind on the inferred hub port.
+                messages: list[str] = []
+                last_err: str | None = None
+
+                def _try_start_once() -> None:
+                    mgr.start_stream(scfg)
+
+                try:
+                    _try_start_once()
+                    sock.send_json({"ok": True, "data": {"name": scfg.name}})
+                except Exception as e:
+                    last_err = str(e)
+                    port_hint = _extract_usb_port_hint(scfg.device)
+                    if not port_hint:
+                        sock.send_json({"ok": False, "error": last_err})
+                        continue
+
+                    retries = int(getattr(rov_cfg, "VIDEO_USB_REBIND_RETRIES", 3))
+                    delay_s = float(getattr(rov_cfg, "VIDEO_USB_REBIND_DELAY_S", 1.0))
+
+                    for i in range(max(0, retries)):
+                        messages.append(
+                            f"Video start failed for '{scfg.name}' (device={scfg.device}). "
+                            f"Attempting USB rebind on port {port_hint} ({i+1}/{retries})…"
+                        )
+                        usb_rebind_port(port_hint, messages=messages)
+                        time.sleep(max(0.0, delay_s))
+                        try:
+                            _try_start_once()
+                            messages.append(f"Video stream '{scfg.name}' started after USB rebind")
+                            sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
+                            break
+                        except Exception as e2:
+                            last_err = str(e2)
+                            # try again
+                            continue
+                    else:
+                        # Rebind attempts exhausted. As a next (broader) step, try a hub-level
+                        # reset that should cause *all* downstream cameras to re-enumerate.
+                        messages.append(
+                            f"Video stream '{scfg.name}' still failed after {retries} USB rebind attempts. "
+                            f"Attempting broader USB reset…"
+                        )
+                        did_reset = usb_reset_all_cameras(port_hint, messages=messages)
+                        if did_reset:
                             time.sleep(max(0.0, delay_s))
                             try:
                                 _try_start_once()
-                                messages.append(f"Video stream '{scfg.name}' started after USB rebind")
+                                messages.append(f"Video stream '{scfg.name}' started after broader USB reset")
                                 sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
-                                break
-                            except Exception as e2:
-                                last_err = str(e2)
-                                # try again
                                 continue
+                            except Exception as e3:
+                                last_err = str(e3)
                         else:
-                            # Rebind attempts exhausted. As a next (broader) step, try a hub-level
-                            # reset that should cause *all* downstream cameras to re-enumerate.
-                            messages.append(
-                                f"Video stream '{scfg.name}' still failed after {retries} USB rebind attempts. "
-                                f"Attempting broader USB reset…"
-                            )
-                            did_reset = usb_reset_all_cameras(port_hint, messages=messages)
-                            if did_reset:
-                                time.sleep(max(0.0, delay_s))
-                                try:
-                                    _try_start_once()
-                                    messages.append(f"Video stream '{scfg.name}' started after broader USB reset")
-                                    sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
-                                    continue
-                                except Exception as e3:
-                                    last_err = str(e3)
-                            else:
-                                messages.append("Broader USB reset could not be issued (no matching sysfs devices)")
+                            messages.append("Broader USB reset could not be issued (no matching sysfs devices)")
 
-                            sock.send_json({"ok": False, "error": last_err or "failed to start stream", "messages": messages})
+                        sock.send_json({"ok": False, "error": last_err or "failed to start stream", "messages": messages})
 
-                elif cmd == "stop_stream":
-                    name = args["name"]
-                    current = mgr.list_streams()
-                    if name not in current:
-                        # be nice: stopping a non-existent stream is not an error
-                        logger.info("stop_stream: stream '%s' not found; ignoring", name)
-                        sock.send_json({"ok": True, "data": {"note": "not running"}})
-                    else:
-                        try:
-                            mgr.stop_stream(name)
-                            sock.send_json({"ok": True})
-                        except Exception:
-                            # don't crash RPC — just report
-                            logger.exception("stop_stream: failed to stop '%s'", name)
-                            sock.send_json({"ok": False, "error": f"failed to stop '{name}'"})
-
-                elif cmd == "update_stream":
-                    name = args["name"]
-                    updates = {k: v for k, v in args.items() if k != "name"}
-                    current = mgr.list_streams()
-                    if name not in current:
-                        # we can either treat this as "nothing to update" or "start it"
-                        # let's choose "nothing to update" to stay conservative
-                        logger.info("update_stream: stream '%s' not found; ignoring update", name)
-                        sock.send_json({"ok": True, "data": {"note": "not running"}})
-                    else:
-                        try:
-                            mgr.update_stream(name, **updates)
-                            sock.send_json({"ok": True})
-                        except Exception:
-                            # e.g. update requires rebuild and something failed
-                            logger.exception("update_stream: failed to update '%s'", name)
-                            sock.send_json({"ok": False, "error": f"failed to update '{name}'"})
-
-                elif cmd == "list_streams":
-                    current = mgr.list_streams()
-                    out = {n: vars(cfg) for n, cfg in current.items()}
-                    sock.send_json({"ok": True, "data": out})
-
-                # NEW: list all devices, shallow+caps
-                elif cmd == "list_devices":
-                    devices = list_video_devices()
-                    sock.send_json({"ok": True, "data": devices})
-
-                # NEW: get caps for a single device
-                elif cmd == "get_device_caps":
-                    dev_path = args.get("device", "/dev/v4l/by-path/*video-index0")
-                    info = probe_v4l2_device(dev_path)
-                    sock.send_json({"ok": True, "data": info})
-
+            elif cmd == "stop_stream":
+                name = args["name"]
+                current = mgr.list_streams()
+                if name not in current:
+                    # be nice: stopping a non-existent stream is not an error
+                    logger.info("stop_stream: stream '%s' not found; ignoring", name)
+                    sock.send_json({"ok": True, "data": {"note": "not running"}})
                 else:
-                    sock.send_json({"ok": False, "error": f"unknown cmd: {cmd}"})
+                    try:
+                        mgr.stop_stream(name)
+                        sock.send_json({"ok": True})
+                    except Exception:
+                        # don't crash RPC — just report
+                        logger.exception("stop_stream: failed to stop '%s'", name)
+                        sock.send_json({"ok": False, "error": f"failed to stop '{name}'"})
 
-            except Exception as e:
-                logger.exception("command failed")
-                sock.send_json({
-                    "ok": False,
-                    "error": str(e),
-                    "trace": traceback.format_exc()
-                })
-    finally:
-        # Best-effort cleanup: stop any running pipelines before exit/restart.
-        try:
-            mgr.stop_all()
-        except Exception:
-            pass
-        try:
-            if mon is not None:
-                mon.stop()
-        except Exception:
-            pass
-        try:
-            sock.close(0)
-        except Exception:
-            pass
-        try:
-            ctx.term()
-        except Exception:
-            pass
+            elif cmd == "update_stream":
+                name = args["name"]
+                updates = {k: v for k, v in args.items() if k != "name"}
+                current = mgr.list_streams()
+                if name not in current:
+                    # we can either treat this as "nothing to update" or "start it"
+                    # let's choose "nothing to update" to stay conservative
+                    logger.info("update_stream: stream '%s' not found; ignoring update", name)
+                    sock.send_json({"ok": True, "data": {"note": "not running"}})
+                else:
+                    try:
+                        mgr.update_stream(name, **updates)
+                        sock.send_json({"ok": True})
+                    except Exception:
+                        # e.g. update requires rebuild and something failed
+                        logger.exception("update_stream: failed to update '%s'", name)
+                        sock.send_json({"ok": False, "error": f"failed to update '{name}'"})
 
+            elif cmd == "list_streams":
+                current = mgr.list_streams()
+                out = {n: vars(cfg) for n, cfg in current.items()}
+                sock.send_json({"ok": True, "data": out})
+
+            # NEW: list all devices, shallow+caps
+            elif cmd == "list_devices":
+                devices = list_video_devices()
+                sock.send_json({"ok": True, "data": devices})
+
+            # NEW: get caps for a single device
+            elif cmd == "get_device_caps":
+                dev_path = args.get("device", "/dev/v4l/by-path/*video-index0")
+                info = probe_v4l2_device(dev_path)
+                sock.send_json({"ok": True, "data": info})
+
+            else:
+                sock.send_json({"ok": False, "error": f"unknown cmd: {cmd}"})
+
+        except Exception as e:
+            logger.exception("command failed")
+            sock.send_json({
+                "ok": False,
+                "error": str(e),
+                "trace": traceback.format_exc()
+            })
 
 
 if __name__ == "__main__":
