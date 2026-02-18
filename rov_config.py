@@ -61,7 +61,7 @@ AXIS_DEADZONE = 0.10  # 10% stick deadzone
 
 # Overall thrust cap (0..1). 1.0 = full output.
 # Set this lower (e.g. 0.6) to reduce peak current draw / brownouts while tuning.
-THRUSTER_MAX_ABS = 1.0
+THRUSTER_MAX_ABS = 0.35
 
 # Additional global scaling applied to pilot DOFs before mixing (0..1).
 # You can usually leave this at 1.0 and only use THRUSTER_MAX_ABS.
