@@ -349,6 +349,7 @@ class ControlService:
                     error_deadband_m=float(getattr(cfg, "DEPTH_HOLD_ERROR_DEADBAND_M", 0.03)),
                     i_limit=float(getattr(cfg, "DEPTH_HOLD_I_LIMIT", 0.25)),
                     out_limit=float(getattr(cfg, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
+                    trim=float(getattr(cfg, "DEPTH_HOLD_TRIM", 0.0)),
                     sign=float(getattr(cfg, "DEPTH_HOLD_SIGN", 1.0)),
                     walk_target=bool(getattr(cfg, "DEPTH_HOLD_WALK_TARGET", True)),
                     walk_deadband=float(getattr(cfg, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
@@ -380,6 +381,20 @@ class ControlService:
             self._lights_on = not self._lights_on
             return f"LIGHTS ({b}) -> {'ON' if self._lights_on else 'OFF'}"
         return None
+
+    def get_depth_hold_status(self) -> Dict[str, Any]:
+        """Return a snapshot of the most recent depth-hold controller status.
+
+        This is safe to call from other threads (best-effort; values may be
+        mid-update but are copied before returning).
+        """
+        st = dict(self._last_depth_status or {})
+        # Add a couple of generally-useful fields for topside display.
+        try:
+            st.setdefault("armed", bool(self.state.is_armed()))
+        except Exception:
+            pass
+        return st
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -606,6 +621,16 @@ class ControlService:
                     if self._depth_hold is not None:
                         modes = fresh_pilot.modes or {}
                         enabled_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
+
+                        # Optional live tuning from topside.
+                        # Send a dict under PilotFrame.modes["depth_hold_cfg"].
+                        try:
+                            dh_cfg_upd = modes.get("depth_hold_cfg", None)
+                            if isinstance(dh_cfg_upd, dict) and dh_cfg_upd:
+                                self._depth_hold.update_config(dh_cfg_upd)
+                        except Exception:
+                            pass
+
                         depth_m = self._depth_tap.last_depth_m if self._depth_tap is not None else None
                         depth_age = self._depth_tap.age_s(now) if self._depth_tap is not None else None
                         try:
@@ -626,10 +651,18 @@ class ControlService:
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
+                base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
+                dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
+                dh_enabled = bool((self._last_depth_status or {}).get("enabled_cmd", False))
+
                 for k, v in list(thr.items()):
                     if isinstance(k, str) and k.strip().lower() == "lights":
                         continue
-                    if abs(float(v)) < 0.05:
+                    db = base_db
+                    # While depth-hold is enabled, allow smaller vertical corrections.
+                    if dh_enabled and isinstance(k, str) and k.startswith("V_"):
+                        db = min(db, dh_db)
+                    if abs(float(v)) < float(db):
                         thr[k] = 0.0
 
                 # Smooth ramp-in right after arming so even if a joystick axis is

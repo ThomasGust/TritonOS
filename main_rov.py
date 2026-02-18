@@ -116,6 +116,21 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     except Exception as e:
         if getattr(cfg, "DEBUG", False):
             print("[rov/main] heartbeat disabled:", e)
+
+    # Depth-hold controller status (setpoint + active/reason + output)
+    try:
+        if ctrl is not None and hasattr(ctrl, "get_depth_hold_status"):
+            from sensors.depth_hold_status import DepthHoldStatusSensor
+
+            sensor_list.append(
+                DepthHoldStatusSensor(
+                    ctrl_status_fn=getattr(ctrl, "get_depth_hold_status"),
+                    rate_hz=float(getattr(cfg, "DEPTH_HOLD_STATUS_RATE_HZ", 10.0)),
+                )
+            )
+    except Exception as e:
+        if getattr(cfg, "DEBUG", False):
+            print("[rov/main] depth_hold_status sensor disabled:", e)
     # External depth sensor (Blue Robotics MS5837: Bar30 / Bar02)
     use_external = bool(getattr(cfg, "USE_EXTERNAL_DEPTH", False))
     use_bar02 = bool(getattr(cfg, "USE_BAR02", False))
