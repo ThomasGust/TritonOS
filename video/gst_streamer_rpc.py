@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import traceback
+import threading
 import glob
 import os
 import subprocess
@@ -20,7 +21,13 @@ from collections import defaultdict
 
 
 import zmq
-import threading
+
+try:
+    # Optional: socket connection event monitoring (hotplug diagnostics)
+    from utils.zmq_monitor import ZMQMonitor  # type: ignore
+except Exception:
+    ZMQMonitor = None  # type: ignore
+
 from video.gst_streamer import StreamManager, StreamConfig
 import rov_config as rov_cfg
 from video.tether import (
