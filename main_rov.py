@@ -108,10 +108,19 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                     amps_offset_v=float(getattr(cfg, "POWER_SENSE_AMPS_OFFSET_V", 0.330)),
                     volt_ch=getattr(cfg, "POWER_SENSE_VOLT_CH", None),
                     curr_ch=getattr(cfg, "POWER_SENSE_CURR_CH", None),
-                    v_batt_min=float(getattr(cfg, "POWER_SENSE_V_BATT_MIN", 5.0)),
-                    v_batt_max=float(getattr(cfg, "POWER_SENSE_V_BATT_MAX", 30.0)),
+                    v_batt_min=float(getattr(cfg, "POWER_SENSE_V_BATT_MIN", 6.0)),
+                    v_batt_max=float(getattr(cfg, "POWER_SENSE_V_BATT_MAX", 26.0)),
                     i_min=float(getattr(cfg, "POWER_SENSE_I_MIN", -5.0)),
                     i_max=float(getattr(cfg, "POWER_SENSE_I_MAX", 150.0)),
+                    samples_per_read=int(getattr(cfg, "POWER_SENSE_SAMPLES_PER_READ", 5)),
+                    ema_alpha=float(getattr(cfg, "POWER_SENSE_EMA_ALPHA", 0.30)),
+                    voltage_step_max_v=float(getattr(cfg, "POWER_SENSE_VOLTAGE_STEP_MAX_V", 3.0)),
+                    current_step_max_a=float(getattr(cfg, "POWER_SENSE_CURRENT_STEP_MAX_A", 25.0)),
+                    negative_current_clamp_a=float(getattr(cfg, "POWER_SENSE_NEGATIVE_CURRENT_CLAMP_A", 0.75)),
+                    hold_last_good=bool(getattr(cfg, "POWER_SENSE_HOLD_LAST_GOOD", True)),
+                    track_channels=bool(getattr(cfg, "POWER_SENSE_TRACK_CHANNELS", True)),
+                    switch_penalty=float(getattr(cfg, "POWER_SENSE_SWITCH_PENALTY", 80.0)),
+                    reselect_after_bad=int(getattr(cfg, "POWER_SENSE_RESELECT_AFTER_BAD", 0)),
                 )
             )
         except Exception as e:

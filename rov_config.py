@@ -167,11 +167,26 @@ POWER_SENSE_VOLT_MULT = 11.0
 POWER_SENSE_AMPS_PER_VOLT = 37.8788
 POWER_SENSE_AMPS_OFFSET_V = 0.330
 
-# Plausibility bounds for auto-detection / validity checks.
-POWER_SENSE_V_BATT_MIN = 5.0
-POWER_SENSE_V_BATT_MAX = 30.0
+# Plausibility bounds for validity checks.
+# Tip: Set these tighter if you know your pack range; it makes the mapping
+# selection and spike rejection more robust.
+POWER_SENSE_V_BATT_MIN = 6.0
+POWER_SENSE_V_BATT_MAX = 26.0
 POWER_SENSE_I_MIN = -5.0
 POWER_SENSE_I_MAX = 150.0
+
+# Reliability / filtering
+POWER_SENSE_SAMPLES_PER_READ = 5             # Median of N samples (rejects spikes)
+POWER_SENSE_EMA_ALPHA = 0.30                 # 0 disables smoothing
+POWER_SENSE_VOLTAGE_STEP_MAX_V = 3.0         # Larger jumps treated as outliers
+POWER_SENSE_CURRENT_STEP_MAX_A = 25.0        # Larger jumps treated as outliers
+POWER_SENSE_NEGATIVE_CURRENT_CLAMP_A = 0.75  # Clamp small negatives to 0
+POWER_SENSE_HOLD_LAST_GOOD = True            # Hold last good value on outliers
+
+# Channel handling
+POWER_SENSE_TRACK_CHANNELS = True            # Re-evaluate mapping with hysteresis
+POWER_SENSE_SWITCH_PENALTY = 80.0            # Larger => less likely to switch
+POWER_SENSE_RESELECT_AFTER_BAD = 0           # 0 disables full reselect (recommended)
 
 # External BlueRobotics MS5837 pressure sensor (Bar30 / Bar02).
 # When enabled, TritonOS will publish an `external_depth` message that includes:
