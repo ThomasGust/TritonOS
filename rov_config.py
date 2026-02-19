@@ -165,7 +165,7 @@ POWER_SENSE_CURR_CH = 2
 # Conversion constants (defaults match the current Blue Robotics PSM revision).
 POWER_SENSE_VOLT_MULT = 11.0
 POWER_SENSE_AMPS_PER_VOLT = 37.8788
-POWER_SENSE_AMPS_OFFSET_V = 0.330
+POWER_SENSE_AMPS_OFFSET_V = 0#0.330
 
 # Plausibility bounds for validity checks.
 # Tip: Set these tighter if you know your pack range; it makes the mapping
