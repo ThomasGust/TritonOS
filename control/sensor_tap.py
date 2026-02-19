@@ -38,8 +38,13 @@ class DepthSensorTap:
         self.sock.setsockopt_string(zmq.SUBSCRIBE, "")
         self.sock.connect(self.endpoint)
 
+        # Last VALID depth sample (depth_m present and error==False)
         self.last_depth_m: Optional[float] = None
-        self.last_ts: Optional[float] = None
+        self.last_ts: Optional[float] = None  # local receive time of last valid sample
+
+        # Last time we received ANY external_depth message (valid or error).
+        # Useful for debugging "stream present but invalid" vs "no messages".
+        self.last_rx_ts: Optional[float] = None
         self.last_sensor_name: Optional[str] = None
         self.last_raw: Dict[str, Any] = {}
 
@@ -62,22 +67,39 @@ class DepthSensorTap:
 
             if (msg or {}).get("type") != "external_depth":
                 continue
+
+            # Record that we saw the stream, even if this sample is an error.
+            # (This helps distinguish: no sensor vs sensor returning errors.)
+            self.last_rx_ts = time.time()
+            self.last_raw = dict(msg)
+
             if (msg or {}).get("error"):
+                # Do not update last_depth_m/last_ts on error samples.
                 continue
             if "depth_m" not in (msg or {}):
                 continue
 
             try:
                 self.last_depth_m = float(msg.get("depth_m"))
-                self.last_ts = float(msg.get("ts", time.time()))
+                # Use LOCAL receive time for freshness checks; it is robust to
+                # clock skew and still reflects whether data is arriving.
+                self.last_ts = time.time()
                 self.last_sensor_name = str(msg.get("sensor", "depth"))
-                self.last_raw = dict(msg)
             except Exception:
                 continue
 
     def age_s(self, now: Optional[float] = None) -> Optional[float]:
+        """Age since last VALID depth sample (seconds)."""
         if self.last_ts is None:
             return None
         if now is None:
             now = time.time()
         return float(now) - float(self.last_ts)
+
+    def rx_age_s(self, now: Optional[float] = None) -> Optional[float]:
+        """Age since last external_depth message of any kind (valid or error)."""
+        if self.last_rx_ts is None:
+            return None
+        if now is None:
+            now = time.time()
+        return float(now) - float(self.last_rx_ts)

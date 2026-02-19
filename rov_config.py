@@ -63,10 +63,12 @@ AXIS_DEADZONE = 0.10  # 10% stick deadzone
 # Set this lower (e.g. 0.6) to reduce peak current draw / brownouts while tuning.
 THRUSTER_MAX_ABS = 0.35
 
-# Deadband applied to mixed thruster outputs (extra protection against creep).
-# Note: depth-hold needs small vertical corrections, so we use a smaller
-# deadband for vertical thrusters while depth-hold is enabled.
+# Per-thruster deadband applied after mixing (extra protection against creep).
+# This is applied on the ROV side even if the pilot deadzones look good.
 MIX_OUTPUT_DEADBAND = 0.05
+
+# When depth-hold is enabled, allow smaller vertical corrections to avoid the
+# controller being "nulled out" near setpoint.
 DEPTH_HOLD_MIX_DEADBAND = 0.02
 
 # Additional global scaling applied to pilot DOFs before mixing (0..1).
@@ -83,7 +85,7 @@ POWER_SCALE = 1.0
 DEPTH_HOLD_ENABLE = True
 
 # If depth telemetry is older than this, depth-hold will disengage to manual.
-DEPTH_HOLD_SENSOR_STALE_S = 0.6
+DEPTH_HOLD_SENSOR_STALE_S = 2.0
 
 # Low-pass filter time constant on depth (seconds).
 DEPTH_HOLD_LPF_TAU_S = 0.50
@@ -102,12 +104,6 @@ DEPTH_HOLD_I_LIMIT = 0.25
 # Output clamp (in heave command units; keep < 1.0 while tuning)
 DEPTH_HOLD_OUT_LIMIT = 0.55
 
-# Constant trim (feed-forward) heave command added while depth-hold is active.
-# Use this to counteract slight positive/negative buoyancy so the PID doesn't
-# have to integrate for several seconds before holding.
-# Positive = UP.
-DEPTH_HOLD_TRIM = 0.0
-
 # If the controller pushes the wrong way, flip this to -1.0.
 DEPTH_HOLD_SIGN = 1.0
 
@@ -115,9 +111,6 @@ DEPTH_HOLD_SIGN = 1.0
 DEPTH_HOLD_WALK_TARGET = True
 DEPTH_HOLD_WALK_DEADBAND = 0.08
 DEPTH_HOLD_WALK_RATE_MPS = 0.60  # full stick => ~0.6 m/s target change
-
-# Publish depth-hold controller status to the sensor stream (Hz)
-DEPTH_HOLD_STATUS_RATE_HZ = 10.0
 
 # Optional clamp on target depth (meters, depth positive down). Set to None to disable.
 DEPTH_HOLD_TARGET_MIN_M = None

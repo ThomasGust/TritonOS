@@ -30,7 +30,9 @@ class DepthHoldConfig:
     enabled_default: bool = False
 
     # Sensor validity
-    sensor_stale_s: float = 0.6
+    # If valid depth telemetry is older than this, depth-hold pauses (inactive)
+    # but stays enabled and keeps the target.
+    sensor_stale_s: float = 2.0
 
     # Filtering
     depth_lpf_tau_s: float = 0.50
@@ -48,12 +50,6 @@ class DepthHoldConfig:
 
     # Output clamp (safety while tuning)
     out_limit: float = 0.55
-
-    # Constant heave trim (feed-forward) in normalized command space.
-    # Use this to counteract small positive/negative buoyancy so the PID doesn't
-    # need to “wind up” for seconds before holding depth.
-    # Positive = UP.
-    trim: float = 0.0
 
     # Sign flip hook (set to -1.0 if “too deep” makes it go deeper)
     sign: float = 1.0
@@ -82,70 +78,6 @@ class DepthHoldController:
         self._z_target: Optional[float] = None
         self._i_state: float = 0.0  # integral of error (meters*sec)
         self._last_enabled: bool = False
-
-    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Best-effort live config update.
-
-        Intended for topside tuning. Values are sanity-clamped.
-        Returns a dict describing what was applied.
-        """
-        u = updates or {}
-        applied: Dict[str, Any] = {}
-
-        def f(key: str, lo: float, hi: float) -> None:
-            if key not in u:
-                return
-            try:
-                v = float(u[key])
-            except Exception:
-                return
-            v = _clamp(v, lo, hi)
-            setattr(self.cfg, key, v)
-            applied[key] = v
-
-        def b(key: str) -> None:
-            if key not in u:
-                return
-            try:
-                v = bool(u[key])
-            except Exception:
-                return
-            setattr(self.cfg, key, v)
-            applied[key] = v
-
-        # Gains and limits
-        f("kp", 0.0, 5.0)
-        f("ki", 0.0, 5.0)
-        f("kd", 0.0, 5.0)
-        f("out_limit", 0.0, 1.0)
-        f("i_limit", 0.0, 2.0)
-        f("error_deadband_m", 0.0, 0.5)
-        f("sensor_stale_s", 0.05, 10.0)
-        f("depth_lpf_tau_s", 0.0, 10.0)
-        f("sign", -1.0, 1.0)
-        f("trim", -1.0, 1.0)
-
-        # Walk target
-        b("walk_target")
-        f("walk_deadband", 0.0, 1.0)
-        f("walk_rate_mps", 0.0, 3.0)
-
-        # Optional target clamps
-        for key in ("target_min_m", "target_max_m"):
-            if key in u:
-                try:
-                    vv = u[key]
-                    if vv is None:
-                        setattr(self.cfg, key, None)
-                        applied[key] = None
-                    else:
-                        v = float(vv)
-                        setattr(self.cfg, key, v)
-                        applied[key] = v
-                except Exception:
-                    pass
-
-        return applied
 
     @property
     def target_depth_m(self) -> Optional[float]:
@@ -181,10 +113,23 @@ class DepthHoldController:
             return manual_heave, status
 
         # Sensor validity gate.
-        if depth_m is None or (depth_age_s is not None and float(depth_age_s) > float(self.cfg.sensor_stale_s)):
-            # Stay manual if depth is unavailable.
-            self.reset()
-            status["reason"] = "no_depth"
+        # IMPORTANT: Do NOT reset controller state here.
+        # We want the target depth to remain sticky across brief dropouts so the
+        # setpoint doesn't "snap" back to 0.0 on the topside.
+        if depth_m is None:
+            status.update({"active": False, "reason": "no_depth"})
+            if self._z_target is not None:
+                status["target_m"] = float(self._z_target)
+            if self._z_f is not None:
+                status["depth_f_m"] = float(self._z_f)
+            return manual_heave, status
+
+        if depth_age_s is not None and float(depth_age_s) > float(self.cfg.sensor_stale_s):
+            status.update({"active": False, "reason": "stale_depth", "depth_age_s": float(depth_age_s)})
+            if self._z_target is not None:
+                status["target_m"] = float(self._z_target)
+            if self._z_f is not None:
+                status["depth_f_m"] = float(self._z_f)
             return manual_heave, status
 
         z = float(depth_m)
@@ -274,8 +219,6 @@ class DepthHoldController:
         # Recompute with (possibly) updated I state and re-clamp.
         u_raw2 = (kp * e) + (ki * self._i_state) + (kd * dz)
         u2 = float(self.cfg.sign) * float(u_raw2)
-        # Apply constant trim in final command space (positive = UP).
-        u2 = float(u2) + float(getattr(self.cfg, "trim", 0.0))
         u2_clamped = _clamp(u2, -float(self.cfg.out_limit), float(self.cfg.out_limit))
 
         status.update(
@@ -289,16 +232,6 @@ class DepthHoldController:
                 "dz_mps": dz,
                 "u_raw": u_raw2,
                 "u_out": u2_clamped,
-                "trim": float(getattr(self.cfg, "trim", 0.0)),
-                # Echo key tuning parameters for topside visibility.
-                "kp": float(kp),
-                "ki": float(ki),
-                "kd": float(kd),
-                "out_limit": float(self.cfg.out_limit),
-                "i_limit": float(self.cfg.i_limit),
-                "error_deadband_m": float(self.cfg.error_deadband_m),
-                "walk_deadband": float(self.cfg.walk_deadband),
-                "walk_rate_mps": float(self.cfg.walk_rate_mps),
             }
         )
         return u2_clamped, status
