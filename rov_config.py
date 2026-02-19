@@ -184,7 +184,7 @@ POWER_SENSE_NEGATIVE_CURRENT_CLAMP_A = 0.75  # Clamp small negatives to 0
 POWER_SENSE_HOLD_LAST_GOOD = True            # Hold last good value on outliers
 
 # Channel handling
-POWER_SENSE_TRACK_CHANNELS = True            # Re-evaluate mapping with hysteresis
+POWER_SENSE_TRACK_CHANNELS = False            # Re-evaluate mapping with hysteresis
 POWER_SENSE_SWITCH_PENALTY = 80.0            # Larger => less likely to switch
 POWER_SENSE_RESELECT_AFTER_BAD = 0           # 0 disables full reselect (recommended)
 
