@@ -160,7 +160,7 @@ POWER_SENSE_RATE_HZ = 2.0
 
 # Optional fixed ADS1115 channels (0..3). Set to None for auto-detect.
 POWER_SENSE_VOLT_CH = None
-POWER_SENSE_CURR_CH = None
+POWER_SENSE_CURR_CH = 3
 
 # Conversion constants (defaults match the current Blue Robotics PSM revision).
 POWER_SENSE_VOLT_MULT = 11.0
