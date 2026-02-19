@@ -160,7 +160,7 @@ POWER_SENSE_RATE_HZ = 2.0
 
 # Optional fixed ADS1115 channels (0..3). Set to None for auto-detect.
 POWER_SENSE_VOLT_CH = 3
-POWER_SENSE_CURR_CH = 4
+POWER_SENSE_CURR_CH = 2
 
 # Conversion constants (defaults match the current Blue Robotics PSM revision).
 POWER_SENSE_VOLT_MULT = 11.0
@@ -184,7 +184,7 @@ POWER_SENSE_NEGATIVE_CURRENT_CLAMP_A = 0.75  # Clamp small negatives to 0
 POWER_SENSE_HOLD_LAST_GOOD = True            # Hold last good value on outliers
 
 # Channel handling
-POWER_SENSE_TRACK_CHANNELS = False            # Re-evaluate mapping with hysteresis
+POWER_SENSE_TRACK_CHANNELS = True            # Re-evaluate mapping with hysteresis
 POWER_SENSE_SWITCH_PENALTY = 80.0            # Larger => less likely to switch
 POWER_SENSE_RESELECT_AFTER_BAD = 0           # 0 disables full reselect (recommended)
 
