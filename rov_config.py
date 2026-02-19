@@ -137,6 +137,42 @@ ARM_RAMP_S = 0.35
 # 3) sensors
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Power Sense Module (Blue Robotics PSM)
+# ---------------------------------------------------------------------------
+# TritonOS already publishes raw ADC voltages as `type='adc'`.
+# Enable this to also publish a converted `type='power'` message containing
+# battery voltage (V) and current (A), using the Blue Robotics formulas.
+#
+# Notes:
+# - The PSM provides two analog outputs:
+#     * VOLTAGE sense:  V_batt = V_adc * VOLT_MULT
+#     * CURRENT sense:  I_amps = (V_adc - AMPS_OFFSET) * AMPS_PER_VOLT
+# - Different PSM revisions have different AMPS_PER_VOLT values. The current
+#   Blue Robotics store listing specifies 37.8788 A/V with 0.330 V offset.
+#   The older R1 PSM uses 56.81818 A/V with the same 0.330 V offset.
+# - If you don't know which ADS1115 channels are wired, leave *_CH = None.
+#   TritonOS will auto-detect a plausible mapping and will re-detect if the
+#   mapping becomes invalid (helps when the channel ordering appears to change).
+
+POWER_SENSE_ENABLE = True
+POWER_SENSE_RATE_HZ = 2.0
+
+# Optional fixed ADS1115 channels (0..3). Set to None for auto-detect.
+POWER_SENSE_VOLT_CH = None
+POWER_SENSE_CURR_CH = None
+
+# Conversion constants (defaults match the current Blue Robotics PSM revision).
+POWER_SENSE_VOLT_MULT = 11.0
+POWER_SENSE_AMPS_PER_VOLT = 37.8788
+POWER_SENSE_AMPS_OFFSET_V = 0.330
+
+# Plausibility bounds for auto-detection / validity checks.
+POWER_SENSE_V_BATT_MIN = 5.0
+POWER_SENSE_V_BATT_MAX = 30.0
+POWER_SENSE_I_MIN = -5.0
+POWER_SENSE_I_MAX = 150.0
+
 # External BlueRobotics MS5837 pressure sensor (Bar30 / Bar02).
 # When enabled, TritonOS will publish an `external_depth` message that includes:
 #   - depth_m (relative to a surface reference measured at startup)

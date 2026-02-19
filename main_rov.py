@@ -94,6 +94,29 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
         ADCSensor(board, rate_hz=5.0),
     ]
 
+    # Power Sense Module -> publish converted voltage/current telemetry.
+    if bool(getattr(cfg, "POWER_SENSE_ENABLE", False)):
+        try:
+            from sensors.power_sense import PowerSenseSensor
+
+            sensor_list.append(
+                PowerSenseSensor(
+                    board,
+                    rate_hz=float(getattr(cfg, "POWER_SENSE_RATE_HZ", 2.0)),
+                    volt_mult=float(getattr(cfg, "POWER_SENSE_VOLT_MULT", 11.0)),
+                    amps_per_volt=float(getattr(cfg, "POWER_SENSE_AMPS_PER_VOLT", 37.8788)),
+                    amps_offset_v=float(getattr(cfg, "POWER_SENSE_AMPS_OFFSET_V", 0.330)),
+                    volt_ch=getattr(cfg, "POWER_SENSE_VOLT_CH", None),
+                    curr_ch=getattr(cfg, "POWER_SENSE_CURR_CH", None),
+                    v_batt_min=float(getattr(cfg, "POWER_SENSE_V_BATT_MIN", 5.0)),
+                    v_batt_max=float(getattr(cfg, "POWER_SENSE_V_BATT_MAX", 30.0)),
+                    i_min=float(getattr(cfg, "POWER_SENSE_I_MIN", -5.0)),
+                    i_max=float(getattr(cfg, "POWER_SENSE_I_MAX", 150.0)),
+                )
+            )
+        except Exception as e:
+            print("[rov/main] power sense sensor disabled:", e)
+
     # Heartbeat (lets topside show link + armed state)
     try:
         from sensors.heartbeat import HeartbeatSensor
