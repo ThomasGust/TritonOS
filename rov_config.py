@@ -249,7 +249,7 @@ BAR02_MODEL = "02BA"
 DEBUG = True
 
 # Control-loop / pilot RX verbose printing (keep OFF in normal ops).
-CONTROL_DEBUG = True
+CONTROL_DEBUG = False
 PILOT_RX_DEBUG = False
 
 # If True, prints file path + channel map when rov_config is imported.

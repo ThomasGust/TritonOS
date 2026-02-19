@@ -359,8 +359,8 @@ class PowerSenseSensor(BaseSensor):
 
             self._last_v_batt = float(v_batt)
             self._last_i_amps = float(i_amps)
-        print("volts", v_batt, adc_v, v_ch)
-        print("amps", i_amps, adc_i, i_ch)
+        #print("volts", v_batt, adc_v, v_ch)
+        #print("amps", i_amps, adc_i, i_ch)
         out.update(
             {
                 "voltage_v": float(v_batt),
