@@ -489,7 +489,7 @@ ATTITUDE_RATE_HZ = 50.0
 # Fusion mode:
 #   - 'robust'  : 6DOF Madgwick for roll/pitch + smooth magnetometer yaw correction (recommended)
 #   - 'madgwick': classic 6DOF/9DOF Madgwick (more sensitive to mag disturbances)
-ATTITUDE_FUSION = 'madgwick'
+ATTITUDE_FUSION = 'robust'
 
 # Initial alignment averaging window (seconds)
 ATTITUDE_INIT_SECONDS = 2.0
