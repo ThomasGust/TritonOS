@@ -62,7 +62,6 @@ AXIS_DEADZONE = 0.10  # 10% stick deadzone
 # Overall thrust cap (0..1). 1.0 = full output.
 # Set this lower (e.g. 0.6) to retduce peak current draw / brownouts while tuning.
 THRUSTER_MAX_ABS = 0.35
-
 # Per-thruster deadband applied after mixing (extra protection against creep).
 # This is applied on the ROV side even if the pilot deadzones look good.
 MIX_OUTPUT_DEADBAND = 0.05
