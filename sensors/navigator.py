@@ -24,6 +24,8 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 from sensors.base import BaseSensor
 import sensors.ms5837 as ms5837  # for Bar30
 
+from sensors.mag_fusion import MagFusion, Vec3 as MFVec3
+
 # Optional: second magnetometer on Navigator
 try:
     from sensors.mmc5983 import MMC5983
@@ -247,18 +249,70 @@ class IMUSensor(BaseSensor):
         super().__init__("imu", rate_hz)
         self.board = board
 
+        # Optional dual-mag fusion (AK09915 + MMC5983)
+        enable = True
+        prefer_mmc = 1.6
+        prefer_ak = 1.0
+        sensor_lpf_alpha = 0.20
+        noise_ema_beta = 0.05
+        agree_angle_deg = 15.0
+        agree_norm_frac = 0.12
+        outlier_angle_deg = 35.0
+        outlier_norm_frac = 0.25
+        output_lpf_tau_s = 0.15
+        try:
+            import rov_config as cfg  # type: ignore
+
+            enable = bool(getattr(cfg, "MAG_FUSION_ENABLE", enable))
+            prefer_mmc = float(getattr(cfg, "MAG_FUSION_PREFER_MMC", prefer_mmc))
+            prefer_ak = float(getattr(cfg, "MAG_FUSION_PREFER_AK", prefer_ak))
+            sensor_lpf_alpha = float(getattr(cfg, "MAG_FUSION_SENSOR_LPF_ALPHA", sensor_lpf_alpha))
+            noise_ema_beta = float(getattr(cfg, "MAG_FUSION_NOISE_EMA_BETA", noise_ema_beta))
+            agree_angle_deg = float(getattr(cfg, "MAG_FUSION_AGREE_ANGLE_DEG", agree_angle_deg))
+            agree_norm_frac = float(getattr(cfg, "MAG_FUSION_AGREE_NORM_FRAC", agree_norm_frac))
+            outlier_angle_deg = float(getattr(cfg, "MAG_FUSION_OUTLIER_ANGLE_DEG", outlier_angle_deg))
+            outlier_norm_frac = float(getattr(cfg, "MAG_FUSION_OUTLIER_NORM_FRAC", outlier_norm_frac))
+            output_lpf_tau_s = float(getattr(cfg, "MAG_FUSION_OUTPUT_LPF_TAU_S", output_lpf_tau_s))
+        except Exception:
+            pass
+
+        self._mag_fusion = MagFusion(
+            enable=enable,
+            prefer_mmc=prefer_mmc,
+            prefer_ak=prefer_ak,
+            sensor_lpf_alpha=sensor_lpf_alpha,
+            noise_ema_beta=noise_ema_beta,
+            agree_angle_deg=agree_angle_deg,
+            agree_norm_frac=agree_norm_frac,
+            outlier_angle_deg=outlier_angle_deg,
+            outlier_norm_frac=outlier_norm_frac,
+            output_lpf_tau_s=output_lpf_tau_s,
+        )
+
     def read(self) -> Dict[str, Any]:
         a = self.board.read_accel()
         g = self.board.read_gyro()
-        # Use AK09915 for the legacy 'mag' field
-        m = self.board.read_mag()
+        mags = self.board.read_mags()
+        ak = mags.get("ak09915") or {"x": 0.0, "y": 0.0, "z": 0.0}
+        mmc = mags.get("mmc5983")
+
+        ak_v = MFVec3(float(ak["x"]), float(ak["y"]), float(ak["z"]))
+        mmc_v = None if mmc is None else MFVec3(float(mmc["x"]), float(mmc["y"]), float(mmc["z"]))
+
+        fused_v, fusion_meta = self._mag_fusion.fuse(ak_v, mmc_v)
         return {
             "ts": time.time(),
             "sensor": self.name,
             "type": "imu",
             "accel": {"x": a.x, "y": a.y, "z": a.z},
             "gyro": {"x": g.x, "y": g.y, "z": g.z},
-            "mag": {"x": m.x, "y": m.y, "z": m.z},
+            # Backward-compatible: keep `mag` as the primary mag vector.
+            # When MMC is present, this becomes the fused mag.
+            "mag": fused_v.as_dict(),
+            "mag_source": fusion_meta.get("source", "ak09915"),
+            # Extra detail for debugging / tuning (safe for older pilots to ignore)
+            "mag_sources": mags,
+            "mag_fusion": fusion_meta,
         }
 
 

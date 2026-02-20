@@ -429,6 +429,36 @@ MMC5983_USE_SET_RESET = True
 MMC5983_I2C_BUSES = (6, 1)
 MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 
+# ---------------------------------------------------------------------------
+# Magnetometer fusion (AK09915 + MMC5983)
+# ---------------------------------------------------------------------------
+# TritonOS can publish a *single* `imu.mag` vector that is a robust blend of
+# both onboard magnetometers. This mainly reduces *random* sensor noise and
+# provides some outlier rejection when the sensors disagree.
+#
+# Notes:
+#   - This does NOT replace proper hard/soft-iron calibration.
+#   - For heading, you still want an AHRS (gyro integration + mag correction).
+
+MAG_FUSION_ENABLE = True
+
+# Relative preference (higher => more weight). Default: trust MMC slightly more.
+MAG_FUSION_PREFER_MMC = 1.6
+MAG_FUSION_PREFER_AK = 1.0
+
+# Per-sensor statistics:
+MAG_FUSION_SENSOR_LPF_ALPHA = 0.20   # 0..1 (larger = faster, less smoothing)
+MAG_FUSION_NOISE_EMA_BETA = 0.05     # 0..1 (larger = faster noise tracking)
+
+# Agreement / outlier thresholds:
+MAG_FUSION_AGREE_ANGLE_DEG = 15.0
+MAG_FUSION_AGREE_NORM_FRAC = 0.12
+MAG_FUSION_OUTLIER_ANGLE_DEG = 35.0
+MAG_FUSION_OUTLIER_NORM_FRAC = 0.25
+
+# Output smoothing (seconds). Set to 0 to disable.
+MAG_FUSION_OUTPUT_LPF_TAU_S = 0.15
+
 
 # ---------------------------------------------------------------------------
 # Print config identity + channel map on import (debugging “wrong file” issues)
