@@ -492,7 +492,7 @@ ATTITUDE_RATE_HZ = 50.0
 ATTITUDE_FUSION = 'robust'
 
 # Initial alignment averaging window (seconds)
-ATTITUDE_INIT_SECONDS = 0.8
+ATTITUDE_INIT_SECONDS = 2.0
 
 # Madgwick beta scheduling (higher = faster convergence but noisier)
 ATTITUDE_BETA = 0.08
