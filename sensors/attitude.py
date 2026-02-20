@@ -200,6 +200,19 @@ class AttitudeSensor(BaseSensor):
         zero_attitude = False
         yaw_zero = False
 
+        # Auto-mount (boot-time leveling)
+        # If the IMU board (or Pi/Navigator) is mounted with some tilt inside the vehicle,
+        # roll/pitch will be coupled and the attitude will not match the vehicle body axes.
+        #
+        # When the vehicle is known to be "level" at boot, we can estimate a *tilt-only*
+        # correction that aligns the measured accel direction with +Z in the body frame.
+        # This does **not** determine the remaining yaw-about-Z mounting angle (that
+        # requires additional information), but in practice it fixes the big issue:
+        # roll/pitch mixing from a non-level installation.
+        auto_mount_enable = False
+        auto_mount_yaw_deg = 0.0  # optional extra yaw rotation (deg) applied after leveling
+        auto_mount_save_path = ""  # optional: save computed mount json for reuse
+
         # Calibration files (optional)
         gyro_cal_path = ""
         mag_cal_path = ""
@@ -257,6 +270,10 @@ class AttitudeSensor(BaseSensor):
             zero_attitude = bool(getattr(cfg, "ATTITUDE_ZERO_ATTITUDE_AT_START", zero_attitude))
             yaw_zero = bool(getattr(cfg, "ATTITUDE_YAW_ZERO_AT_START", yaw_zero))
 
+            auto_mount_enable = bool(getattr(cfg, "ATTITUDE_AUTO_MOUNT_FROM_LEVEL", auto_mount_enable))
+            auto_mount_yaw_deg = float(getattr(cfg, "ATTITUDE_AUTO_MOUNT_YAW_DEG", auto_mount_yaw_deg))
+            auto_mount_save_path = str(getattr(cfg, "ATTITUDE_AUTO_MOUNT_SAVE_PATH", auto_mount_save_path))
+
             gyro_cal_path = str(getattr(cfg, "ATTITUDE_GYRO_CAL", gyro_cal_path))
             mag_cal_path = str(getattr(cfg, "ATTITUDE_MAG_CAL", mag_cal_path))
             mount_path = str(getattr(cfg, "ATTITUDE_MOUNT", mount_path))
@@ -309,6 +326,10 @@ class AttitudeSensor(BaseSensor):
         self._accel_sign_mode = accel_sign if accel_sign in ("auto", "normal", "invert") else "auto"
         self._zero_attitude = bool(zero_attitude)
         self._yaw_zero = bool(yaw_zero)
+
+        self._auto_mount_enable = bool(auto_mount_enable)
+        self._auto_mount_yaw_deg = float(auto_mount_yaw_deg)
+        self._auto_mount_save_path = str(auto_mount_save_path)
 
         # Filters
         self._lpf_a = EMA3(accel_lpf_tau)
@@ -382,6 +403,10 @@ class AttitudeSensor(BaseSensor):
         self._q_zero: Optional[Quaternion] = None
         self._yaw0: Optional[float] = None
         self._accel_sign_used = +1.0
+
+        # For debugging/telemetry
+        self._mount_auto_applied = False
+        self._mount_auto_R: Optional[np.ndarray] = None
 
         # Bootstrap initial attitude so the output is stable quickly.
         self._bootstrap_initial_alignment()
@@ -490,6 +515,57 @@ class AttitudeSensor(BaseSensor):
                 a_use = -a_avg
 
         self._accel_sign_used = float(accel_sign_used)
+
+        # Optional: estimate a tilt-only mount correction from the known "level" boot pose.
+        # This updates self._mount so all subsequent sensor vectors are expressed in the
+        # vehicle body axes (up to an unknown yaw-about-Z).
+        if self._auto_mount_enable:
+            a_n = _normalize3(a_use)
+            if a_n is not None:
+                z_b = np.array([0.0, 0.0, 1.0], dtype=float)
+                q_level = Quaternion.from_two_vectors(a_n, z_b)  # old_body -> leveled_body
+
+                # Optional extra yaw (about +Z in the leveled body frame)
+                yaw_rad = math.radians(float(self._auto_mount_yaw_deg))
+                q_yaw = (
+                    Quaternion.from_axis_angle((0.0, 0.0, 1.0), yaw_rad)
+                    if abs(yaw_rad) > 1e-12
+                    else Quaternion.identity()
+                )
+
+                q_extra = (q_yaw * q_level).normalized()
+                R_extra = q_extra.to_rotation_matrix()  # old_body -> new_body
+
+                # Compose with any user-provided mount file: v_new_body = R_extra @ (R_user @ v_sensor)
+                self._mount = Mount(R=R_extra @ self._mount.R)
+                self._mount_auto_applied = True
+                self._mount_auto_R = R_extra
+
+                # Apply the same correction to our averages so the init quaternion is consistent.
+                a_use = R_extra @ a_use
+                g_avg = R_extra @ g_avg
+                if m_avg is not None:
+                    m_avg = R_extra @ m_avg
+
+                # Optionally persist the computed mount matrix for reuse.
+                p = (self._auto_mount_save_path or "").strip()
+                if p:
+                    try:
+                        from triton_ahrs.calibration import save_json
+
+                        save_json(
+                            {
+                                "R": self._mount.R.tolist(),
+                                "meta": {
+                                    "auto_from_level": True,
+                                    "auto_yaw_deg": float(self._auto_mount_yaw_deg),
+                                    "created_ts": time.time(),
+                                },
+                            },
+                            p,
+                        )
+                    except Exception:
+                        pass
 
         q_init = _initial_quaternion_from_accel_mag(a_use, m_avg)
         self._filt.q = q_init
@@ -725,8 +801,17 @@ class AttitudeSensor(BaseSensor):
                 "mag_step_uT": float(mag_step),
                 "gyro_bias_rad_s": {"x": float(self._gyro_bias[0]), "y": float(self._gyro_bias[1]), "z": float(self._gyro_bias[2])},
                 "accel_sign": float(self._accel_sign_used),
+                "mount_auto": bool(self._mount_auto_applied),
             },
         }
+
+        # Optional mount debug (small; safe for old pilots to ignore)
+        if self._mount_auto_applied and self._mount_auto_R is not None:
+            out["mount"] = {
+                "R": [[float(x) for x in row] for row in self._mount.R.tolist()],
+                "auto": True,
+                "auto_yaw_deg": float(self._auto_mount_yaw_deg),
+            }
 
         # Attach fusion debug (safe for older topsides to ignore)
         out.update(mag_meta)

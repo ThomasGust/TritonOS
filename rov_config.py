@@ -538,6 +538,31 @@ ATTITUDE_ACCEL_SIGN = 'auto'
 ATTITUDE_ZERO_ATTITUDE_AT_START = False
 ATTITUDE_YAW_ZERO_AT_START = False
 
+# Auto-mount (boot-time leveling)
+#
+# If the Navigator/Pi is mounted with some *tilt* relative to the vehicle body,
+# roll/pitch will be coupled and the attitude stream won't match the robot axes.
+#
+# When you can guarantee the vehicle boots in a known "level" pose, enabling this
+# will compute a tilt-only correction from the averaged accelerometer vector during
+# the init window and apply it as an additional mount transform.
+#
+# Notes:
+#   - This fixes the common case where the electronics stack is installed "crooked".
+#   - It does NOT automatically determine any yaw-about-Z mounting angle.
+#     If your board is also rotated in yaw (not pointing straight ahead), you can
+#     either set ATTITUDE_YAW_ZERO_AT_START=True (to make yaw=0 at boot) or use
+#     ATTITUDE_AUTO_MOUNT_YAW_DEG below to rotate axes.
+ATTITUDE_AUTO_MOUNT_FROM_LEVEL = False
+
+# Optional extra yaw rotation (degrees) applied after leveling. Use this if your
+# board is mounted rotated left/right relative to the vehicle forward axis.
+ATTITUDE_AUTO_MOUNT_YAW_DEG = 0.0
+
+# Optional: save the computed mount matrix (JSON) so you can reuse it later.
+# Example: '/home/pi/triton_mount.json'
+ATTITUDE_AUTO_MOUNT_SAVE_PATH = ''
+
 # Optional calibration files (JSON) produced by tools in triton_ahrs/.
 # Leave blank to disable.
 ATTITUDE_GYRO_CAL = ''
