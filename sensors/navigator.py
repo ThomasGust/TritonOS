@@ -251,6 +251,7 @@ class IMUSensor(BaseSensor):
 
         # Optional dual-mag fusion (AK09915 + MMC5983)
         enable = True
+        mag_output_mode = "fused"
         prefer_mmc = 1.6
         prefer_ak = 1.0
         sensor_lpf_alpha = 0.20
@@ -264,6 +265,7 @@ class IMUSensor(BaseSensor):
             import rov_config as cfg  # type: ignore
 
             enable = bool(getattr(cfg, "MAG_FUSION_ENABLE", enable))
+            mag_output_mode = str(getattr(cfg, "MAG_OUTPUT_MODE", mag_output_mode)).strip().lower()
             prefer_mmc = float(getattr(cfg, "MAG_FUSION_PREFER_MMC", prefer_mmc))
             prefer_ak = float(getattr(cfg, "MAG_FUSION_PREFER_AK", prefer_ak))
             sensor_lpf_alpha = float(getattr(cfg, "MAG_FUSION_SENSOR_LPF_ALPHA", sensor_lpf_alpha))
@@ -289,6 +291,8 @@ class IMUSensor(BaseSensor):
             output_lpf_tau_s=output_lpf_tau_s,
         )
 
+        self._mag_output_mode = (mag_output_mode or "fused").strip().lower()
+
     def read(self) -> Dict[str, Any]:
         a = self.board.read_accel()
         g = self.board.read_gyro()
@@ -299,7 +303,25 @@ class IMUSensor(BaseSensor):
         ak_v = MFVec3(float(ak["x"]), float(ak["y"]), float(ak["z"]))
         mmc_v = None if mmc is None else MFVec3(float(mmc["x"]), float(mmc["y"]), float(mmc["z"]))
 
-        fused_v, fusion_meta = self._mag_fusion.fuse(ak_v, mmc_v)
+        # Select which magnetometer to publish as `imu.mag`
+        mode = getattr(self, "_mag_output_mode", "fused")
+        mode = str(mode).strip().lower()
+
+        if mode in ("ak", "ak_only", "ak09915"):
+            fused_v = ak_v
+            fusion_meta = {"mode": "ak_only", "source": "ak09915", "w_ak": 1.0, "w_mmc": 0.0}
+        elif mode in ("mmc", "mmc_only", "mmc5983", "mmc5983_only"):
+            if mmc_v is not None:
+                fused_v = mmc_v
+                fusion_meta = {"mode": "mmc_only", "source": "mmc5983", "w_ak": 0.0, "w_mmc": 1.0}
+            else:
+                # Graceful fallback if MMC is unavailable at runtime
+                fused_v = ak_v
+                fusion_meta = {"mode": "mmc_only_fallback", "source": "ak09915", "w_ak": 1.0, "w_mmc": 0.0}
+        else:
+            # Default: fused
+            fused_v, fusion_meta = self._mag_fusion.fuse(ak_v, mmc_v)
+
         return {
             "ts": time.time(),
             "sensor": self.name,

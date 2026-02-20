@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
-#YAY VIA SPI!
+
 # Optional backends (both common on Raspberry Pi)
 try:
     import smbus2  # type: ignore

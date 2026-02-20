@@ -62,6 +62,7 @@ AXIS_DEADZONE = 0.10  # 10% stick deadzone
 # Overall thrust cap (0..1). 1.0 = full output.
 # Set this lower (e.g. 0.6) to retduce peak current draw / brownouts while tuning.
 THRUSTER_MAX_ABS = 0.35
+
 # Per-thruster deadband applied after mixing (extra protection against creep).
 # This is applied on the ROV side even if the pilot deadzones look good.
 MIX_OUTPUT_DEADBAND = 0.05
@@ -441,6 +442,17 @@ MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 #   - For heading, you still want an AHRS (gyro integration + mag correction).
 
 MAG_FUSION_ENABLE = True
+
+
+# Which magnetometer to publish as `imu.mag`:
+#   "fused" (default): blend AK09915 + MMC5983 for lower random noise.
+#   "mmc":   publish MMC5983 only (falls back to AK if MMC is unavailable).
+#   "ak":    publish AK09915 only.
+#
+# Note: Setting MAG_FUSION_PREFER_AK = 0.0 is *almost* equivalent to "mmc"
+# when MMC is present, but MAG_OUTPUT_MODE is clearer and sets `mag_source`
+# appropriately.
+MAG_OUTPUT_MODE = "mmc"
 
 # Relative preference (higher => more weight). Default: trust MMC slightly more.
 MAG_FUSION_PREFER_MMC = 1.6
