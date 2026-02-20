@@ -557,7 +557,7 @@ ATTITUDE_AUTO_MOUNT_FROM_LEVEL = True
 
 # Optional extra yaw rotation (degrees) applied after leveling. Use this if your
 # board is mounted rotated left/right relative to the vehicle forward axis.
-ATTITUDE_AUTO_MOUNT_YAW_DEG = 0.0
+ATTITUDE_AUTO_MOUNT_YAW_DEG = 90
 
 # Optional: save the computed mount matrix (JSON) so you can reuse it later.
 # Example: '/home/pi/triton_mount.json'
