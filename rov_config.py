@@ -452,7 +452,7 @@ MAG_FUSION_ENABLE = True
 # Note: Setting MAG_FUSION_PREFER_AK = 0.0 is *almost* equivalent to "mmc"
 # when MMC is present, but MAG_OUTPUT_MODE is clearer and sets `mag_source`
 # appropriately.
-MAG_OUTPUT_MODE = "mmc"
+MAG_OUTPUT_MODE = "fused"
 
 # Relative preference (higher => more weight). Default: trust MMC slightly more.
 MAG_FUSION_PREFER_MMC = 1.6
@@ -470,6 +470,85 @@ MAG_FUSION_OUTLIER_NORM_FRAC = 0.25
 
 # Output smoothing (seconds). Set to 0 to disable.
 MAG_FUSION_OUTPUT_LPF_TAU_S = 0.15
+# ---------------------------------------------------------------------------
+# Attitude estimation (AHRS)
+# ---------------------------------------------------------------------------
+# TritonOS can publish an additional `type='attitude'` message that contains
+# a fused orientation estimate (roll/pitch/yaw + quaternion) computed *on the
+# ROV* and streamed topside.
+#
+# Recommended settings:
+#   - Keep ATTITUDE_FUSION='robust' for stable yaw (heading) with mag spike rejection.
+#   - Tune ATTITUDE_YAW_TAU larger for smoother yaw, smaller for faster response.
+#   - If your heading still jitters, ensure your magnetometers are calibrated
+#     (hard/soft iron) and that the IMU is mounted away from high-current wiring.
+
+ATTITUDE_ENABLE = True
+ATTITUDE_RATE_HZ = 50.0
+
+# Fusion mode:
+#   - 'robust'  : 6DOF Madgwick for roll/pitch + smooth magnetometer yaw correction (recommended)
+#   - 'madgwick': classic 6DOF/9DOF Madgwick (more sensitive to mag disturbances)
+ATTITUDE_FUSION = 'robust'
+
+# Initial alignment averaging window (seconds)
+ATTITUDE_INIT_SECONDS = 0.8
+
+# Madgwick beta scheduling (higher = faster convergence but noisier)
+ATTITUDE_BETA = 0.08
+ATTITUDE_BETA_INIT = 0.60
+ATTITUDE_BETA_STATIONARY = 0.12
+ATTITUDE_WARMUP_SECONDS = 1.5
+
+# Accel gating (disable accel correction when vehicle is accelerating hard)
+ATTITUDE_ACCEL_G_TOL = 0.20          # allow +/- 0.20g deviation from 1g
+ATTITUDE_STATIONARY_GYRO_RAD = 0.20  # rad/s threshold for "stationary"
+ATTITUDE_BIAS_ADAPT_TAU = 60.0       # seconds (0 disables stationary gyro bias learning)
+
+# Robust yaw correction tuning
+ATTITUDE_YAW_TAU = 8.0               # seconds (larger = smoother yaw)
+ATTITUDE_YAW_MAX_ERR_DEG = 25.0      # clamp mag yaw error to reject spikes
+ATTITUDE_YAW_KI = 0.02               # 1/s (0 disables Z-gyro bias learning from yaw error)
+ATTITUDE_YAW_BIAS_MAX_DPS = 5.0      # clamp learned Z-bias magnitude
+ATTITUDE_YAW_BIAS_ADAPT_ERR_DEG = 10.0
+ATTITUDE_YAW_BIAS_ADAPT_GYRO_RAD = 0.35
+ATTITUDE_YAW_BIAS_ADAPT_GYRO_NORM = 0.50
+ATTITUDE_MAG_REF_TAU = 300.0         # seconds (0 disables slow ref tracking)
+
+# Magnetometer health gating (magnitude + step)
+ATTITUDE_MAG_TOL = 0.35              # fractional tolerance on |B| relative to baseline
+ATTITUDE_MAG_MAX_STEP = 8.0          # uT: max allowed |B| step between samples
+ATTITUDE_MAG_ENABLE_UP = 0.75        # seconds to enable mag after it becomes healthy
+ATTITUDE_MAG_ENABLE_DOWN = 0.35      # seconds to disable mag after it becomes unhealthy
+
+# Optional sensor filtering (seconds; 0 disables)
+ATTITUDE_ACCEL_LPF_TAU_S = 0.05
+ATTITUDE_MAG_LPF_TAU_S = 0.20
+ATTITUDE_GYRO_LPF_TAU_S = 0.00
+
+# Accel sign handling:
+#   - 'auto'   : choose sign that yields smallest initial roll/pitch
+#   - 'normal' : use accel as read
+#   - 'invert' : flip accel
+ATTITUDE_ACCEL_SIGN = 'auto'
+
+# Output zeroing (presentation):
+#   - ZERO_ATTITUDE: output is relative to startup attitude (startup becomes 0,0,0)
+#   - YAW_ZERO:      subtract an initial yaw reference (operator-friendly)
+ATTITUDE_ZERO_ATTITUDE_AT_START = False
+ATTITUDE_YAW_ZERO_AT_START = False
+
+# Optional calibration files (JSON) produced by tools in triton_ahrs/.
+# Leave blank to disable.
+ATTITUDE_GYRO_CAL = ''
+ATTITUDE_MAG_CAL = ''
+ATTITUDE_MOUNT = ''
+
+# Magnetometer input selection for attitude (defaults to MAG_OUTPUT_MODE)
+#   'fused' | 'mmc' | 'ak'
+ATTITUDE_MAG_OUTPUT_MODE = MAG_OUTPUT_MODE
+# Throttle magnetometer reads for the AHRS (Hz). Set <=0 to read at full AHRS rate.
+ATTITUDE_MAG_RATE_HZ = 25.0
 
 
 # ---------------------------------------------------------------------------
