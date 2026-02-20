@@ -553,7 +553,7 @@ ATTITUDE_YAW_ZERO_AT_START = False
 #     If your board is also rotated in yaw (not pointing straight ahead), you can
 #     either set ATTITUDE_YAW_ZERO_AT_START=True (to make yaw=0 at boot) or use
 #     ATTITUDE_AUTO_MOUNT_YAW_DEG below to rotate axes.
-ATTITUDE_AUTO_MOUNT_FROM_LEVEL = False
+ATTITUDE_AUTO_MOUNT_FROM_LEVEL = True
 
 # Optional extra yaw rotation (degrees) applied after leveling. Use this if your
 # board is mounted rotated left/right relative to the vehicle forward axis.
