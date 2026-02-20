@@ -67,7 +67,7 @@ class _I2CBackend:
 
 
 class _SPIBackend:
-    def __init__(self, bus: int, cs: int, max_speed_hz: int = 2_000_000):
+    def __init__(self, bus: int, cs: int, max_speed_hz: int = 10_000_000, mode: int = 0):
         if spidev is None:
             raise RuntimeError("spidev is not available")
         self.bus_id = int(bus)
@@ -75,31 +75,19 @@ class _SPIBackend:
         self.spi = spidev.SpiDev()
         self.spi.open(self.bus_id, self.cs)
         self.spi.max_speed_hz = int(max_speed_hz)
-        # Datasheet: SCK idles high, data driven on falling edge, sampled on rising edge -> mode 3
-        self.spi.mode = 3
-
-    @staticmethod
-    def _cmd_read(reg: int) -> int:
-        # SPI read cmd: bit0=1, bit2-7=addr(5:0)
-        return ((reg & 0x3F) << 2) | 0x01
-
-    @staticmethod
-    def _cmd_write(reg: int) -> int:
-        # SPI write cmd: bit0=0, bit2-7=addr(5:0)
-        return ((reg & 0x3F) << 2) | 0x00
+        # Navigator's MMC5983 is typically accessed with "MSB=1 => read" register
+        # transactions (matches BlueRobotics' reference driver).
+        self.spi.mode = int(mode)
 
     def read_reg(self, reg: int) -> int:
-        cmd = self._cmd_read(reg)
-        resp = self.spi.xfer2([cmd, 0x00])
+        resp = self.spi.xfer2([int(reg) | 0x80, 0x00])
         return int(resp[1] & 0xFF)
 
     def write_reg(self, reg: int, val: int) -> None:
-        cmd = self._cmd_write(reg)
-        self.spi.xfer2([cmd, int(val) & 0xFF])
+        self.spi.xfer2([int(reg) & 0x7F, int(val) & 0xFF])
 
     def read_block(self, start_reg: int, n: int) -> bytes:
-        cmd = self._cmd_read(start_reg)
-        resp = self.spi.xfer2([cmd] + [0x00] * n)
+        resp = self.spi.xfer2([int(start_reg) | 0x80] + [0x00] * int(n))
         return bytes(int(b) & 0xFF for b in resp[1:])  # drop cmd echo
 
 
