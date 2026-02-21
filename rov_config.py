@@ -284,9 +284,9 @@ PWM_DEADBAND_US = 25    # microsecond deadband around neutral
 # Thruster slew limiting (software band-aid for power spikes / brownouts)
 # Units are normalized thrust per second (1.0 == full-scale change in ~1s).
 # At 50 Hz, 3.0 => ~0.06 max change per control tick.
-THRUSTER_SLEW_RATE_NORM_PER_S = 1.0
+THRUSTER_SLEW_RATE_NORM_PER_S = 3.0
 # Optional slower limit when reversing direction across neutral (None -> use base rate).
-THRUSTER_SLEW_REVERSE_RATE_NORM_PER_S = 1.0
+THRUSTER_SLEW_REVERSE_RATE_NORM_PER_S = 3.0
 # Cap dt used by the slew limiter so a delayed loop does not instantly jump.
 THRUSTER_SLEW_DT_MAX_S = 0.10
 
