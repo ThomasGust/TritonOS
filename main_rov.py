@@ -320,8 +320,21 @@ def start_control_service():
                         aux_channels = {}
                         aux_cfg = {}
 
+                # Optional wrist rotate motor (T200) on an aux-mapped channel.
+                # We intentionally drive it as a *thruster-style* channel (neutral 1500us,
+                # bidirectional [-1..1]) rather than as a unidirectional aux output like lights.
+                thruster_channels = dict(chanmap.thrusters)
+                wrist_ch = getattr(cfg, "WRIST_ROTATE_PWM_CHANNEL", None)
+                if wrist_ch is None:
+                    try:
+                        wrist_ch = chanmap.aux.get("wrist_rotate")
+                    except Exception:
+                        wrist_ch = None
+                if getattr(cfg, "WRIST_ROTATE_ENABLE", True) and (wrist_ch is not None):
+                    thruster_channels[str(getattr(cfg, "WRIST_ROTATE_CMD_KEY", "wrist_rotate"))] = int(wrist_ch)
+
                 hw_sink = pwm.ThrustWriter(
-                    thruster_channels=chanmap.thrusters,
+                    thruster_channels=thruster_channels,
                     cfg=thrust_cfg,
                     reversed_map=rev_map if rev_map else None,
                     aux_channels=aux_channels if aux_channels else None,

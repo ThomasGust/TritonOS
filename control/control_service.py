@@ -209,7 +209,7 @@ class ControlService:
         # Buttons can be single names or comma-separated lists.
         # Example: arm_toggle_button="menu,start" kill_button="win,b"
         arm_toggle_button: str = "menu",  # press to toggle armed
-        kill_button: str = "win,b",       # press to force disarm (B is a reliable fallback)
+        kill_button: str = "win",         # press to force disarm (B is reserved for camera switching topside)
         # If set, the ROV will only remain armed while this button is held.
         # Example: deadman_button="rb". Set to "" to disable.
         deadman_button: str = "",
@@ -284,6 +284,20 @@ class ControlService:
         # the lights will only actually illuminate when PWM outputs are enabled.
         self._lights_allow_when_disarmed = bool(getattr(cfg, "LIGHTS_ALLOW_WHEN_DISARMED", True))
         self._lights_failsafe_off = bool(getattr(cfg, "LIGHTS_FAILSAFE_OFF", False))
+
+        # Wrist rotate (T200 on a dedicated channel). This is driven as a *thruster-style*
+        # output (normalized [-1..1], neutral at 1500us) using trigger buttons for a fixed speed.
+        wrist_ch = None
+        try:
+            wrist_ch = self._chanmap.aux.get("wrist_rotate")
+        except Exception:
+            wrist_ch = None
+        self._wrist_rotate_enabled = bool(getattr(cfg, "WRIST_ROTATE_ENABLE", True)) and (wrist_ch is not None)
+        self._wrist_rotate_cmd_key = str(getattr(cfg, "WRIST_ROTATE_CMD_KEY", "wrist_rotate"))
+        self._wrist_rotate_right_axis = str(getattr(cfg, "WRIST_ROTATE_RIGHT_AXIS", "rt"))
+        self._wrist_rotate_left_axis = str(getattr(cfg, "WRIST_ROTATE_LEFT_AXIS", "lt"))
+        self._wrist_rotate_trigger_deadzone = float(getattr(cfg, "WRIST_ROTATE_TRIGGER_DEADZONE", 0.10))
+        self._wrist_rotate_speed = float(getattr(cfg, "WRIST_ROTATE_SPEED", 0.20))
 
         # Optional hardware sink. If set, it will be called with a dict
         # like {"H_FL": 0.1, ...} every control tick.
@@ -666,6 +680,9 @@ class ControlService:
                 lights_val = self._compute_lights(fresh_pilot)
                 if lights_val is not None:
                     payload["lights"] = float(lights_val)
+                wrist_cmd = self._compute_wrist_rotate(fresh_pilot)
+                if self._wrist_rotate_enabled:
+                    payload[self._wrist_rotate_cmd_key] = float(wrist_cmd)
                 self._send_to_hw(payload)
 
                 if self.debug and (now - self._last_log) > self.log_every_s:
@@ -723,6 +740,34 @@ class ControlService:
             else:
                 out[k] = float(v)
         return out
+
+    def _compute_wrist_rotate(self, pilot: Optional[PilotFrame]) -> float:
+        """Return normalized wrist rotation command in [-1..1].
+
+        Positive = rotate right (RT), negative = rotate left (LT).
+        We use a fixed speed and treat simultaneous trigger presses as cancel.
+        """
+        if (not self._wrist_rotate_enabled) or pilot is None:
+            return 0.0
+
+        try:
+            rt = float(getattr(pilot.axes, self._wrist_rotate_right_axis, 0.0) or 0.0)
+        except Exception:
+            rt = 0.0
+        try:
+            lt = float(getattr(pilot.axes, self._wrist_rotate_left_axis, 0.0) or 0.0)
+        except Exception:
+            lt = 0.0
+
+        dz = float(self._wrist_rotate_trigger_deadzone)
+        rt_on = rt > dz
+        lt_on = lt > dz
+
+        if rt_on and (not lt_on):
+            return max(-1.0, min(1.0, float(self._wrist_rotate_speed)))
+        if lt_on and (not rt_on):
+            return max(-1.0, min(1.0, -float(self._wrist_rotate_speed)))
+        return 0.0
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
         """Return a normalized lights value in [0..1], or None if lights disabled."""
@@ -807,7 +852,7 @@ def _cli_main() -> None:
         dry_run=bool(args.dry_run),  # default: False unless --dry-run
         log_every_s=args.log_every,
         arm_toggle_button="menu",
-        kill_button="win,b",
+        kill_button="win",
     )
 
     print(f"[rov/control] listening on {args.bind}")

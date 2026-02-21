@@ -362,7 +362,8 @@ CHANNEL_MAP = {
         "V_RR": 1,
     },
     "aux": {
-        "lights": 5,  # physical channel 5
+        "lights": 5,        # physical channel 5
+        "wrist_rotate": 10, # physical channel 10 (T200 wrist rotate motor)
     },
 }
 
@@ -371,6 +372,7 @@ CHANNEL_MAP = {
 THRUSTER_CHANNELS = dict(CHANNEL_MAP["thrusters"])
 AUX_PWM_CHANNELS = dict(CHANNEL_MAP.get("aux", {}))
 LIGHTS_PWM_CHANNEL = AUX_PWM_CHANNELS.get("lights")
+WRIST_ROTATE_PWM_CHANNEL = AUX_PWM_CHANNELS.get("wrist_rotate")
 MOTOR_PWM_CHANNELS = sorted(THRUSTER_CHANNELS.values())
 
 # Optional per-thruster direction flips.
@@ -420,7 +422,23 @@ LIGHTS_US_OFF = 1100
 LIGHTS_TRIM_US = 0
 
 # ---------------------------------------------------------------------------
-# 8) Navigator sensors (leave defaults unless you know you need changes)
+# 8) Wrist rotate (T200 on aux channel, driven like a thruster)
+# ---------------------------------------------------------------------------
+# Uses the controller triggers for a fixed-speed wrist rotation command:
+#   - RT = rotate right
+#   - LT = rotate left
+# The output is sent as a *thruster-style* command (normalized [-1..1]) to the
+# channel configured in CHANNEL_MAP["aux"]["wrist_rotate"].
+
+WRIST_ROTATE_ENABLE = True
+WRIST_ROTATE_CMD_KEY = "wrist_rotate"
+WRIST_ROTATE_RIGHT_AXIS = "rt"
+WRIST_ROTATE_LEFT_AXIS = "lt"
+WRIST_ROTATE_TRIGGER_DEADZONE = 0.10
+WRIST_ROTATE_SPEED = 0.20
+
+# ---------------------------------------------------------------------------
+# 9) Navigator sensors (leave defaults unless you know you need changes)
 # ---------------------------------------------------------------------------
 
 NAV_IMU_I2C_BUS = 1
