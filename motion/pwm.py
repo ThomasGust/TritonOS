@@ -305,6 +305,14 @@ class ThrustConfig:
     keep_pwm_enabled_on_disarm: bool = True
     # PWM channel numbering in your config: "auto" (default), 0, or 1.
     channel_base: Union[str, int] = "auto"
+    # Slew limiting on normalized thrust commands (units: normalized thrust per second).
+    # Set <= 0 to disable. Example: 3.0 means a channel can change by ~0.06 per 50 Hz tick.
+    slew_rate_norm_per_s: float = 0.0
+    # Optional slower slew rate when the command reverses sign (reduces current spikes).
+    # If None or <= 0, uses slew_rate_norm_per_s.
+    slew_reverse_rate_norm_per_s: Optional[float] = None
+    # Clamp dt used for slew limiting so a stalled loop does not instantly "catch up".
+    slew_dt_max_s: float = 0.10
 
 
 # ---- Auxiliary (non-thruster) PWM outputs -----------------------------------
@@ -402,6 +410,9 @@ class ThrustWriter:
         self._armed = False
         # While time.time() < _arming_until we force neutral thrusters (ESC init/arm window).
         self._arming_until: float = 0.0
+        # Slew limiter state (normalized thrust after reversal/deadband, per thruster).
+        self._last_thr_cmd_norm: List[float] = []
+        self._last_thr_write_t: Optional[float] = None
 
         # --- Channel mapping / normalization ----------------------------------
         # The binding and the config may disagree on base indexing. We detect both
@@ -490,6 +501,10 @@ class ThrustWriter:
                 self._aux_channels_objs.append(_lib_channel_obj(ch_lib, lib_base, pwm_enum))
                 self._aux_channels_phys.append(phys)
 
+        # Initialize slew state to neutral for each thruster channel.
+        self._last_thr_cmd_norm = [0.0 for _ in self._channels]
+        self._last_thr_write_t = None
+
         # Track last aux counts so disarm can keep lights etc. stable if desired.
         self._last_aux_counts: List[int] = self._aux_default_counts()
 
@@ -550,6 +565,7 @@ class ThrustWriter:
 
             # Hold neutral thrusters (keep current aux outputs stable).
             try:
+                self._reset_slew_state()
                 self._apply_outputs(self._neutral_thruster_counts(), list(self._last_aux_counts))
             except Exception:
                 pass
@@ -567,6 +583,7 @@ class ThrustWriter:
                     aux_counts[i] = self._aux_norm_to_count(name, 0.0)
 
             try:
+                self._reset_slew_state()
                 self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
             except Exception:
                 pass
@@ -593,6 +610,7 @@ class ThrustWriter:
             self._armed = False
             # Neutral thrusters and force aux off
             aux_counts = [self._aux_norm_to_count(name, 0.0) for name in self._aux_order]
+            self._reset_slew_state()
             self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
             time.sleep(0.25)
             try:
@@ -628,6 +646,7 @@ class ThrustWriter:
         thr_counts = self._neutral_thruster_counts()
         aux_counts = self._aux_default_counts()
         self._last_aux_counts = list(aux_counts)
+        self._reset_slew_state()
         self._apply_outputs(thr_counts, aux_counts)
         if hold_s and hold_s > 0:
             time.sleep(float(hold_s))
@@ -650,6 +669,63 @@ class ThrustWriter:
         if s in cmd:
             return float(cmd[s])
         return 0.0
+
+    def _reset_slew_state(self, now: Optional[float] = None) -> None:
+        """Reset slew limiter to neutral (used on disarm / forced-neutral windows)."""
+        self._last_thr_cmd_norm = [0.0 for _ in self._channels]
+        self._last_thr_write_t = time.time() if now is None else float(now)
+
+    def _apply_slew_limit(self, targets: List[float], now: float) -> List[float]:
+        """Rate-limit normalized per-thruster commands to reduce current spikes."""
+        base_rate = float(getattr(self.cfg, "slew_rate_norm_per_s", 0.0) or 0.0)
+        if base_rate <= 0.0:
+            # Keep state aligned even when disabled (useful if enabling later via config reload).
+            out = [_clamp(float(t), -1.0, 1.0) for t in targets]
+            self._last_thr_cmd_norm = list(out)
+            self._last_thr_write_t = float(now)
+            return out
+
+        reverse_rate_cfg = getattr(self.cfg, "slew_reverse_rate_norm_per_s", None)
+        reverse_rate = float(reverse_rate_cfg) if reverse_rate_cfg not in (None, False) else base_rate
+        if reverse_rate <= 0.0:
+            reverse_rate = base_rate
+
+        dt = None if self._last_thr_write_t is None else (float(now) - float(self._last_thr_write_t))
+        if dt is None:
+            dt = 0.0
+        dt = max(0.0, float(dt))
+        dt_cap = float(getattr(self.cfg, "slew_dt_max_s", 0.10) or 0.10)
+        if dt_cap > 0.0:
+            dt = min(dt, dt_cap)
+
+        # Ensure state length always matches channel count.
+        if len(self._last_thr_cmd_norm) != len(targets):
+            self._last_thr_cmd_norm = [0.0 for _ in targets]
+
+        out: List[float] = []
+        for prev, tgt in zip(self._last_thr_cmd_norm, targets):
+            p = _clamp(float(prev), -1.0, 1.0)
+            t = _clamp(float(tgt), -1.0, 1.0)
+
+            rate = base_rate
+            # If target asks to reverse direction, optionally use a slower rate.
+            if (p > 0.0 and t < 0.0) or (p < 0.0 and t > 0.0):
+                rate = min(base_rate, reverse_rate)
+
+            max_delta = float(rate) * float(dt)
+            delta = t - p
+            if delta > max_delta:
+                v = p + max_delta
+            elif delta < -max_delta:
+                v = p - max_delta
+            else:
+                v = t
+
+            out.append(_clamp(v, -1.0, 1.0))
+
+        self._last_thr_cmd_norm = list(out)
+        self._last_thr_write_t = float(now)
+        return out
 
     # --- aux mapping -------------------------------------------------
     def _aux_default_counts(self) -> List[int]:
@@ -736,16 +812,28 @@ class ThrustWriter:
 
             # Disarmed or still in the ESC init/arming hold window => neutral thrusters.
             if (not self._armed) or (self._arming_until and now < float(self._arming_until)):
+                self._reset_slew_state(now=now)
                 self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
                 return
 
-            thruster_counts: List[int] = []
+            targets_norm: List[float] = []
             for name, ch_user in zip(self._thruster_order, self._thruster_user_channels):
                 t = float(self._get_cmd_value(cmd, name, ch_user))
 
                 if self._is_reversed(name, ch_user):
                     t = -t
 
+                # Apply the same normalized deadband before slew limiting so tiny stick jitter
+                # does not accumulate in the slew state while the output remains neutral.
+                if abs(t) < float(self.cfg.deadband_norm):
+                    t = 0.0
+
+                targets_norm.append(_clamp(t, -1.0, 1.0))
+
+            slewed_norm = self._apply_slew_limit(targets_norm, now=now)
+
+            thruster_counts: List[int] = []
+            for name, t in zip(self._thruster_order, slewed_norm):
                 pulse = thrust_to_us(
                     t,
                     neutral_us=self.cfg.neutral_us,

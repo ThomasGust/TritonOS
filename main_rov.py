@@ -290,6 +290,9 @@ def start_control_service():
                     disable_pwm_on_disarm=bool(getattr(cfg, "DISABLE_PWM_ON_DISARM", True)),
                     keep_pwm_enabled_on_disarm=getattr(cfg, "KEEP_PWM_ENABLED_ON_DISARM", True),
                     channel_base=getattr(cfg, "PWM_CHANNEL_BASE", "auto"),
+                    slew_rate_norm_per_s=float(getattr(cfg, "THRUSTER_SLEW_RATE_NORM_PER_S", 0.0)),
+                    slew_reverse_rate_norm_per_s=getattr(cfg, "THRUSTER_SLEW_REVERSE_RATE_NORM_PER_S", None),
+                    slew_dt_max_s=float(getattr(cfg, "THRUSTER_SLEW_DT_MAX_S", 0.10)),
                 )
 
                 # Merge reversal maps: allow either thruster-name keys or raw channel keys.
