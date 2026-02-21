@@ -745,7 +745,8 @@ class ControlService:
         """Return normalized wrist rotation command in [-1..1].
 
         Positive = rotate right (RT), negative = rotate left (LT).
-        We use a fixed speed and treat simultaneous trigger presses as cancel.
+        Trigger pressure proportionally scales the command, capped by
+        WRIST_ROTATE_SPEED (e.g. 0.20 max when fully pressed).
         """
         if (not self._wrist_rotate_enabled) or pilot is None:
             return 0.0
@@ -759,15 +760,22 @@ class ControlService:
         except Exception:
             lt = 0.0
 
-        dz = float(self._wrist_rotate_trigger_deadzone)
-        rt_on = rt > dz
-        lt_on = lt > dz
+        def _trigger_mag(v: float, deadzone: float) -> float:
+            # Pilot trigger axes are normalized to [0..1], but clamp defensively.
+            x = max(0.0, min(1.0, float(v)))
+            if x <= deadzone:
+                return 0.0
+            # Re-map post-deadzone travel back to [0..1] for smooth throttle.
+            span = max(1e-6, 1.0 - deadzone)
+            return max(0.0, min(1.0, (x - deadzone) / span))
 
-        if rt_on and (not lt_on):
-            return max(-1.0, min(1.0, float(self._wrist_rotate_speed)))
-        if lt_on and (not rt_on):
-            return max(-1.0, min(1.0, -float(self._wrist_rotate_speed)))
-        return 0.0
+        dz = float(self._wrist_rotate_trigger_deadzone)
+        rt_mag = _trigger_mag(rt, dz)
+        lt_mag = _trigger_mag(lt, dz)
+
+        # Net command lets pilots feather both triggers; equal pressure cancels.
+        cmd = (rt_mag - lt_mag) * float(self._wrist_rotate_speed)
+        return max(-1.0, min(1.0, cmd))
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
         """Return a normalized lights value in [0..1], or None if lights disabled."""

@@ -424,7 +424,7 @@ LIGHTS_TRIM_US = 0
 # ---------------------------------------------------------------------------
 # 8) Wrist rotate (T200 on aux channel, driven like a thruster)
 # ---------------------------------------------------------------------------
-# Uses the controller triggers for a fixed-speed wrist rotation command:
+# Uses the controller triggers for a proportional wrist rotation command:
 #   - RT = rotate right
 #   - LT = rotate left
 # The output is sent as a *thruster-style* command (normalized [-1..1]) to the
@@ -435,7 +435,7 @@ WRIST_ROTATE_CMD_KEY = "wrist_rotate"
 WRIST_ROTATE_RIGHT_AXIS = "rt"
 WRIST_ROTATE_LEFT_AXIS = "lt"
 WRIST_ROTATE_TRIGGER_DEADZONE = 0.10
-WRIST_ROTATE_SPEED = 1.0
+WRIST_ROTATE_SPEED = 0.50  # max normalized command at full trigger
 
 # ---------------------------------------------------------------------------
 # 9) Navigator sensors (leave defaults unless you know you need changes)
