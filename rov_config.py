@@ -435,7 +435,7 @@ WRIST_ROTATE_CMD_KEY = "wrist_rotate"
 WRIST_ROTATE_RIGHT_AXIS = "rt"
 WRIST_ROTATE_LEFT_AXIS = "lt"
 WRIST_ROTATE_TRIGGER_DEADZONE = 0.10
-WRIST_ROTATE_SPEED = 0.5
+WRIST_ROTATE_SPEED = 1.0
 
 # ---------------------------------------------------------------------------
 # 9) Navigator sensors (leave defaults unless you know you need changes)
