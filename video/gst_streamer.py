@@ -347,7 +347,36 @@ class GstStream:
             pipeline = Gst.parse_launch(desc)
         except Exception as e:
             raise GstError(f"Failed to build pipeline: {e}\nDesc: {desc}")
+        if cfg.transport == "udp":
+            self._apply_udp_sink_qos(pipeline, cfg)
         return pipeline
+
+
+    def _apply_udp_sink_qos(self, pipeline: Gst.Pipeline, cfg: StreamConfig) -> None:
+        """Best-effort DSCP marking for video UDP traffic so control/telemetry can be prioritized."""
+        try:
+            udpsink = self._find_element(pipeline, "udpsink")
+            if not udpsink:
+                return
+            dscp = None
+            try:
+                dscp = cfg.extra.get("udp_qos_dscp")
+            except Exception:
+                dscp = None
+            if dscp is None:
+                # CS1 (8) = low priority / scavenger class on many networks.
+                dscp = 8
+            dscp = int(dscp)
+            if dscp < 0:
+                return
+            # Some GStreamer builds expose this on udpsink/udpsrc. Best-effort only.
+            try:
+                udpsink.set_property("qos-dscp", dscp)
+                logger.info("Stream '%s' udpsink qos-dscp=%s", cfg.name, dscp)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     @staticmethod
     def _is_live_update(old: StreamConfig, new: StreamConfig) -> Tuple[bool, Dict[str, Tuple[Any, Any]]]:

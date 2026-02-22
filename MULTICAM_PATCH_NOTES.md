@@ -1,0 +1,1 @@
+# Multi-cam Compatibility Notes\n\nNo TritonOS pipeline changes were required for multi-cam warm mode. The existing StreamManager already supports multiple named streams in parallel. This package is included for version pairing with the patched TritonPilot build.\n

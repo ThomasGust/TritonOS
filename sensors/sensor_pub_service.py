@@ -18,6 +18,32 @@ from sensors.navigator import (
 )
 
 
+def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
+    """Best-effort low-latency / QoS hints for telemetry sockets."""
+    for opt, val in [
+        (getattr(zmq, "LINGER", None), 0),
+        (getattr(zmq, "SNDHWM", None), 1),
+        (getattr(zmq, "SNDTIMEO", None), 0),
+    ]:
+        try:
+            if opt is not None:
+                sock.setsockopt(opt, int(val))
+        except Exception:
+            pass
+    for opt, val in [
+        (getattr(zmq, "CONFLATE", None), 1),
+        (getattr(zmq, "IMMEDIATE", None), 1),
+        (getattr(zmq, "TCP_NODELAY", None), 1),
+        (getattr(zmq, "TOS", None), 0x88),   # AF41 telemetry
+        (getattr(zmq, "PRIORITY", None), 5), # Linux socket priority (best-effort)
+    ]:
+        try:
+            if opt is not None:
+                sock.setsockopt(opt, int(val))
+        except Exception:
+            pass
+
+
 class SensorPublisherService:
     def __init__(self,
                  bind_endpoint: str,
@@ -29,6 +55,7 @@ class SensorPublisherService:
 
         ctx = zmq.Context.instance()
         self.sock = ctx.socket(zmq.PUB)
+        _zmq_best_effort_qos(self.sock)
         self.sock.bind(self.bind_endpoint)
 
         self._stop = threading.Event()
@@ -63,7 +90,11 @@ class SensorPublisherService:
                             "error": str(e),
                         }
                     s.mark_polled(now)
-                    self.sock.send_string(json.dumps(reading))
+                    try:
+                        self.sock.send_string(json.dumps(reading), flags=zmq.NOBLOCK)
+                    except zmq.Again:
+                        # Drop stale telemetry rather than blocking sensor threads under congestion.
+                        pass
                     #if self.debug:
                     #    print("[rov/sensors]", reading)
             time.sleep(0.01)

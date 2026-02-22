@@ -87,6 +87,18 @@ class PilotReceiver:
         ctx = zmq.Context.instance()
         self.sock = ctx.socket(zmq.SUB)
 
+        # Best-effort low-latency / QoS hints for pilot control frames.
+        for _opt, _val in [
+            (getattr(zmq, "TCP_NODELAY", None), 1),
+            (getattr(zmq, "TOS", None), 0xB8),   # EF / low latency
+            (getattr(zmq, "PRIORITY", None), 6), # Linux socket priority (best-effort)
+        ]:
+            try:
+                if _opt is not None:
+                    self.sock.setsockopt(_opt, int(_val))
+            except Exception:
+                pass
+
         # Robust defaults
         self.sock.setsockopt(zmq.LINGER, 0)
         self.sock.setsockopt(zmq.RCVHWM, int(rcv_hwm))
