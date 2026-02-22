@@ -62,13 +62,13 @@ class StreamConfig:
     name: str
 
     # Capture
-    device: str = "/dev/v4l/by-path/*video-index0"
+    device: str = "/dev/v4l/by-path/*video-index2"
     width: int = 1280
     height: int = 720
     fps: int = 30
 
     # Input video format from camera: "mjpeg", "raw", or "h264"
-    video_format: str = "mjpeg"
+    video_format: str = "h264"
 
     # Encoding control
     # - If video_format == "raw": encode is required ("h264" or "mjpeg")
@@ -110,18 +110,51 @@ class GstError(RuntimeError):
     pass
 
 
-def resolve_v4l2_device(device: str) -> str:
-    """Resolve a V4L2 device path, expanding /dev/v4l/by-path globs if present."""
+def _candidate_h264_sibling_patterns(dev_or_pattern: str) -> list[str]:
+    """Return likely sibling node patterns for UVC cameras where H.264 lives on a non-zero video-index."""
+    s = (dev_or_pattern or "").strip()
+    if not s or "video-index0" not in s:
+        return []
+    # DWE ExploreHD cameras expose native H.264 on the 3rd V4L2 node (video-index2).
+    # Try that first, then a couple of nearby indices as a safe fallback.
+    return [
+        s.replace("video-index0", "video-index2"),
+        s.replace("video-index0", "video-index3"),
+        s.replace("video-index0", "video-index1"),
+    ]
+
+
+def resolve_v4l2_device(device: str, *, prefer_h264: bool = False) -> str:
+    """Resolve a V4L2 device path, expanding /dev/v4l/by-path globs if present.
+
+    When prefer_h264=True and a config points at a *video-index0 by-path symlink, try
+    sibling nodes first (especially *video-index2) so we can use native camera H.264.
+    """
     dev = (device or "").strip()
     if not dev:
         return dev
 
     # Allow configs like /dev/v4l/by-path/*1.3.4*video-index0
     if any(ch in dev for ch in "*?[]"):
+        if prefer_h264:
+            for cand in _candidate_h264_sibling_patterns(dev):
+                matches = sorted(glob.glob(cand))
+                if matches:
+                    if matches[0] != dev:
+                        logger.info("Using H.264-capable sibling node for pattern %s -> %s", dev, matches[0])
+                    return matches[0]
         matches = sorted(glob.glob(dev))
         if not matches:
             raise GstError(f"No V4L2 device matches pattern: {dev}")
         return matches[0]
+
+    # Exact path case (e.g. /dev/v4l/by-path/...video-index0)
+    if prefer_h264:
+        for cand in _candidate_h264_sibling_patterns(dev):
+            if os.path.exists(cand):
+                if cand != dev:
+                    logger.info("Using H.264-capable sibling node %s instead of %s", cand, dev)
+                return cand
 
     return dev
 
@@ -249,11 +282,10 @@ class GstStream:
             raise ValueError("host is required for UDP transport")
 
         parts = []
-        dev = resolve_v4l2_device(cfg.device)
+        vf = cfg.video_format.lower()
+        dev = resolve_v4l2_device(cfg.device, prefer_h264=(vf == "h264"))
 
         parts.append(f"v4l2src device={dev}")
-
-        vf = cfg.video_format.lower()
 
         if vf == "mjpeg":
             # Camera outputs MJPEG.
@@ -424,11 +456,11 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Raspberry Pi GStreamer sender")
     ap.add_argument("--name", default="cam0")
-    ap.add_argument("--device", default="/dev/v4l/by-path/*video-index0")
+    ap.add_argument("--device", default="/dev/v4l/by-path/*video-index2")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--video-format", default="mjpeg", choices=["mjpeg", "raw", "h264"])
+    ap.add_argument("--video-format", default="h264", choices=["mjpeg", "raw", "h264"])
     ap.add_argument("--encode", default=None, choices=[None, "h264", "mjpeg"])
     ap.add_argument("--h264-bitrate", type=int, default=4_000_000)
     ap.add_argument("--h264-gop", type=int, default=30)
