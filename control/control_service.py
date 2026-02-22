@@ -219,6 +219,9 @@ class ControlService:
         self.pilot_rx = pilot_rx
         self.gains = gains
         self.state = control_state
+        # Baseline from rov_config/main_rov; pilot may apply a 0..1 cap multiplier on top.
+        self._base_power_scale = float(getattr(gains, 'power_scale', 1.0))
+        self._last_pilot_max_gain = 1.0
         self.period = 1.0 / float(rate_hz)
         self.ttl = float(ttl)
         self.debug = bool(debug)
@@ -603,6 +606,9 @@ class ControlService:
                     print(msg)
                     self._last_log = now
             else:
+                # Pilot runtime max gain cap (Y/A on topside) scales overall power.
+                self._apply_pilot_gain(fresh_pilot)
+
                 if self._mix_mode == 'simple_groups':
                     cmd2 = build_2axis(fresh_pilot, self.gains)
                     raw_thr = self.mixer.mix(cmd2['surge'], cmd2['heave'])
@@ -687,9 +693,9 @@ class ControlService:
 
                 if self.debug and (now - self._last_log) > self.log_every_s:
                     if self._mix_mode == "simple_groups":
-                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr}"
+                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% (k={self.gains.power_scale:.2f})"
                     else:
-                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr}"
+                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% (k={self.gains.power_scale:.2f})"
                         try:
                             st = self._last_depth_status or {}
                             if bool(st.get("enabled_cmd", False)):
@@ -711,6 +717,39 @@ class ControlService:
                 time.sleep(sleep_for)
             else:
                 next_t = time.time()
+
+    def _pilot_gain_multiplier(self, pilot: Optional[PilotFrame]) -> float:
+        """Return pilot-requested max gain multiplier in [0.05..1.0] (default 1.0)."""
+        if pilot is None:
+            return 1.0
+        try:
+            modes = pilot.modes or {}
+        except Exception:
+            return 1.0
+        raw = None
+        # Preferred key from TritonPilot. Accept a few aliases for compatibility.
+        for k in ("max_gain", "pilot_max_gain", "power_scale_max"):
+            if k in modes:
+                raw = modes.get(k)
+                break
+        if raw is None:
+            return 1.0
+        try:
+            v = float(raw)
+        except Exception:
+            return 1.0
+        # Keep a non-zero floor to avoid confusing "armed but no thrust" behavior.
+        if v < 0.05:
+            v = 0.05
+        if v > 1.0:
+            v = 1.0
+        return v
+
+    def _apply_pilot_gain(self, pilot: Optional[PilotFrame]) -> None:
+        """Update effective power scale using the pilot's runtime max gain cap."""
+        mult = self._pilot_gain_multiplier(pilot)
+        self._last_pilot_max_gain = float(mult)
+        self.gains.power_scale = float(self._base_power_scale) * float(mult)
 
     @staticmethod
     def _neutral() -> Dict[str, float]:
