@@ -364,8 +364,8 @@ CHANNEL_MAP = {
     "aux": {
         "lights": 5,         # physical channel 5
         "wrist_rotate": 10,  # physical channel 10 (T200 wrist rotate motor)
-        "gripper_left": 11,  # physical channel 11 (differential servo)
-        "gripper_right": 12, # physical channel 12 (differential servo)
+        "gripper_left": 12,  # physical channel 12 (differential servo)
+        "gripper_right": 13, # physical channel 13 (differential servo)
     },
 }
 
