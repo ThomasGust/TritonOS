@@ -362,8 +362,10 @@ CHANNEL_MAP = {
         "V_RR": 1,
     },
     "aux": {
-        "lights": 5,        # physical channel 5
-        "wrist_rotate": 10, # physical channel 10 (T200 wrist rotate motor)
+        "lights": 5,         # physical channel 5
+        "wrist_rotate": 10,  # physical channel 10 (T200 wrist rotate motor)
+        "gripper_left": 11,  # physical channel 11 (differential servo)
+        "gripper_right": 12, # physical channel 12 (differential servo)
     },
 }
 
@@ -373,6 +375,8 @@ THRUSTER_CHANNELS = dict(CHANNEL_MAP["thrusters"])
 AUX_PWM_CHANNELS = dict(CHANNEL_MAP.get("aux", {}))
 LIGHTS_PWM_CHANNEL = AUX_PWM_CHANNELS.get("lights")
 WRIST_ROTATE_PWM_CHANNEL = AUX_PWM_CHANNELS.get("wrist_rotate")
+GRIPPER_LEFT_PWM_CHANNEL = AUX_PWM_CHANNELS.get("gripper_left")
+GRIPPER_RIGHT_PWM_CHANNEL = AUX_PWM_CHANNELS.get("gripper_right")
 MOTOR_PWM_CHANNELS = sorted(THRUSTER_CHANNELS.values())
 
 # Optional per-thruster direction flips.
@@ -432,6 +436,31 @@ LIGHTS_TRIM_US = 0
 
 WRIST_ROTATE_ENABLE = True
 WRIST_ROTATE_CMD_KEY = "wrist_rotate"
+
+# 9) Differential-servo gripper head (2-DOF orientation on channels 11/12)
+# Topside sends keyboard-derived normalized commands in PilotFrame.aux:
+#   W/S -> gripper_pitch in [-1..1]
+#   A/D -> gripper_yaw   in [-1..1]
+# The ROV mixes those into two signed servo outputs:
+#   left  = pitch + yaw
+#   right = pitch - yaw
+# Then main_rov configures those outputs as bidirectional servos centered at 1500 us.
+GRIPPER_ENABLE = True
+GRIPPER_PITCH_CMD_KEY = "gripper_pitch"
+GRIPPER_YAW_CMD_KEY = "gripper_yaw"
+GRIPPER_LEFT_CMD_KEY = "gripper_left"
+GRIPPER_RIGHT_CMD_KEY = "gripper_right"
+GRIPPER_PITCH_SCALE = 0.5
+GRIPPER_YAW_SCALE = 0.5
+GRIPPER_PITCH_INVERT = 1.0
+GRIPPER_YAW_INVERT = 1.0
+GRIPPER_DEADBAND = 0.01
+GRIPPER_SERVO_MIN_US = 500
+GRIPPER_SERVO_MAX_US = 2500
+GRIPPER_SERVO_CENTER_US = 1500
+GRIPPER_ALLOW_WHEN_DISARMED = False
+GRIPPER_CENTER_ON_DISARM = True
+
 WRIST_ROTATE_RIGHT_AXIS = "rt"
 WRIST_ROTATE_LEFT_AXIS = "lt"
 WRIST_ROTATE_TRIGGER_DEADZONE = 0.10

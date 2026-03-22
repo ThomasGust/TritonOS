@@ -35,6 +35,7 @@ def test_pilot_receiver_receives_latest_frame():
             seq=seq,
             axes=PilotAxes(lx=0.1 * seq, ly=0.0, rx=0.0, ry=0.0, lt=0.0, rt=0.0),
             buttons=PilotButtons(menu=(seq == 2)),
+            aux={"gripper_pitch": 1.0 if seq == 3 else 0.0},
         )
         pub.send_string(json.dumps(frame.to_dict()))
         time.sleep(0.02)
@@ -55,3 +56,5 @@ def test_pilot_receiver_receives_latest_frame():
     assert last is not None
     assert last.seq == 3
     assert abs(last.axes.lx - 0.3) < 1e-6
+
+    assert last.aux["gripper_pitch"] == 1.0

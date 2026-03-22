@@ -302,6 +302,16 @@ class ControlService:
         self._wrist_rotate_trigger_deadzone = float(getattr(cfg, "WRIST_ROTATE_TRIGGER_DEADZONE", 0.10))
         self._wrist_rotate_speed = float(getattr(cfg, "WRIST_ROTATE_SPEED", 0.20))
 
+        self._gripper_enabled = bool(getattr(cfg, "GRIPPER_ENABLE", True))
+        self._gripper_pitch_key = str(getattr(cfg, "GRIPPER_PITCH_CMD_KEY", "gripper_pitch"))
+        self._gripper_yaw_key = str(getattr(cfg, "GRIPPER_YAW_CMD_KEY", "gripper_yaw"))
+        self._gripper_left_key = str(getattr(cfg, "GRIPPER_LEFT_CMD_KEY", "gripper_left"))
+        self._gripper_right_key = str(getattr(cfg, "GRIPPER_RIGHT_CMD_KEY", "gripper_right"))
+        self._gripper_pitch_scale = float(getattr(cfg, "GRIPPER_PITCH_SCALE", 1.0))
+        self._gripper_yaw_scale = float(getattr(cfg, "GRIPPER_YAW_SCALE", 1.0))
+        self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
+        self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
+
         # Optional hardware sink. If set, it will be called with a dict
         # like {"H_FL": 0.1, ...} every control tick.
         #
@@ -689,6 +699,10 @@ class ControlService:
                 wrist_cmd = self._compute_wrist_rotate(fresh_pilot)
                 if self._wrist_rotate_enabled:
                     payload[self._wrist_rotate_cmd_key] = float(wrist_cmd)
+                if self._gripper_enabled:
+                    gripper_left, gripper_right = self._compute_gripper_diff(fresh_pilot)
+                    payload[self._gripper_left_key] = float(gripper_left)
+                    payload[self._gripper_right_key] = float(gripper_right)
                 self._send_to_hw(payload)
 
                 if self.debug and (now - self._last_log) > self.log_every_s:
@@ -815,6 +829,28 @@ class ControlService:
         # Net command lets pilots feather both triggers; equal pressure cancels.
         cmd = (rt_mag - lt_mag) * float(self._wrist_rotate_speed)
         return max(-1.0, min(1.0, cmd))
+
+
+    def _compute_gripper_diff(self, pilot: Optional[PilotFrame]) -> Tuple[float, float]:
+        if (not self._gripper_enabled) or pilot is None:
+            return 0.0, 0.0
+
+        aux = getattr(pilot, "aux", {}) or {}
+        try:
+            pitch = float(aux.get(self._gripper_pitch_key, 0.0) or 0.0)
+        except Exception:
+            pitch = 0.0
+        try:
+            yaw = float(aux.get(self._gripper_yaw_key, 0.0) or 0.0)
+        except Exception:
+            yaw = 0.0
+
+        pitch = max(-1.0, min(1.0, pitch * float(self._gripper_pitch_scale) * float(self._gripper_pitch_invert)))
+        yaw = max(-1.0, min(1.0, yaw * float(self._gripper_yaw_scale) * float(self._gripper_yaw_invert)))
+
+        left = max(-1.0, min(1.0, pitch + yaw))
+        right = max(-1.0, min(1.0, pitch - yaw))
+        return left, right
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
         """Return a normalized lights value in [0..1], or None if lights disabled."""

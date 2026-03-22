@@ -323,9 +323,9 @@ ReverseMap = Mapping[ReverseKey, bool]
 
 @dataclass(frozen=True)
 class AuxOutputConfig:
-    """Configuration for an auxiliary PWM output such as lights.
+    """Configuration for an auxiliary PWM output such as lights or servos.
 
-    The control loop supplies a normalized value in [0.0, 1.0].
+    The control loop usually supplies a normalized value in [0.0, 1.0].
     We map that into microseconds and then into PCA9685 counts.
 
     Defaults are compatible with many PWM-dimmable LED drivers (1100us off, 1900us full).
@@ -335,6 +335,12 @@ class AuxOutputConfig:
     off_us: int = 1100
     deadband_norm: float = 0.02
     trim_us: int = 0
+
+    # Input mode:
+    #   - "norm01": map [0..1] into [min_us..max_us] and use off_us for zero.
+    #   - "signed": map [-1..1] around center_us (for bidirectional servos).
+    input_mode: str = "norm01"
+    center_us: int = 1500
 
     # If True, aux outputs may still be updated when thrusters are disarmed.
     allow_when_disarmed: bool = True
@@ -733,23 +739,32 @@ class ThrustWriter:
 
     def _aux_norm_to_count(self, name: str, v_norm: float) -> int:
         cfg = self.aux_cfg.get(name, AuxOutputConfig())
+        mode = str(getattr(cfg, "input_mode", "norm01") or "norm01").strip().lower()
         v = float(v_norm)
 
-        if v < float(cfg.deadband_norm):
-            v = 0.0
-        v = _clamp(v, 0.0, 1.0)
-
-        if v <= 0.0:
-            pulse = float(cfg.off_us)
-        else:
-            # Linear map [0..1] -> [min_us..max_us]
-            pulse = float(cfg.min_us) + (float(cfg.max_us) - float(cfg.min_us)) * v
-
-        pulse += float(cfg.trim_us)
-
-        # Clamp within [min_us..max_us] (and assume off_us is within that range too)
         lo = min(float(cfg.min_us), float(cfg.max_us))
         hi = max(float(cfg.min_us), float(cfg.max_us))
+
+        if mode == "signed":
+            if abs(v) < float(cfg.deadband_norm):
+                v = 0.0
+            v = _clamp(v, -1.0, 1.0)
+            center = float(getattr(cfg, "center_us", 1500))
+            if v >= 0.0:
+                pulse = center + (float(cfg.max_us) - center) * v
+            else:
+                pulse = center + (center - float(cfg.min_us)) * v
+        else:
+            if v < float(cfg.deadband_norm):
+                v = 0.0
+            v = _clamp(v, 0.0, 1.0)
+            if v <= 0.0:
+                pulse = float(cfg.off_us)
+            else:
+                # Linear map [0..1] -> [min_us..max_us]
+                pulse = float(cfg.min_us) + (float(cfg.max_us) - float(cfg.min_us)) * v
+
+        pulse += float(cfg.trim_us)
         pulse = _clamp(pulse, lo, hi)
         return us_to_count(pulse, self.cfg.freq_hz)
 

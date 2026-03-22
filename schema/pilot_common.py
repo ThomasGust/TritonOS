@@ -41,6 +41,7 @@ class PilotFrame:
     dpad: Tuple[int, int] = (0, 0)
     edges: Dict[str, str] = field(default_factory=dict)
     modes: Dict[str, Any] = field(default_factory=dict)
+    aux: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +54,7 @@ class PilotFrame:
             "dpad": list(self.dpad),
             "edges": dict(self.edges),
             "modes": dict(self.modes),
+            "aux": dict(self.aux),
         }
 
     @classmethod
@@ -66,4 +68,5 @@ class PilotFrame:
             dpad=tuple(d.get("dpad", (0, 0))),
             edges=d.get("edges", {}) or {},
             modes=d.get("modes", {}) or {},
+            aux=d.get("aux", {}) or {},
         )
