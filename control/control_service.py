@@ -311,6 +311,13 @@ class ControlService:
         self._gripper_yaw_scale = float(getattr(cfg, "GRIPPER_YAW_SCALE", 1.0))
         self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
         self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
+        self._gripper_deadzone = float(getattr(cfg, "GRIPPER_DEADBAND", 0.01))
+        # For servos, "no input" should normally mean "hold last commanded position"
+        # rather than springing back to center. This latches the last mixed differential
+        # output until a new pitch/yaw command arrives.
+        self._gripper_hold_last = bool(getattr(cfg, "GRIPPER_HOLD_LAST_POSITION", True))
+        self._gripper_last_left = 0.0
+        self._gripper_last_right = 0.0
 
         # Optional hardware sink. If set, it will be called with a dict
         # like {"H_FL": 0.1, ...} every control tick.
@@ -832,8 +839,10 @@ class ControlService:
 
 
     def _compute_gripper_diff(self, pilot: Optional[PilotFrame]) -> Tuple[float, float]:
-        if (not self._gripper_enabled) or pilot is None:
+        if not self._gripper_enabled:
             return 0.0, 0.0
+        if pilot is None:
+            return self._gripper_last_left, self._gripper_last_right
 
         aux = getattr(pilot, "aux", {}) or {}
         try:
@@ -848,8 +857,14 @@ class ControlService:
         pitch = max(-1.0, min(1.0, pitch * float(self._gripper_pitch_scale) * float(self._gripper_pitch_invert)))
         yaw = max(-1.0, min(1.0, yaw * float(self._gripper_yaw_scale) * float(self._gripper_yaw_invert)))
 
+        has_input = (abs(pitch) > float(self._gripper_deadzone)) or (abs(yaw) > float(self._gripper_deadzone))
+        if (not has_input) and self._gripper_hold_last:
+            return self._gripper_last_left, self._gripper_last_right
+
         left = max(-1.0, min(1.0, pitch + yaw))
         right = max(-1.0, min(1.0, pitch - yaw))
+        self._gripper_last_left = left
+        self._gripper_last_right = right
         return left, right
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
