@@ -300,14 +300,23 @@ def start_control_service():
                 rev_map.update(getattr(cfg, "THRUSTER_REVERSED", {}) or {})
                 rev_map.update(getattr(cfg, "CHANNEL_REVERSED", {}) or {})
 
-                # Optional aux PWM outputs (e.g. lights). The ControlService provides a normalized
-                # value in [0..1] under the key "lights" (if enabled in config).
+                # Optional aux PWM outputs (e.g. lights, differential wrist servos).
+                # The ControlService provides normalized values by name.
                 aux_channels = {}
                 aux_cfg = {}
-                if hasattr(cfg, "LIGHTS_PWM_CHANNEL") and getattr(cfg, "LIGHTS_PWM_CHANNEL") is not None:
-                    try:
-                        aux_channels["lights"] = int(getattr(cfg, "LIGHTS_PWM_CHANNEL"))
-                        aux_cfg["lights"] = pwm.AuxOutputConfig(
+
+                def _register_aux_output(name: str, channel_attr: str, output_cfg: "pwm.AuxOutputConfig") -> None:
+                    ch = getattr(cfg, channel_attr, None)
+                    if ch is None:
+                        return
+                    aux_channels[str(name)] = int(ch)
+                    aux_cfg[str(name)] = output_cfg
+
+                try:
+                    _register_aux_output(
+                        "lights",
+                        "LIGHTS_PWM_CHANNEL",
+                        pwm.AuxOutputConfig(
                             min_us=int(getattr(cfg, "LIGHTS_US_MIN", getattr(cfg, "LIGHTS_MIN_US", 1100))),
                             max_us=int(getattr(cfg, "LIGHTS_US_MAX", getattr(cfg, "LIGHTS_MAX_US", 1900))),
                             off_us=int(getattr(cfg, "LIGHTS_US_OFF", getattr(cfg, "LIGHTS_OFF_US", 1100))),
@@ -315,10 +324,27 @@ def start_control_service():
                             trim_us=int(getattr(cfg, "LIGHTS_TRIM_US", 0)),
                             allow_when_disarmed=bool(getattr(cfg, "LIGHTS_ALLOW_WHEN_DISARMED", True)),
                             force_off_on_disarm=bool(getattr(cfg, "LIGHTS_FORCE_OFF_ON_DISARM", False)),
+                        ),
+                    )
+
+                    if bool(getattr(cfg, "GRIPPER_ENABLE", True)):
+                        gripper_cfg = pwm.AuxOutputConfig(
+                            min_us=int(getattr(cfg, "GRIPPER_SERVO_MIN_US", 500)),
+                            max_us=int(getattr(cfg, "GRIPPER_SERVO_MAX_US", 2500)),
+                            off_us=int(getattr(cfg, "GRIPPER_SERVO_CENTER_US", 1500)),
+                            deadband_norm=float(getattr(cfg, "GRIPPER_DEADBAND", 0.01)),
+                            trim_us=int(getattr(cfg, "GRIPPER_TRIM_US", 0)),
+                            input_mode="signed",
+                            center_us=int(getattr(cfg, "GRIPPER_SERVO_CENTER_US", 1500)),
+                            allow_when_disarmed=bool(getattr(cfg, "GRIPPER_ALLOW_WHEN_DISARMED", False)),
+                            force_off_on_disarm=bool(getattr(cfg, "GRIPPER_FORCE_OFF_ON_DISARM", False)),
+                            center_on_disarm=bool(getattr(cfg, "GRIPPER_CENTER_ON_DISARM", True)),
                         )
-                    except Exception:
-                        aux_channels = {}
-                        aux_cfg = {}
+                        _register_aux_output("gripper_left", "GRIPPER_LEFT_PWM_CHANNEL", gripper_cfg)
+                        _register_aux_output("gripper_right", "GRIPPER_RIGHT_PWM_CHANNEL", gripper_cfg)
+                except Exception:
+                    aux_channels = {}
+                    aux_cfg = {}
 
                 # Optional wrist rotate motor (T200) on an aux-mapped channel.
                 # We intentionally drive it as a *thruster-style* channel (neutral 1500us,

@@ -348,6 +348,11 @@ class AuxOutputConfig:
     # If True, force aux to off_us when ThrustWriter.disarm() is called.
     force_off_on_disarm: bool = False
 
+    # If True, center signed aux outputs when ThrustWriter.disarm() is called.
+    # This is useful for bidirectional differential servos where a centered pulse
+    # is safer/more stable than sending the off_us value or disabling updates.
+    center_on_disarm: bool = False
+
 class ThrustWriter:
     """Map mixer outputs to Navigator PWM channels.
 
@@ -585,8 +590,11 @@ class ThrustWriter:
             # Thrusters neutral; keep last aux outputs unless forced off.
             aux_counts = list(self._last_aux_counts)
             for i, name in enumerate(self._aux_order):
-                if self.aux_cfg.get(name, AuxOutputConfig()).force_off_on_disarm:
+                aux_cfg = self.aux_cfg.get(name, AuxOutputConfig())
+                if aux_cfg.force_off_on_disarm:
                     aux_counts[i] = self._aux_norm_to_count(name, 0.0)
+                elif aux_cfg.center_on_disarm:
+                    aux_counts[i] = self._aux_disarm_count(name)
 
             try:
                 self._reset_slew_state()
@@ -615,7 +623,7 @@ class ThrustWriter:
         with self._lock:
             self._armed = False
             # Neutral thrusters and force aux off
-            aux_counts = [self._aux_norm_to_count(name, 0.0) for name in self._aux_order]
+            aux_counts = [self._aux_shutdown_count(name) for name in self._aux_order]
             self._reset_slew_state()
             self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
             time.sleep(0.25)
@@ -736,6 +744,25 @@ class ThrustWriter:
     # --- aux mapping -------------------------------------------------
     def _aux_default_counts(self) -> List[int]:
         return [self._aux_norm_to_count(name, 0.0) for name in self._aux_order]
+
+    def _aux_disarm_count(self, name: str) -> int:
+        cfg = self.aux_cfg.get(name, AuxOutputConfig())
+        mode = str(getattr(cfg, "input_mode", "norm01") or "norm01").strip().lower()
+        if mode == "signed":
+            pulse = float(getattr(cfg, "center_us", 1500)) + float(getattr(cfg, "trim_us", 0))
+            lo = min(float(cfg.min_us), float(cfg.max_us))
+            hi = max(float(cfg.min_us), float(cfg.max_us))
+            pulse = _clamp(pulse, lo, hi)
+            return us_to_count(pulse, self.cfg.freq_hz)
+        return self._aux_norm_to_count(name, 0.0)
+
+    def _aux_shutdown_count(self, name: str) -> int:
+        cfg = self.aux_cfg.get(name, AuxOutputConfig())
+        if cfg.force_off_on_disarm:
+            return self._aux_norm_to_count(name, 0.0)
+        if cfg.center_on_disarm:
+            return self._aux_disarm_count(name)
+        return self._aux_norm_to_count(name, 0.0)
 
     def _aux_norm_to_count(self, name: str, v_norm: float) -> int:
         cfg = self.aux_cfg.get(name, AuxOutputConfig())
