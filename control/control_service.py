@@ -861,8 +861,19 @@ class ControlService:
         if (not has_input) and self._gripper_hold_last:
             return self._gripper_last_left, self._gripper_last_right
 
-        left = max(-1.0, min(1.0, pitch + yaw))
-        right = max(-1.0, min(1.0, pitch - yaw))
+        left = pitch + yaw
+        right = pitch - yaw
+
+        # Preserve the commanded differential direction when combined wrist
+        # sweep + rotation would otherwise overrun one servo. Independent
+        # clipping makes opposition rotation feel like it only works near the
+        # center of sweep, because one side hits the limit early and the pair
+        # stops moving symmetrically. Scale both sides together instead so the
+        # wrist keeps the requested motion as much as the mechanism allows.
+        peak = max(1.0, abs(left), abs(right))
+        left /= peak
+        right /= peak
+
         self._gripper_last_left = left
         self._gripper_last_right = right
         return left, right
