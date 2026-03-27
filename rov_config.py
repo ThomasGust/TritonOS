@@ -463,7 +463,7 @@ GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Park the differential wrist at one endpoint on disarm so the arm folds in.
 # If the linkage folds the wrong way on your robot, flip this to +1.0.
-GRIPPER_DISARM_NORM = -1.0
+GRIPPER_DISARM_NORM = 1.0
 
 WRIST_ROTATE_RIGHT_AXIS = "rt"
 WRIST_ROTATE_LEFT_AXIS = "lt"
