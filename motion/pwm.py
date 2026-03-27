@@ -353,6 +353,11 @@ class AuxOutputConfig:
     # is safer/more stable than sending the off_us value or disabling updates.
     center_on_disarm: bool = False
 
+    # Optional normalized target to command on disarm. For "signed" outputs this
+    # should be in [-1..1], which lets a differential servo park fully to one side
+    # instead of always returning to center.
+    disarm_norm: Optional[float] = None
+
 class ThrustWriter:
     """Map mixer outputs to Navigator PWM channels.
 
@@ -593,7 +598,7 @@ class ThrustWriter:
                 aux_cfg = self.aux_cfg.get(name, AuxOutputConfig())
                 if aux_cfg.force_off_on_disarm:
                     aux_counts[i] = self._aux_norm_to_count(name, 0.0)
-                elif aux_cfg.center_on_disarm:
+                elif aux_cfg.center_on_disarm or (aux_cfg.disarm_norm is not None):
                     aux_counts[i] = self._aux_disarm_count(name)
 
             try:
@@ -747,6 +752,8 @@ class ThrustWriter:
 
     def _aux_disarm_count(self, name: str) -> int:
         cfg = self.aux_cfg.get(name, AuxOutputConfig())
+        if cfg.disarm_norm is not None:
+            return self._aux_norm_to_count(name, float(cfg.disarm_norm))
         mode = str(getattr(cfg, "input_mode", "norm01") or "norm01").strip().lower()
         if mode == "signed":
             pulse = float(getattr(cfg, "center_us", 1500)) + float(getattr(cfg, "trim_us", 0))
@@ -760,7 +767,7 @@ class ThrustWriter:
         cfg = self.aux_cfg.get(name, AuxOutputConfig())
         if cfg.force_off_on_disarm:
             return self._aux_norm_to_count(name, 0.0)
-        if cfg.center_on_disarm:
+        if cfg.center_on_disarm or (cfg.disarm_norm is not None):
             return self._aux_disarm_count(name)
         return self._aux_norm_to_count(name, 0.0)
 

@@ -339,6 +339,7 @@ def start_control_service():
                             allow_when_disarmed=bool(getattr(cfg, "GRIPPER_ALLOW_WHEN_DISARMED", False)),
                             force_off_on_disarm=bool(getattr(cfg, "GRIPPER_FORCE_OFF_ON_DISARM", False)),
                             center_on_disarm=bool(getattr(cfg, "GRIPPER_CENTER_ON_DISARM", True)),
+                            disarm_norm=getattr(cfg, "GRIPPER_DISARM_NORM", None),
                         )
                         _register_aux_output("gripper_left", "GRIPPER_LEFT_PWM_CHANNEL", gripper_cfg)
                         _register_aux_output("gripper_right", "GRIPPER_RIGHT_PWM_CHANNEL", gripper_cfg)
