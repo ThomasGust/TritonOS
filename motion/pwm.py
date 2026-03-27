@@ -358,6 +358,10 @@ class AuxOutputConfig:
     # instead of always returning to center.
     disarm_norm: Optional[float] = None
 
+    # If True, keep PWM enabled on disarm so this output can continue holding its
+    # parked position even while thrusters are forced to neutral.
+    hold_pwm_on_disarm: bool = False
+
 class ThrustWriter:
     """Map mixer outputs to Navigator PWM channels.
 
@@ -612,6 +616,9 @@ class ThrustWriter:
                 disable = bool(getattr(self.cfg, "disable_pwm_on_disarm", True))
             else:
                 disable = (not bool(getattr(self.cfg, "keep_pwm_enabled_on_disarm", True)))
+
+            if disable and any(bool(getattr(aux_cfg, "hold_pwm_on_disarm", False)) for aux_cfg in self.aux_cfg.values()):
+                disable = False
 
             if disable:
                 hold_s = float(getattr(self.cfg, "pwm_disarm_hold_s", 0.0) or 0.0)

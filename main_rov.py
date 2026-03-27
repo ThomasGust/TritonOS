@@ -312,6 +312,9 @@ def start_control_service():
                     aux_channels[str(name)] = int(ch)
                     aux_cfg[str(name)] = output_cfg
 
+                def _clamp_signed_norm(v: float) -> float:
+                    return max(-1.0, min(1.0, float(v)))
+
                 try:
                     _register_aux_output(
                         "lights",
@@ -328,7 +331,17 @@ def start_control_service():
                     )
 
                     if bool(getattr(cfg, "GRIPPER_ENABLE", True)):
-                        gripper_cfg = pwm.AuxOutputConfig(
+                        disarm_pitch = getattr(cfg, "GRIPPER_DISARM_PITCH", getattr(cfg, "GRIPPER_DISARM_NORM", None))
+                        disarm_yaw = getattr(cfg, "GRIPPER_DISARM_YAW", 0.0)
+                        left_disarm = None
+                        right_disarm = None
+                        if disarm_pitch is not None:
+                            pitch_v = float(disarm_pitch)
+                            yaw_v = float(disarm_yaw or 0.0)
+                            left_disarm = _clamp_signed_norm(pitch_v + yaw_v)
+                            right_disarm = _clamp_signed_norm(pitch_v - yaw_v)
+
+                        gripper_cfg_base = dict(
                             min_us=int(getattr(cfg, "GRIPPER_SERVO_MIN_US", 500)),
                             max_us=int(getattr(cfg, "GRIPPER_SERVO_MAX_US", 2500)),
                             off_us=int(getattr(cfg, "GRIPPER_SERVO_CENTER_US", 1500)),
@@ -339,10 +352,18 @@ def start_control_service():
                             allow_when_disarmed=bool(getattr(cfg, "GRIPPER_ALLOW_WHEN_DISARMED", False)),
                             force_off_on_disarm=bool(getattr(cfg, "GRIPPER_FORCE_OFF_ON_DISARM", False)),
                             center_on_disarm=bool(getattr(cfg, "GRIPPER_CENTER_ON_DISARM", True)),
-                            disarm_norm=getattr(cfg, "GRIPPER_DISARM_NORM", None),
+                            hold_pwm_on_disarm=bool(getattr(cfg, "GRIPPER_HOLD_PWM_ON_DISARM", False)),
                         )
-                        _register_aux_output("gripper_left", "GRIPPER_LEFT_PWM_CHANNEL", gripper_cfg)
-                        _register_aux_output("gripper_right", "GRIPPER_RIGHT_PWM_CHANNEL", gripper_cfg)
+                        _register_aux_output(
+                            "gripper_left",
+                            "GRIPPER_LEFT_PWM_CHANNEL",
+                            pwm.AuxOutputConfig(disarm_norm=left_disarm, **gripper_cfg_base),
+                        )
+                        _register_aux_output(
+                            "gripper_right",
+                            "GRIPPER_RIGHT_PWM_CHANNEL",
+                            pwm.AuxOutputConfig(disarm_norm=right_disarm, **gripper_cfg_base),
+                        )
                 except Exception:
                     aux_channels = {}
                     aux_cfg = {}
