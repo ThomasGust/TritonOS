@@ -462,7 +462,7 @@ GRIPPER_SERVO_CENTER_US = 1500
 GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Keep the differential wrist servos powered on disarm so the arm stays folded in.
-GRIPPER_HOLD_PWM_ON_DISARM = True
+GRIPPER_HOLD_PWM_ON_DISARM = False # if False, the servos will be unpowered on disarm (arm will go limp)
 # Park the differential wrist with a pitch command on disarm so the arm swings in.
 # If the linkage swings the wrong way on your robot, flip this sign.
 GRIPPER_DISARM_PITCH = 1.0
