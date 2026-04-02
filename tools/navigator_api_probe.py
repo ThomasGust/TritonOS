@@ -9,47 +9,25 @@ Run on the Pi:
 from __future__ import annotations
 
 import argparse
-import importlib.metadata as md
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-
-def _versions() -> Dict[str, str]:
-    out: Dict[str, str] = {}
-    for dist in ("bluerobotics_navigator", "bluerobotics-navigator"):
-        try:
-            out[dist] = md.version(dist)
-        except Exception:
-            pass
-    return out
+from utils.navigator_import import import_navigator_module, navigator_api_info
 
 
 def _probe_nav(try_init: bool) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "python": sys.version.replace("\n", " "),
-        "versions": _versions(),
     }
     try:
-        import bluerobotics_navigator as nav
+        nav = import_navigator_module()
     except Exception as e:
         result["ok"] = False
         result["import_error"] = str(e)
         return result
 
-    pwm_symbols: List[str] = sorted(x for x in dir(nav) if "pwm" in x.lower())
-    result.update(
-        {
-            "ok": True,
-            "module_file": getattr(nav, "__file__", "<unknown>"),
-            "has_init": hasattr(nav, "init"),
-            "has_PwmChannel": hasattr(nav, "PwmChannel"),
-            "has_set_pwm_freq_hz": hasattr(nav, "set_pwm_freq_hz"),
-            "has_set_pwm_enable": hasattr(nav, "set_pwm_enable"),
-            "has_set_pwm_channel_value": hasattr(nav, "set_pwm_channel_value"),
-            "pwm_symbols": pwm_symbols,
-        }
-    )
+    result.update({"ok": True, **navigator_api_info(nav)})
 
     if try_init and hasattr(nav, "init"):
         try:

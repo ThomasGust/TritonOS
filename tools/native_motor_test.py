@@ -23,7 +23,9 @@ import argparse
 import time
 import importlib.metadata as md
 
-import bluerobotics_navigator as nav
+from utils.navigator_import import import_navigator_module
+
+nav = import_navigator_module()
 
 
 # ----------------- Defaults / Config -----------------

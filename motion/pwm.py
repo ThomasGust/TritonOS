@@ -22,11 +22,12 @@ values using the formula from the Navigator documentation:
 
 from __future__ import annotations
 
-import importlib.metadata as md
 import time
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+
+from utils.navigator_import import import_navigator_module, navigator_api_summary
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -182,29 +183,6 @@ def _to_lib_channel_index(ch_user: int, user_base: int, lib_base: int) -> int:
     return int(ch_user) - int(user_base) + int(lib_base)
 
 
-def _navigator_pwm_api_summary(nav: Any) -> str:
-    pwm_symbols = sorted(x for x in dir(nav) if "pwm" in x.lower())
-
-    versions: List[str] = []
-    for dist in ("bluerobotics_navigator", "bluerobotics-navigator"):
-        try:
-            versions.append(f"{dist}={md.version(dist)}")
-        except Exception:
-            pass
-
-    parts = [
-        f"module={getattr(nav, '__file__', '<unknown>')}",
-        f"versions={versions or ['<unknown>']}",
-        f"has_init={hasattr(nav, 'init')}",
-        f"has_set_pwm_freq_hz={hasattr(nav, 'set_pwm_freq_hz')}",
-        f"has_set_pwm_enable={hasattr(nav, 'set_pwm_enable')}",
-        f"has_set_pwm_channel_value={hasattr(nav, 'set_pwm_channel_value')}",
-        f"has_PwmChannel={hasattr(nav, 'PwmChannel')}",
-        f"pwm_symbols={pwm_symbols}",
-    ]
-    return "; ".join(parts)
-
-
 def _lib_channel_obj(ch_lib: int, lib_base: int, PwmChannel: Optional[Any]) -> ChannelSpec:
     """
     Return whatever the Navigator binding accepts for a channel.
@@ -232,7 +210,7 @@ class NavigatorPWM:
         self.debug = bool(debug)
         self._enabled = False
 
-        import bluerobotics_navigator as nav  # imported lazily for easier tests
+        nav = import_navigator_module()
 
         self._nav = nav
         self._PwmChannel, self._lib_base = _get_pwm_channel_enum_and_base(nav)
@@ -256,14 +234,14 @@ class NavigatorPWM:
         if not hasattr(nav, "set_pwm_freq_hz"):
             raise RuntimeError(
                 "Navigator PWM: installed bluerobotics_navigator does not expose "
-                f"set_pwm_freq_hz(); {_navigator_pwm_api_summary(nav)}"
+                f"set_pwm_freq_hz(); {navigator_api_summary(nav)}"
             )
         try:
             nav.set_pwm_freq_hz(self.freq_hz)
         except Exception as e:
             raise RuntimeError(
                 f"Navigator PWM: failed to set frequency to {self.freq_hz} Hz: {e}; "
-                f"{_navigator_pwm_api_summary(nav)}"
+                f"{navigator_api_summary(nav)}"
             )
 
     @property

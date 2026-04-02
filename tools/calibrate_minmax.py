@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import json, time
 import numpy as np
-import bluerobotics_navigator as navigator
+from utils.navigator_import import import_navigator_module
+
+navigator = import_navigator_module()
 
 def main(seconds=60.0, rate_hz=100.0, out_path="mag_cal.json"):
     navigator.init()

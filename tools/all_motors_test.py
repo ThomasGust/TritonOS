@@ -31,7 +31,9 @@ import argparse
 import time
 from typing import List
 
-import bluerobotics_navigator as nav
+from utils.navigator_import import import_navigator_module
+
+nav = import_navigator_module()
 
 
 def parse_args() -> argparse.Namespace:

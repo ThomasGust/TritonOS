@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 from sensors.base import BaseSensor
 import sensors.ms5837 as ms5837  # for Bar30
+from utils.navigator_import import import_navigator_module
 
 from sensors.mag_fusion import MagFusion, Vec3 as MFVec3
 
@@ -79,7 +80,7 @@ class NavigatorBoard:
 
         if self._use_bindings:
             # Use official bindings (may conflict with PWM_OE; opt-in only)
-            import bluerobotics_navigator as navigator  # type: ignore
+            navigator = import_navigator_module()
 
             # Some versions don't expose init(); be permissive.
             if hasattr(navigator, "init"):
@@ -609,4 +610,3 @@ class Bar30Sensor(MS5837Sensor):
 
     def __init__(self, rate_hz: float = 5.0, bus: int | Sequence[int] = 6, **kwargs):
         super().__init__(rate_hz=rate_hz, bus=bus, name="bar30", **kwargs)
-

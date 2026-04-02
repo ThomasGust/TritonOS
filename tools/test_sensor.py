@@ -1,4 +1,6 @@
-import bluerobotics_navigator as navigator
+from utils.navigator_import import import_navigator_module
+
+navigator = import_navigator_module()
 
 print("Initializing navigator module.")
 navigator.init()
