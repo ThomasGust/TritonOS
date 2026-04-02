@@ -156,6 +156,7 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
+  systemctl unmask "$service_name" || true
   systemctl enable "$service_name"
   systemctl restart "$service_name"
 }
