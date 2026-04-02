@@ -130,6 +130,36 @@ set_kv_in_file() {
   fi
 }
 
+install_rov_service() {
+  local service_name="tritonos-rov.service"
+  local service_path="/etc/systemd/system/${service_name}"
+
+  echo "[TritonOS] Installing systemd service: ${service_name}"
+  cat >"$service_path" <<EOF
+[Unit]
+Description=TritonOS ROV main service
+After=local-fs.target systemd-modules-load.service
+Wants=systemd-modules-load.service
+
+[Service]
+Type=simple
+User=${TARGET_USER}
+SupplementaryGroups=i2c gpio video
+WorkingDirectory=${PROJECT_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${PROJECT_DIR}/.venv/bin/python ${PROJECT_DIR}/main_rov.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable "$service_name"
+  systemctl restart "$service_name"
+}
+
 # ----------------------------
 # OS packages
 # ----------------------------
@@ -221,8 +251,8 @@ fi
 # ----------------------------
 # Python environment (venv)
 # ----------------------------
-sudo chown -R "$TARGET_USER":"$TARGET_USER" "$DEST_DIR"
-sudo chmod -R u+rwX "$DEST_DIR"
+sudo chown -R "$TARGET_USER":"$TARGET_USER" "$PROJECT_DIR"
+sudo chmod -R u+rwX "$PROJECT_DIR"
 echo "[TritonOS] Creating/Updating Python venv in project…"
 cd "$PROJECT_DIR"
 if [[ ! -d ".venv" ]]; then
@@ -237,6 +267,11 @@ echo "[TritonOS] Installing Python deps…"
 # The PyPI project is "bluerobotics-navigator" but pip usually accepts both spellings.
 sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade "bluerobotics-navigator" || \
 sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade "bluerobotics_navigator"
+
+# ----------------------------
+# Boot-time ROV startup
+# ----------------------------
+install_rov_service
 
 # ----------------------------
 # Quick sanity checks (non-fatal)
@@ -269,6 +304,10 @@ echo
 echo "[TritonOS] Done."
 echo "Next run (from repo root):"
 echo "  sudo -u $TARGET_USER $PROJECT_DIR/.venv/bin/python $PROJECT_DIR/main_rov.py"
+echo "Boot service:"
+echo "  sudo systemctl status tritonos-rov.service"
+echo "Logs:"
+echo "  sudo journalctl -u tritonos-rov.service -f"
 echo
 echo "NOTE: Interface/camera/overlay changes usually require a reboot to take full effect."
 
