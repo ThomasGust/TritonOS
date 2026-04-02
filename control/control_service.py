@@ -312,12 +312,15 @@ class ControlService:
         self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
         self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
         self._gripper_deadzone = float(getattr(cfg, "GRIPPER_DEADBAND", 0.01))
+        arm_pitch = float(getattr(cfg, "GRIPPER_ARM_PITCH", getattr(cfg, "GRIPPER_DISARM_PITCH", 0.0)) or 0.0)
+        arm_yaw = float(getattr(cfg, "GRIPPER_ARM_YAW", getattr(cfg, "GRIPPER_DISARM_YAW", 0.0)) or 0.0)
+        self._gripper_park_left, self._gripper_park_right = self._mix_gripper_axes(arm_pitch, arm_yaw)
         # For servos, "no input" should normally mean "hold last commanded position"
         # rather than springing back to center. This latches the last mixed differential
         # output until a new pitch/yaw command arrives.
         self._gripper_hold_last = bool(getattr(cfg, "GRIPPER_HOLD_LAST_POSITION", True))
-        self._gripper_last_left = 0.0
-        self._gripper_last_right = 0.0
+        self._gripper_last_left = self._gripper_park_left
+        self._gripper_last_right = self._gripper_park_right
 
         # Optional hardware sink. If set, it will be called with a dict
         # like {"H_FL": 0.1, ...} every control tick.
@@ -439,6 +442,7 @@ class ControlService:
         # Best-effort: physically disable outputs.
         try:
             self.state.set_armed(False)
+            self._set_gripper_park_pose()
             self._sync_sink_armed(force=True)
         except Exception:
             pass
@@ -532,6 +536,7 @@ class ControlService:
                 if self.state.is_armed():
                     self.state.set_armed(False)
                     self._armed_since = None
+                    self._set_gripper_park_pose()
                     self._sync_sink_armed(force=True)
                     return f"KILL ({b}) -> DISARMED"
                 return f"KILL ({b}) (already disarmed)"
@@ -547,16 +552,19 @@ class ControlService:
                             # Stay disarmed.
                             self.state.set_armed(False)
                             self._armed_since = None
+                            self._set_gripper_park_pose()
                             self._sync_sink_armed(force=True)
                             return f"REFUSED ARM ({b}): {why}"
                     self.state.set_armed(True)
                     hold_s = float(getattr(cfg, "ARM_HW_INIT_HOLD_S", 0.0) or 0.0)
                     self._armed_since = time.time() + hold_s
+                    self._set_gripper_park_pose()
                     self._sync_sink_armed(force=True)
                     return f"TOGGLE ({b}) -> ARMED"
                 else:
                     self.state.set_armed(False)
                     self._armed_since = None
+                    self._set_gripper_park_pose()
                     self._sync_sink_armed(force=True)
                     return f"TOGGLE ({b}) -> DISARMED"
 
@@ -593,6 +601,7 @@ class ControlService:
                     elif (now - self._stale_since) >= self.failsafe_disarm_s:
                         self.state.set_armed(False)
                         self._armed_since = None
+                        self._set_gripper_park_pose()
                         self._sync_sink_armed(force=True)
                         arming_event = f"FAILSAFE (stale>{self.failsafe_disarm_s:.1f}s) -> DISARMED"
                 else:
@@ -603,6 +612,7 @@ class ControlService:
                 if not bool(getattr(fresh_pilot.buttons, self.deadman_button, False)):
                     self.state.set_armed(False)
                     self._armed_since = None
+                    self._set_gripper_park_pose()
                     self._sync_sink_armed(force=True)
                     arming_event = f"DEADMAN ({self.deadman_button}) released -> DISARMED"
 
@@ -861,8 +871,7 @@ class ControlService:
         if (not has_input) and self._gripper_hold_last:
             return self._gripper_last_left, self._gripper_last_right
 
-        left = pitch + yaw
-        right = pitch - yaw
+        left, right = self._mix_gripper_axes(pitch, yaw)
 
         # Preserve the commanded differential direction when combined wrist
         # sweep + rotation would otherwise overrun one servo. Independent
@@ -877,6 +886,18 @@ class ControlService:
         self._gripper_last_left = left
         self._gripper_last_right = right
         return left, right
+
+    @staticmethod
+    def _mix_gripper_axes(pitch: float, yaw: float) -> Tuple[float, float]:
+        left = float(pitch) + float(yaw)
+        right = float(pitch) - float(yaw)
+
+        peak = max(1.0, abs(left), abs(right))
+        return (left / peak, right / peak)
+
+    def _set_gripper_park_pose(self) -> None:
+        self._gripper_last_left = float(self._gripper_park_left)
+        self._gripper_last_right = float(self._gripper_park_right)
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
         """Return a normalized lights value in [0..1], or None if lights disabled."""

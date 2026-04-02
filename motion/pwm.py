@@ -605,6 +605,10 @@ class ThrustWriter:
                 elif aux_cfg.center_on_disarm or (aux_cfg.disarm_norm is not None):
                     aux_counts[i] = self._aux_disarm_count(name)
 
+            # Remember the parked aux state so a subsequent arm() starts from the
+            # same pose instead of reviving a stale pre-disarm command.
+            self._last_aux_counts = list(aux_counts)
+
             try:
                 self._reset_slew_state()
                 self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
