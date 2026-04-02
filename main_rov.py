@@ -59,7 +59,8 @@ def start_video_service():
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    print(f"[rov/main] video RPC started on {cfg.VIDEO_RPC_ENDPOINT}")
+    video_rpc_endpoint = getattr(cfg, "VIDEO_RPC_ENDPOINT", "tcp://0.0.0.0:5555")
+    print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
 
 # --- 2) sensors ------------------------------------------------------
