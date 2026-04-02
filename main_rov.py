@@ -276,6 +276,7 @@ def start_control_service():
                 chanmap = ChannelMap.from_config(cfg)
 
                 thrust_cfg = pwm.ThrustConfig(
+                    backend=str(getattr(cfg, "PWM_BACKEND", "auto")),
                     freq_hz=getattr(cfg, "PWM_FREQ_HZ", 50.0),
                     neutral_us=getattr(cfg, "PWM_NEUTRAL_US", 1500),
                     span_us=getattr(cfg, "PWM_SPAN_US", 400),
@@ -294,6 +295,11 @@ def start_control_service():
                     slew_rate_norm_per_s=float(getattr(cfg, "THRUSTER_SLEW_RATE_NORM_PER_S", 0.0)),
                     slew_reverse_rate_norm_per_s=getattr(cfg, "THRUSTER_SLEW_REVERSE_RATE_NORM_PER_S", None),
                     slew_dt_max_s=float(getattr(cfg, "THRUSTER_SLEW_DT_MAX_S", 0.10)),
+                    direct_i2c_bus=getattr(cfg, "PWM_DIRECT_I2C_BUS", 4),
+                    direct_i2c_addr=getattr(cfg, "PWM_DIRECT_I2C_ADDR", 0x40),
+                    direct_osc_hz=float(getattr(cfg, "PWM_DIRECT_OSC_HZ", 25_000_000.0)),
+                    direct_oe_gpio=getattr(cfg, "PWM_DIRECT_OE_GPIO", 26),
+                    direct_oe_active_low=bool(getattr(cfg, "PWM_DIRECT_OE_ACTIVE_LOW", True)),
                 )
 
                 # Merge reversal maps: allow either thruster-name keys or raw channel keys.

@@ -22,6 +22,7 @@ values using the formula from the Navigator documentation:
 
 from __future__ import annotations
 
+import os
 import time
 import threading
 from dataclasses import dataclass
@@ -287,11 +288,218 @@ class NavigatorPWM:
         return count
 
 
+class DirectPCA9685PWM:
+    """Direct PCA9685 + OE backend that avoids bluerobotics_navigator entirely."""
+
+    def __init__(
+        self,
+        freq_hz: float = 50.0,
+        *,
+        preferred_bus: Optional[int] = 4,
+        preferred_addr: Optional[int] = 0x40,
+        osc_hz: float = 25_000_000.0,
+        oe_gpio: Optional[int] = 26,
+        oe_active_low: bool = True,
+        debug: bool = False,
+    ):
+        self.freq_hz = float(freq_hz)
+        self.debug = bool(debug)
+        self._enabled = False
+        self._oe = None
+
+        import glob
+        from smbus2 import SMBus
+
+        MODE1 = 0x00
+        MODE2 = 0x01
+        PRESCALE = 0xFE
+        LED0_ON_L = 0x06
+        AI = 0x20
+        SLEEP = 0x10
+        RESTART = 0x80
+        OUTDRV = 0x04
+
+        def probe_reg(bus_num: int, addr: int, reg: int) -> Optional[int]:
+            try:
+                with SMBus(bus_num) as bus:
+                    return bus.read_byte_data(addr, reg)
+            except Exception:
+                return None
+
+        def list_i2c_buses() -> List[int]:
+            buses: List[int] = []
+            for dev in glob.glob("/dev/i2c-*"):
+                try:
+                    buses.append(int(dev.rsplit("-", 1)[-1]))
+                except ValueError:
+                    pass
+            return sorted(set(buses))
+
+        def find_pca9685() -> Tuple[int, int]:
+            bus_candidates: List[int] = []
+            if preferred_bus is not None:
+                bus_candidates.append(int(preferred_bus))
+            bus_candidates.extend([b for b in list_i2c_buses() if b not in bus_candidates])
+
+            addr_candidates: List[int] = []
+            if preferred_addr is not None:
+                addr_candidates.append(int(preferred_addr))
+            addr_candidates.extend([a for a in range(0x40, 0x80) if a not in addr_candidates])
+
+            for bus_num in bus_candidates:
+                if not os.path.exists(f"/dev/i2c-{bus_num}"):
+                    continue
+                for addr in addr_candidates:
+                    if probe_reg(bus_num, addr, MODE1) is None:
+                        continue
+                    if probe_reg(bus_num, addr, MODE2) is None:
+                        continue
+                    return (bus_num, addr)
+            raise RuntimeError("Direct PCA9685 PWM: no PCA9685 found on any visible I2C bus")
+
+        class _OEController:
+            def __init__(self, bcm_gpio: int, active_low: bool):
+                self.bcm_gpio = int(bcm_gpio)
+                self.active_low = bool(active_low)
+                self._backend = None
+
+                try:
+                    import RPi.GPIO as GPIO  # type: ignore
+
+                    self._backend = ("rpi_gpio", GPIO)
+                    GPIO.setwarnings(False)
+                    GPIO.setmode(GPIO.BCM)
+                    GPIO.setup(self.bcm_gpio, GPIO.OUT, initial=self._drive_level(False))
+                    return
+                except Exception:
+                    pass
+
+                try:
+                    import gpiod  # type: ignore
+
+                    chip = gpiod.Chip("gpiochip0")
+                    line = chip.get_line(self.bcm_gpio)
+                    line.request(
+                        consumer="triton_direct_pwm",
+                        type=gpiod.LINE_REQ_DIR_OUT,
+                        default_vals=[self._drive_level(False)],
+                    )
+                    self._backend = ("gpiod", chip, line)
+                    return
+                except Exception as e:
+                    raise RuntimeError(
+                        "Direct PCA9685 PWM: could not initialize OE GPIO. "
+                        "Install RPi.GPIO or gpiod, or disable hardware arm/disarm. "
+                        f"(gpio={self.bcm_gpio}, error={e})"
+                    )
+
+            def _drive_level(self, enabled: bool) -> int:
+                if self.active_low:
+                    return 0 if enabled else 1
+                return 1 if enabled else 0
+
+            def set_enabled(self, enabled: bool) -> None:
+                level = self._drive_level(bool(enabled))
+                kind = self._backend[0]
+                if kind == "rpi_gpio":
+                    self._backend[1].output(self.bcm_gpio, level)
+                else:
+                    self._backend[2].set_value(level)
+
+        self._MODE1 = MODE1
+        self._PRESCALE = PRESCALE
+        self._LED0_ON_L = LED0_ON_L
+        self._AI = AI
+        self._SLEEP = SLEEP
+        self._RESTART = RESTART
+        self._OUTDRV = OUTDRV
+        self._osc_hz = float(osc_hz)
+
+        self._bus_num, self._addr = find_pca9685()
+        self._bus = SMBus(self._bus_num)
+
+        if oe_gpio is not None:
+            self._oe = _OEController(int(oe_gpio), bool(oe_active_low))
+
+        self._write8(MODE2, OUTDRV)
+        self._write8(MODE1, AI)
+        time.sleep(0.005)
+        self._set_pwm_freq(self.freq_hz)
+
+        if self.debug:
+            print(
+                f"[motion/pwm] direct PCA9685 backend on /dev/i2c-{self._bus_num} "
+                f"addr=0x{self._addr:02X} oe_gpio={oe_gpio}"
+            )
+
+    @property
+    def lib_base(self) -> int:
+        # We address physical channels 1..16 directly.
+        return 1
+
+    @property
+    def pwm_enum(self) -> Optional[Any]:
+        return None
+
+    def _read8(self, reg: int) -> int:
+        return int(self._bus.read_byte_data(self._addr, reg))
+
+    def _write8(self, reg: int, value: int) -> None:
+        self._bus.write_byte_data(self._addr, reg, int(value) & 0xFF)
+
+    def _set_pwm_freq(self, freq_hz: float) -> None:
+        prescaleval = (self._osc_hz / (4096.0 * float(freq_hz))) - 1.0
+        prescale = int(round(prescaleval))
+        if not (3 <= prescale <= 255):
+            raise ValueError(f"Direct PCA9685 PWM: computed prescale {prescale} out of range for {freq_hz} Hz")
+
+        oldmode = self._read8(self._MODE1)
+        self._write8(self._MODE1, (oldmode & 0x7F) | self._SLEEP)
+        time.sleep(0.005)
+        self._write8(self._PRESCALE, prescale)
+        self._write8(self._MODE1, (oldmode & 0x7F) | self._AI)
+        time.sleep(0.005)
+        self._write8(self._MODE1, ((oldmode & 0x7F) | self._AI) | self._RESTART)
+        self.freq_hz = float(freq_hz)
+
+    def enable(self, state: bool) -> None:
+        if self._oe is not None:
+            self._oe.set_enabled(bool(state))
+        self._enabled = bool(state)
+
+    def arm(self) -> None:
+        self.enable(True)
+
+    def disarm(self) -> None:
+        self.enable(False)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._enabled)
+
+    def set_counts(self, channels: List[ChannelSpec], counts: List[int]) -> None:
+        if len(channels) != len(counts):
+            raise ValueError("channels and counts must have same length")
+        for ch, count in zip(channels, counts):
+            channel = int(ch)
+            if not (1 <= channel <= 16):
+                raise ValueError(f"Direct PCA9685 PWM: channel {channel} out of range (expected 1..16)")
+            reg = self._LED0_ON_L + 4 * (channel - 1)
+            data = [0, 0, int(count) & 0xFF, (int(count) >> 8) & 0xFF]
+            self._bus.write_i2c_block_data(self._addr, reg, data)
+
+    def set_servo_us(self, channel: ChannelSpec, pulse_us: float) -> int:
+        count = us_to_count(pulse_us, self.freq_hz)
+        self.set_counts([channel], [count])
+        return count
+
+
 TrimSpec = Union[int, Mapping[str, int]]
 
 
 @dataclass(frozen=True)
 class ThrustConfig:
+    backend: str = "auto"
     freq_hz: float = 50.0
     neutral_us: int = 1500
     span_us: int = 400
@@ -323,6 +531,12 @@ class ThrustConfig:
     slew_reverse_rate_norm_per_s: Optional[float] = None
     # Clamp dt used for slew limiting so a stalled loop does not instantly "catch up".
     slew_dt_max_s: float = 0.10
+    # Direct PCA9685 backend settings (used when backend="direct" or auto-fallback).
+    direct_i2c_bus: Optional[int] = 4
+    direct_i2c_addr: Optional[int] = 0x40
+    direct_osc_hz: float = 25_000_000.0
+    direct_oe_gpio: Optional[int] = 26
+    direct_oe_active_low: bool = True
 
 
 # ---- Auxiliary (non-thruster) PWM outputs -----------------------------------
@@ -435,7 +649,41 @@ class ThrustWriter:
             else:
                 self.aux_cfg[name] = AuxOutputConfig()
 
-        self._pwm = NavigatorPWM(freq_hz=self.cfg.freq_hz, debug=self.debug)
+        backend = str(getattr(self.cfg, "backend", "auto") or "auto").strip().lower()
+        if backend not in ("auto", "navigator", "direct", "direct_i2c"):
+            raise ValueError(f"unknown PWM backend {backend!r} (expected auto, navigator, or direct)")
+
+        nav_error: Optional[Exception] = None
+        if backend in ("auto", "navigator"):
+            try:
+                self._pwm = NavigatorPWM(freq_hz=self.cfg.freq_hz, debug=self.debug)
+                if self.debug:
+                    print("[motion/pwm] backend=navigator")
+            except Exception as e:
+                nav_error = e
+                if backend == "navigator":
+                    raise
+                if self.debug:
+                    print(f"[motion/pwm] navigator backend unavailable, falling back to direct_i2c: {e}")
+
+        if not hasattr(self, "_pwm"):
+            try:
+                self._pwm = DirectPCA9685PWM(
+                    freq_hz=self.cfg.freq_hz,
+                    preferred_bus=getattr(self.cfg, "direct_i2c_bus", 4),
+                    preferred_addr=getattr(self.cfg, "direct_i2c_addr", 0x40),
+                    osc_hz=float(getattr(self.cfg, "direct_osc_hz", 25_000_000.0)),
+                    oe_gpio=getattr(self.cfg, "direct_oe_gpio", 26),
+                    oe_active_low=bool(getattr(self.cfg, "direct_oe_active_low", True)),
+                    debug=self.debug,
+                )
+                if self.debug:
+                    suffix = f" after navigator failure: {nav_error}" if nav_error else ""
+                    print(f"[motion/pwm] backend=direct_i2c{suffix}")
+            except Exception:
+                if nav_error is not None:
+                    raise RuntimeError(f"{nav_error}; direct_i2c fallback also failed") from nav_error
+                raise
         self._lock = threading.Lock()
         self._armed = False
         # While time.time() < _arming_until we force neutral thrusters (ESC init/arm window).

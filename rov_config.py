@@ -303,6 +303,11 @@ ESC_INIT_HOLD_S = 3.0
 #     enabled when you ARM from the controller (recommended).
 #   - If HARDWARE_ARM_DISARM is True, each ARM/DISARM physically toggles Navigator
 #     PWM enable (OE) so ESCs re-acquire signal and produce obvious tones.
+# PWM backend:
+#   - "auto"      : prefer bluerobotics_navigator, fall back to direct PCA9685 I2C
+#   - "navigator" : require bluerobotics_navigator
+#   - "direct"    : bypass bluerobotics_navigator entirely
+PWM_BACKEND = "auto"
 PWM_AUTO_ENABLE = False
 HARDWARE_ARM_DISARM = True
 PWM_REARM_OFF_S = 0.35
@@ -320,6 +325,13 @@ KEEP_PWM_ENABLED_ON_DISARM = False
 
 # If True, TritonOS will exit if hardware PWM cannot be initialized
 REQUIRE_HARDWARE_PWM = False
+
+# Direct PCA9685 fallback settings (used by PWM_BACKEND="direct" or auto fallback)
+PWM_DIRECT_I2C_BUS = 4
+PWM_DIRECT_I2C_ADDR = 0x40
+PWM_DIRECT_OSC_HZ = 25_000_000.0
+PWM_DIRECT_OE_GPIO = 26
+PWM_DIRECT_OE_ACTIVE_LOW = True
 
 # ---------------------------------------------------------------------------
 # 6) CHANNEL MAP (EDIT ONLY THIS SECTION)
