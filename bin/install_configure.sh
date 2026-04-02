@@ -254,6 +254,10 @@ fi
 # ----------------------------
 sudo chown -R "$TARGET_USER":"$TARGET_USER" "$PROJECT_DIR"
 sudo chmod -R u+rwX "$PROJECT_DIR"
+for script in "$PROJECT_DIR"/bin/*.sh; do
+  [[ -e "$script" ]] || continue
+  chmod +x "$script"
+done
 echo "[TritonOS] Creating/Updating Python venv in project…"
 cd "$PROJECT_DIR"
 if [[ ! -d ".venv" ]]; then
@@ -309,6 +313,8 @@ echo "Boot service:"
 echo "  sudo systemctl status tritonos-rov.service"
 echo "Logs:"
 echo "  sudo journalctl -u tritonos-rov.service -f"
+echo "Debug helper:"
+echo "  sudo bash $PROJECT_DIR/bin/rov_debug.sh run"
 echo
 echo "NOTE: Interface/camera/overlay changes usually require a reboot to take full effect."
 
