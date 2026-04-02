@@ -654,9 +654,11 @@ class ThrustWriter:
             raise ValueError(f"unknown PWM backend {backend!r} (expected auto, navigator, or direct)")
 
         nav_error: Optional[Exception] = None
+        self.backend_name = "unknown"
         if backend in ("auto", "navigator"):
             try:
                 self._pwm = NavigatorPWM(freq_hz=self.cfg.freq_hz, debug=self.debug)
+                self.backend_name = "navigator"
                 if self.debug:
                     print("[motion/pwm] backend=navigator")
             except Exception as e:
@@ -677,6 +679,7 @@ class ThrustWriter:
                     oe_active_low=bool(getattr(self.cfg, "direct_oe_active_low", True)),
                     debug=self.debug,
                 )
+                self.backend_name = "direct_i2c"
                 if self.debug:
                     suffix = f" after navigator failure: {nav_error}" if nav_error else ""
                     print(f"[motion/pwm] backend=direct_i2c{suffix}")

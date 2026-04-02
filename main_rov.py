@@ -397,7 +397,8 @@ def start_control_service():
                     debug=getattr(cfg, "DEBUG", False),
                     auto_enable=bool(getattr(cfg, "PWM_AUTO_ENABLE", False)),
                 )
-                print("[rov/main] motion: using Navigator PWM via bluerobotics_navigator")
+                backend_name = str(getattr(hw_sink, "backend_name", "unknown"))
+                print(f"[rov/main] motion: using PWM backend={backend_name}")
             elif hasattr(pwm, "write_thrust"):
                 hw_sink = pwm.write_thrust
                 print("[rov/main] motion: using pwm.write_thrust(...)")
