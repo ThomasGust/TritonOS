@@ -268,10 +268,40 @@ fi
 sudo -u "$TARGET_USER" .venv/bin/python -m pip install --upgrade pip setuptools wheel
 
 echo "[TritonOS] Installing Python deps…"
+if [[ -f "requirements.txt" ]]; then
+  sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade -r requirements.txt
+fi
+
+echo "[TritonOS] Reinstalling Navigator Python bindings cleanly…"
+# Clean out stale/broken package layouts first. We've seen installs where an
+# almost-empty bluerobotics_navigator package directory was left behind and
+# shadowed the real compiled extension module.
+sudo -u "$TARGET_USER" .venv/bin/pip uninstall -y bluerobotics-navigator bluerobotics_navigator >/dev/null 2>&1 || true
+find "$PROJECT_DIR/.venv" -path '*/site-packages/bluerobotics_navigator*' -exec rm -rf {} + 2>/dev/null || true
+
 # Your code imports `bluerobotics_navigator` (underscore).
 # The PyPI project is "bluerobotics-navigator" but pip usually accepts both spellings.
-sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade "bluerobotics-navigator" || \
-sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade "bluerobotics_navigator"
+sudo -u "$TARGET_USER" .venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "bluerobotics-navigator" || \
+sudo -u "$TARGET_USER" .venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "bluerobotics_navigator"
+
+echo "[TritonOS] Verifying Navigator Python bindings…"
+sudo -u "$TARGET_USER" .venv/bin/python - <<'PY'
+from utils.navigator_import import import_navigator_module, navigator_api_info
+
+nav = import_navigator_module()
+info = navigator_api_info(nav)
+print("Navigator API info:", info)
+
+missing = [
+    name for name in ("has_set_pwm_freq_hz", "has_set_pwm_enable", "has_set_pwm_channel_value")
+    if not info.get(name, False)
+]
+if missing:
+    raise SystemExit(
+        "Navigator Python bindings installed incorrectly. Missing required API: "
+        + ", ".join(missing)
+    )
+PY
 
 # ----------------------------
 # Boot-time ROV startup
@@ -291,8 +321,9 @@ try:
 except Exception as e:
     print("pyzmq NOT OK:", e)
 try:
-    import bluerobotics_navigator as nav
-    print("bluerobotics_navigator import OK")
+    from utils.navigator_import import import_navigator_module, navigator_api_info
+    nav = import_navigator_module()
+    print("bluerobotics_navigator API:", navigator_api_info(nav))
 except Exception as e:
     print("bluerobotics_navigator import NOT OK:", e)
 try:
