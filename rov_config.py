@@ -69,7 +69,7 @@ MIX_OUTPUT_DEADBAND = 0.05
 
 # When depth-hold is enabled, allow smaller vertical corrections to avoid the
 # controller being "nulled out" near setpoint.
-DEPTH_HOLD_MIX_DEADBAND = 0.02
+DEPTH_HOLD_MIX_DEADBAND = 0.01
 
 # Additional global scaling applied to pilot DOFs before mixing (0..1).
 # You can usually leave this at 1.0 and only use THRUSTER_MAX_ABS.
@@ -88,15 +88,17 @@ DEPTH_HOLD_ENABLE = True
 DEPTH_HOLD_SENSOR_STALE_S = 2.0
 
 # Low-pass filter time constant on depth (seconds).
-DEPTH_HOLD_LPF_TAU_S = 0.50
+# A slightly shorter filter helps the hold react sooner in a shallow pool while
+# still smoothing sensor noise.
+DEPTH_HOLD_LPF_TAU_S = 0.30
 
 # PI(D) gains (heave-command per meter / meter-second)
-DEPTH_HOLD_KP = 0.30
-DEPTH_HOLD_KI = 0.05
+DEPTH_HOLD_KP = 0.55
+DEPTH_HOLD_KI = 0.12
 DEPTH_HOLD_KD = 0.00
 
 # Error deadband in meters (reduces thruster chatter near setpoint)
-DEPTH_HOLD_ERROR_DEADBAND_M = 0.03
+DEPTH_HOLD_ERROR_DEADBAND_M = 0.015
 
 # Integrator clamp (in heave-command units)
 DEPTH_HOLD_I_LIMIT = 0.25
@@ -204,6 +206,10 @@ USE_EXTERNAL_DEPTH = True
 USE_BAR02 = False  # set True to force Bar02 naming/model
 USE_BAR30 = USE_EXTERNAL_DEPTH  # backward-compat alias (old configs used USE_BAR30)
 
+# Publish external depth faster than the fallback default so depth-hold sees new
+# pressure samples sooner and does not feel "sticky" after a depth change.
+EXTERNAL_DEPTH_RATE_HZ = 10.0
+
 # I2C bus selection
 # Navigator external I2C bus is commonly 6, but many Pi setups use bus 1.
 # You can provide a *list/tuple* to try multiple buses at startup:
@@ -278,8 +284,11 @@ PWM_MIN_US = 1100
 PWM_MAX_US = 1900
 
 # Deadbands
-PWM_DEADBAND = 0.07     # normalized thrust deadband
-PWM_DEADBAND_US = 25    # microsecond deadband around neutral
+# Keep these low enough that depth-hold can make small vertical corrections near
+# setpoint. The control loop still applies its own higher mix deadbands for
+# manual driving, so reducing the PWM deadband mainly helps closed-loop trim.
+PWM_DEADBAND = 0.03     # normalized thrust deadband
+PWM_DEADBAND_US = 12    # microsecond deadband around neutral
 
 # Thruster slew limiting (software band-aid for power spikes / brownouts)
 # Units are normalized thrust per second (1.0 == full-scale change in ~1s).
