@@ -158,6 +158,36 @@ def collect_navigator_smoke() -> Dict[str, Any]:
     return result
 
 
+def collect_config_info() -> Dict[str, Any]:
+    info: Dict[str, Any] = {"ok": False, "error": None}
+    try:
+        import rov_config as cfg  # type: ignore
+        from motion.channel_map import ChannelMap  # type: ignore
+
+        pilot_ep = getattr(cfg, "PILOT_SUB_ENDPOINT", "tcp://0.0.0.0:6000")
+        sensor_ep = getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001")
+        cm = ChannelMap.from_config(cfg)
+
+        info.update(
+            {
+                "ok": True,
+                "config_path": getattr(cfg, "__file__", None),
+                "pilot_sub_endpoint": pilot_ep,
+                "sensor_pub_endpoint": sensor_ep,
+                "thruster_channels": dict(cm.thrusters),
+                "aux_channels": dict(cm.aux),
+                "used_default_pilot_sub_endpoint": (not hasattr(cfg, "PILOT_SUB_ENDPOINT")),
+                "used_default_sensor_pub_endpoint": (not hasattr(cfg, "SENSOR_PUB_ENDPOINT")),
+                "used_default_channel_map": (
+                    (not hasattr(cfg, "CHANNEL_MAP")) and (not getattr(cfg, "THRUSTER_CHANNELS", None))
+                ),
+            }
+        )
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
 def collect(min_cameras: int, include_navigator: bool) -> Dict[str, Any]:
     report: Dict[str, Any] = {
         "host": platform.node(),
@@ -168,6 +198,7 @@ def collect(min_cameras: int, include_navigator: bool) -> Dict[str, Any]:
         "gstreamer": collect_gstreamer_info(),
         "buses": collect_bus_info(),
         "python_imports": collect_python_imports(),
+        "config": collect_config_info(),
     }
     if include_navigator:
         report["navigator_smoke"] = collect_navigator_smoke()
@@ -209,6 +240,19 @@ def _print_report_human(report: Dict[str, Any]) -> None:
             print(f"  - {k}: {imports[k].get('error')}")
     else:
         print("Python imports: OK")
+
+    cfg = report.get("config", {})
+    print(f"Config check: {'OK' if cfg.get('ok') else 'FAIL'}")
+    if cfg.get("config_path"):
+        print(f"  config path: {cfg['config_path']}")
+    if cfg.get("error"):
+        print(f"  error: {cfg['error']}")
+    elif cfg.get("thruster_channels"):
+        print(f"  pilot endpoint: {cfg.get('pilot_sub_endpoint')}")
+        print(f"  sensor endpoint: {cfg.get('sensor_pub_endpoint')}")
+        print(f"  thrusters: {cfg.get('thruster_channels')}")
+        if cfg.get("used_default_channel_map"):
+            print("  note: using built-in default channel map")
 
     if "navigator_smoke" in report:
         ns = report["navigator_smoke"]

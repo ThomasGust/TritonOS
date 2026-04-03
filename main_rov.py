@@ -35,6 +35,14 @@ import traceback
 
 import rov_config as cfg
 
+
+DEFAULT_PILOT_SUB_ENDPOINT = "tcp://0.0.0.0:6000"
+DEFAULT_SENSOR_PUB_ENDPOINT = "tcp://0.0.0.0:6001"
+DEFAULT_VIDEO_RPC_ENDPOINT = "tcp://0.0.0.0:5555"
+DEFAULT_CONTROL_RATE_HZ = 50.0
+DEFAULT_PILOT_TTL_S = 0.5
+
+
 # --- 1) video --------------------------------------------------------
 def start_video_service():
     """
@@ -59,7 +67,7 @@ def start_video_service():
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    video_rpc_endpoint = getattr(cfg, "VIDEO_RPC_ENDPOINT", "tcp://0.0.0.0:5555")
+    video_rpc_endpoint = getattr(cfg, "VIDEO_RPC_ENDPOINT", DEFAULT_VIDEO_RPC_ENDPOINT)
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
 
@@ -232,12 +240,12 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
             print("[rov/main] network stats sensor disabled:", e)
 
     srv = SensorPublisherService(
-        bind_endpoint=cfg.SENSOR_PUB_ENDPOINT,
+        bind_endpoint=getattr(cfg, "SENSOR_PUB_ENDPOINT", DEFAULT_SENSOR_PUB_ENDPOINT),
         sensors=sensor_list,
-        debug=cfg.DEBUG,
+        debug=bool(getattr(cfg, "DEBUG", False)),
     )
     srv.start()
-    print(f"[rov/main] sensor PUB started on {cfg.SENSOR_PUB_ENDPOINT}")
+    print(f"[rov/main] sensor PUB started on {getattr(cfg, 'SENSOR_PUB_ENDPOINT', DEFAULT_SENSOR_PUB_ENDPOINT)}")
 
 
 # --- 3) control / pilot ----------------------------------------------
@@ -419,7 +427,10 @@ def start_control_service():
 
 
     # pilot receiver
-    pilot_rx = PilotReceiver(bind_endpoint=cfg.PILOT_SUB_ENDPOINT, debug=cfg.PILOT_RX_DEBUG)
+    pilot_rx = PilotReceiver(
+        bind_endpoint=getattr(cfg, "PILOT_SUB_ENDPOINT", DEFAULT_PILOT_SUB_ENDPOINT),
+        debug=bool(getattr(cfg, "PILOT_RX_DEBUG", False)),
+    )
     pilot_rx.start()
 
     # shared state (armed flag)
@@ -443,9 +454,9 @@ def start_control_service():
         pilot_rx=pilot_rx,
         gains=gains,
         control_state=state,
-        rate_hz=cfg.CONTROL_RATE_HZ,
-        ttl=cfg.PILOT_TTL,
-        debug=cfg.CONTROL_DEBUG,
+        rate_hz=float(getattr(cfg, "CONTROL_RATE_HZ", DEFAULT_CONTROL_RATE_HZ)),
+        ttl=float(getattr(cfg, "PILOT_TTL", DEFAULT_PILOT_TTL_S)),
+        debug=bool(getattr(cfg, "CONTROL_DEBUG", False)),
         dry_run=(hw_sink is None),
     )
 
@@ -459,7 +470,7 @@ def start_control_service():
             print("[rov/main] warning: could not attach hw sink:", e)
 
     ctrl.start()
-    print(f"[rov/main] control loop started (rate={cfg.CONTROL_RATE_HZ} Hz)")
+    print(f"[rov/main] control loop started (rate={float(getattr(cfg, 'CONTROL_RATE_HZ', DEFAULT_CONTROL_RATE_HZ))} Hz)")
 
     return ctrl, pilot_rx, state
 

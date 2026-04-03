@@ -14,12 +14,39 @@ _REQUIRED_THRUSTER_NAMES = (
     "V_FL", "V_FR", "V_RL", "V_RR",
 )
 
+_DEFAULT_CHANNEL_MAP: Dict[str, Dict[str, int]] = {
+    "thrusters": {
+        "H_FL": 8,
+        "H_FR": 6,
+        "H_RL": 7,
+        "H_RR": 2,
+        "V_FL": 3,
+        "V_FR": 4,
+        "V_RL": 9,
+        "V_RR": 1,
+    },
+    "aux": {
+        "lights": 5,
+        "wrist_rotate": 10,
+        "gripper_left": 12,
+        "gripper_right": 13,
+    },
+}
+
 
 def _as_int_map(d: Mapping[Any, Any]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for k, v in (d or {}).items():
         out[str(k)] = int(v)
     return out
+
+
+def _default_thrusters() -> Dict[str, int]:
+    return dict(_DEFAULT_CHANNEL_MAP["thrusters"])
+
+
+def _default_aux() -> Dict[str, int]:
+    return dict(_DEFAULT_CHANNEL_MAP["aux"])
 
 
 @dataclass(frozen=True)
@@ -46,6 +73,14 @@ class ChannelMap:
             lights = getattr(cfg, "LIGHTS_PWM_CHANNEL", None)
             if lights is not None:
                 aux["lights"] = int(lights)
+
+        # Backward-compatible safety net: if the active config is missing the
+        # newer channel-map section entirely, fall back to the repo's standard
+        # TritonOS layout so startup still succeeds with older configs.
+        if not thr:
+            thr = _default_thrusters()
+        if not aux:
+            aux = _default_aux()
 
         cm = cls(thrusters=thr, aux=aux)
         cm._validate()
