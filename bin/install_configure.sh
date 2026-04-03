@@ -169,8 +169,9 @@ apt-get update -y
 
 apt_install \
   ca-certificates curl git \
-  python3 python3-pip python3-venv \
-  python3-numpy python3-zmq python3-smbus2 python3-libgpiod \
+  build-essential pkg-config \
+  python3 python3-dev python3-pip python3-venv \
+  python3-numpy python3-zmq python3-smbus2 python3-libgpiod python3-spidev \
   i2c-tools v4l-utils \
   python3-gi python3-gi-cairo \
   gstreamer1.0-tools \
@@ -269,7 +270,11 @@ sudo -u "$TARGET_USER" .venv/bin/python -m pip install --upgrade pip setuptools 
 
 echo "[TritonOS] Installing Python deps…"
 if [[ -f "requirements.txt" ]]; then
-  sudo -u "$TARGET_USER" .venv/bin/pip install --upgrade -r requirements.txt
+  # This venv uses --system-site-packages, so many hardware deps already come
+  # from apt. Do not use --upgrade here: it can force pip to replace working
+  # distro packages (for example python3-spidev) with a source build that then
+  # fails or becomes less stable.
+  sudo -u "$TARGET_USER" .venv/bin/pip install --prefer-binary -r requirements.txt
 fi
 
 echo "[TritonOS] Reinstalling Navigator Python bindings cleanly…"
