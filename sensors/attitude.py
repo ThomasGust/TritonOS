@@ -212,6 +212,7 @@ class AttitudeSensor(BaseSensor):
         auto_mount_enable = False
         auto_mount_yaw_deg = 0.0  # optional extra yaw rotation (deg) applied after leveling
         auto_mount_save_path = ""  # optional: save computed mount json for reuse
+        auto_mount_with_saved_mount = False
 
         # Calibration files (optional)
         gyro_cal_path = ""
@@ -273,6 +274,9 @@ class AttitudeSensor(BaseSensor):
             auto_mount_enable = bool(getattr(cfg, "ATTITUDE_AUTO_MOUNT_FROM_LEVEL", auto_mount_enable))
             auto_mount_yaw_deg = float(getattr(cfg, "ATTITUDE_AUTO_MOUNT_YAW_DEG", auto_mount_yaw_deg))
             auto_mount_save_path = str(getattr(cfg, "ATTITUDE_AUTO_MOUNT_SAVE_PATH", auto_mount_save_path))
+            auto_mount_with_saved_mount = bool(
+                getattr(cfg, "ATTITUDE_AUTO_MOUNT_WITH_SAVED_MOUNT", auto_mount_with_saved_mount)
+            )
 
             gyro_cal_path = str(getattr(cfg, "ATTITUDE_GYRO_CAL", gyro_cal_path))
             mag_cal_path = str(getattr(cfg, "ATTITUDE_MAG_CAL", mag_cal_path))
@@ -330,6 +334,7 @@ class AttitudeSensor(BaseSensor):
         self._auto_mount_enable = bool(auto_mount_enable)
         self._auto_mount_yaw_deg = float(auto_mount_yaw_deg)
         self._auto_mount_save_path = str(auto_mount_save_path)
+        self._auto_mount_with_saved_mount = bool(auto_mount_with_saved_mount)
 
         # Filters
         self._lpf_a = EMA3(accel_lpf_tau)
@@ -338,6 +343,7 @@ class AttitudeSensor(BaseSensor):
 
         # Calibrations
         self._mount = Mount.identity()
+        self._mount_loaded = False
         self._gyro_cal: Optional[GyroCalibration] = None
         self._mag_cal: Optional[MagCalibration] = None
         self._baseline_uT_from_cal: Optional[float] = None
@@ -346,8 +352,13 @@ class AttitudeSensor(BaseSensor):
             d = _load_optional_json(mount_path)
             if d is not None:
                 self._mount = Mount.from_dict(d)
+                self._mount_loaded = True
         except Exception:
             self._mount = Mount.identity()
+            self._mount_loaded = False
+
+        if self._mount_loaded and (not self._auto_mount_with_saved_mount):
+            self._auto_mount_enable = False
 
         try:
             d = _load_optional_json(gyro_cal_path)

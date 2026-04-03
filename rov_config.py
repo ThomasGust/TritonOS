@@ -16,6 +16,8 @@ CONFIG_VERSION = "simple_channelmap_single_source_2026-01-30"
 PILOT_SUB_ENDPOINT = "tcp://0.0.0.0:6000"   # topside → ROV pilot data
 SENSOR_PUB_ENDPOINT = "tcp://0.0.0.0:6001"  # ROV → topside sensor data
 VIDEO_RPC_ENDPOINT = "tcp://0.0.0.0:5555"   # ROV video RPC (gst streamer)
+MANAGEMENT_RPC_ENABLE = True
+MANAGEMENT_RPC_ENDPOINT = "tcp://0.0.0.0:5556"  # ROV config/reference management RPC
 
 # ---------------------------------------------------------------------------
 # 2) control loop
@@ -205,6 +207,16 @@ POWER_SENSE_RESELECT_AFTER_BAD = 0           # 0 disables full reselect (recomme
 USE_EXTERNAL_DEPTH = True
 USE_BAR02 = False  # set True to force Bar02 naming/model
 USE_BAR30 = USE_EXTERNAL_DEPTH  # backward-compat alias (old configs used USE_BAR30)
+
+# Persisted surface-pressure reference captured with tools/set_vehicle_reference.py.
+# If the file exists, TritonOS will use that pressure instead of assuming boot
+# happened at the surface. Leave the fixed override as None in normal use.
+EXTERNAL_DEPTH_REFERENCE_PATH = "calibration/depth_reference.json"
+EXTERNAL_DEPTH_FIXED_SURFACE_PRESSURE_MBAR = None
+
+# Report depth from the *top* of the ROV instead of from the pressure sensor
+# itself. Positive means the sensor sits that far below the top reference point.
+EXTERNAL_DEPTH_SENSOR_TO_TOP_M = 0.15
 
 # Publish external depth faster than the fallback default so depth-hold sees new
 # pressure samples sooner and does not feel "sticky" after a depth change.
@@ -647,14 +659,19 @@ ATTITUDE_AUTO_MOUNT_FROM_LEVEL = True
 ATTITUDE_AUTO_MOUNT_YAW_DEG = 90
 
 # Optional: save the computed mount matrix (JSON) so you can reuse it later.
-# Example: '/home/pi/triton_mount.json'
-ATTITUDE_AUTO_MOUNT_SAVE_PATH = ''
+# The set_vehicle_reference tool writes the same file so startup no longer needs
+# to happen in a known flat pose once you have captured it.
+ATTITUDE_AUTO_MOUNT_SAVE_PATH = 'calibration/flat_mount.json'
 
 # Optional calibration files (JSON) produced by tools in triton_ahrs/.
 # Leave blank to disable.
 ATTITUDE_GYRO_CAL = ''
 ATTITUDE_MAG_CAL = ''
-ATTITUDE_MOUNT = ''
+ATTITUDE_MOUNT = 'calibration/flat_mount.json'
+
+# If a saved mount file is present, prefer it and skip the boot-time auto-level
+# step so the vehicle no longer depends on being flat at startup.
+ATTITUDE_AUTO_MOUNT_WITH_SAVED_MOUNT = False
 
 # Magnetometer input selection for attitude (defaults to MAG_OUTPUT_MODE)
 #   'fused' | 'mmc' | 'ak'

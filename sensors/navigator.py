@@ -448,6 +448,8 @@ class MS5837Sensor(BaseSensor):
         osr: int = ms5837.OSR_8192,
         surface_cal_samples: int = 15,
         surface_cal_delay_s: float = 0.02,
+        surface_pressure_mbar: float | None = None,
+        depth_offset_m: float = 0.0,
         name: str | None = "auto",
     ):
         # BaseSensor name is used as the row key topside. When name == "auto",
@@ -465,6 +467,7 @@ class MS5837Sensor(BaseSensor):
         self._osr = int(osr)
         self._surface_cal_samples = int(max(0, surface_cal_samples))
         self._surface_cal_delay_s = float(max(0.0, surface_cal_delay_s))
+        self._depth_offset_m = float(depth_offset_m)
 
         self._bus_used: int | None = None
         self.sensor = None  # type: ignore[assignment]
@@ -514,9 +517,19 @@ class MS5837Sensor(BaseSensor):
             else:
                 self.name = "ms5837"
 
-        # Calibrate surface reference pressure (better than hard-coding 1013 mbar).
+        # Prefer a persisted/reference surface pressure if one is configured.
         self._p0_mbar = None
-        self._calibrate_surface_pressure()
+        if surface_pressure_mbar is not None:
+            try:
+                p0 = float(surface_pressure_mbar)
+            except Exception:
+                p0 = None  # type: ignore[assignment]
+            if p0 is not None and p0 > 0.0:
+                self._p0_mbar = float(p0)
+
+        # Otherwise calibrate surface reference pressure at startup.
+        if self._p0_mbar is None:
+            self._calibrate_surface_pressure()
 
     def _calibrate_surface_pressure(self):
         if self._surface_cal_samples <= 0:
@@ -570,13 +583,16 @@ class MS5837Sensor(BaseSensor):
 
         p_mbar = float(self.sensor.pressure())  # type: ignore[union-attr]
         t_c = float(self.sensor.temperature())  # type: ignore[union-attr]
-        depth_m = float(self._depth_from_pressure(p_mbar))
+        depth_sensor_m = float(self._depth_from_pressure(p_mbar))
+        depth_m = float(depth_sensor_m - float(self._depth_offset_m))
 
         out = {
             "ts": time.time(),
             "sensor": self.name,
             "type": "external_depth",
             "depth_m": depth_m,
+            "depth_sensor_m": depth_sensor_m,
+            "depth_offset_m": float(self._depth_offset_m),
             "temperature_c": t_c,
             "pressure_mbar": p_mbar,
             "fluid_density": float(self._fluid_density),

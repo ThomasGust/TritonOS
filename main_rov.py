@@ -34,6 +34,7 @@ import sys
 import traceback
 
 import rov_config as cfg
+from utils.vehicle_reference import DEFAULT_DEPTH_REFERENCE_PATH, load_surface_pressure_reference_mbar
 
 
 DEFAULT_PILOT_SUB_ENDPOINT = "tcp://0.0.0.0:6000"
@@ -69,6 +70,24 @@ def start_video_service():
     t.start()
     video_rpc_endpoint = getattr(cfg, "VIDEO_RPC_ENDPOINT", DEFAULT_VIDEO_RPC_ENDPOINT)
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
+
+
+def start_management_service():
+    if not bool(getattr(cfg, "MANAGEMENT_RPC_ENABLE", True)):
+        return None
+
+    try:
+        from control.management_rpc import ManagementRpcService
+    except Exception as e:
+        print("[rov/main] management RPC disabled:", e)
+        traceback.print_exc()
+        return None
+
+    bind = str(getattr(cfg, "MANAGEMENT_RPC_ENDPOINT", "tcp://0.0.0.0:5556"))
+    svc = ManagementRpcService(bind_endpoint=bind, debug=bool(getattr(cfg, "DEBUG", False)))
+    svc.start()
+    print(f"[rov/main] management RPC started on {bind}")
+    return svc
 
 
 # --- 2) sensors ------------------------------------------------------
@@ -174,6 +193,16 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
 
     if use_external or use_bar02 or use_bar30:
         try:
+            depth_reference_path = str(
+                getattr(cfg, "EXTERNAL_DEPTH_REFERENCE_PATH", DEFAULT_DEPTH_REFERENCE_PATH)
+            )
+            fixed_surface_pressure = getattr(cfg, "EXTERNAL_DEPTH_FIXED_SURFACE_PRESSURE_MBAR", None)
+            if fixed_surface_pressure is not None:
+                surface_pressure_mbar = float(fixed_surface_pressure)
+            else:
+                surface_pressure_mbar = load_surface_pressure_reference_mbar(depth_reference_path)
+            depth_offset_m = float(getattr(cfg, "EXTERNAL_DEPTH_SENSOR_TO_TOP_M", 0.0))
+
             def _get_buses(prefix: str, default_bus: int = 6):
                 buses = getattr(cfg, f"{prefix}_I2C_BUSES", None)
                 if buses is not None:
@@ -192,6 +221,8 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         osr=int(getattr(cfg, "BAR02_OSR", getattr(cfg, "BAR30_OSR", 5))),
                         surface_cal_samples=int(getattr(cfg, "BAR02_SURFACE_CAL_SAMPLES", getattr(cfg, "BAR30_SURFACE_CAL_SAMPLES", 15))),
                         surface_cal_delay_s=float(getattr(cfg, "BAR02_SURFACE_CAL_DELAY_S", getattr(cfg, "BAR30_SURFACE_CAL_DELAY_S", 0.02))),
+                        surface_pressure_mbar=surface_pressure_mbar,
+                        depth_offset_m=depth_offset_m,
                     )
                 )
             elif use_external:
@@ -207,6 +238,8 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         osr=int(getattr(cfg, "EXTERNAL_DEPTH_OSR", getattr(cfg, "BAR30_OSR", 5))),
                         surface_cal_samples=int(getattr(cfg, "EXTERNAL_DEPTH_SURFACE_CAL_SAMPLES", getattr(cfg, "BAR30_SURFACE_CAL_SAMPLES", 15))),
                         surface_cal_delay_s=float(getattr(cfg, "EXTERNAL_DEPTH_SURFACE_CAL_DELAY_S", getattr(cfg, "BAR30_SURFACE_CAL_DELAY_S", 0.02))),
+                        surface_pressure_mbar=surface_pressure_mbar,
+                        depth_offset_m=depth_offset_m,
                     )
                 )
             else:
@@ -220,6 +253,8 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         osr=int(getattr(cfg, "BAR30_OSR", 5)),
                         surface_cal_samples=int(getattr(cfg, "BAR30_SURFACE_CAL_SAMPLES", 15)),
                         surface_cal_delay_s=float(getattr(cfg, "BAR30_SURFACE_CAL_DELAY_S", 0.02)),
+                        surface_pressure_mbar=surface_pressure_mbar,
+                        depth_offset_m=depth_offset_m,
                     )
                 )
         except Exception as e:
@@ -494,6 +529,7 @@ def main():
 
     # start each service in turn
     start_video_service()
+    start_management_service()
     ctrl, pilot_rx, state = start_control_service()
     start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
 
