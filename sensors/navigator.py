@@ -17,6 +17,7 @@ in the environment.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
@@ -471,6 +472,7 @@ class MS5837Sensor(BaseSensor):
 
         self._bus_used: int | None = None
         self.sensor = None  # type: ignore[assignment]
+        self._read_lock = threading.Lock()
 
         last_err: str | None = None
         for b in self._buses:
@@ -556,53 +558,54 @@ class MS5837Sensor(BaseSensor):
         return dp_pa / (self._fluid_density * 9.80665)
 
     def read(self) -> Dict[str, Any]:
-        try:
-            ok = bool(self.sensor.read(self._osr))  # type: ignore[union-attr]
-        except Exception as e:
-            ok = False
-            err = str(e)
-        else:
-            err = None
+        with self._read_lock:
+            try:
+                ok = bool(self.sensor.read(self._osr))  # type: ignore[union-attr]
+            except Exception as e:
+                ok = False
+                err = str(e)
+            else:
+                err = None
 
-        if not ok:
+            if not ok:
+                out = {
+                    "ts": time.time(),
+                    "sensor": self.name,
+                    "type": "external_depth",
+                    "error": err or "ms5837 read failed",
+                }
+                if self._p0_mbar is not None:
+                    out["surface_pressure_mbar"] = float(self._p0_mbar)
+                if self._bus_used is not None:
+                    out["i2c_bus"] = int(self._bus_used)
+                if self._model_detected is not None:
+                    out["model"] = self._model_detected
+                else:
+                    out["model"] = str(self._model_cfg)
+                return out
+
+            p_mbar = float(self.sensor.pressure())  # type: ignore[union-attr]
+            t_c = float(self.sensor.temperature())  # type: ignore[union-attr]
+            depth_sensor_m = float(self._depth_from_pressure(p_mbar))
+            depth_m = float(depth_sensor_m - float(self._depth_offset_m))
+
             out = {
                 "ts": time.time(),
                 "sensor": self.name,
                 "type": "external_depth",
-                "error": err or "ms5837 read failed",
+                "depth_m": depth_m,
+                "depth_sensor_m": depth_sensor_m,
+                "depth_offset_m": float(self._depth_offset_m),
+                "temperature_c": t_c,
+                "pressure_mbar": p_mbar,
+                "fluid_density": float(self._fluid_density),
+                "model": self._model_detected or str(self._model_cfg),
             }
             if self._p0_mbar is not None:
                 out["surface_pressure_mbar"] = float(self._p0_mbar)
             if self._bus_used is not None:
                 out["i2c_bus"] = int(self._bus_used)
-            if self._model_detected is not None:
-                out["model"] = self._model_detected
-            else:
-                out["model"] = str(self._model_cfg)
             return out
-
-        p_mbar = float(self.sensor.pressure())  # type: ignore[union-attr]
-        t_c = float(self.sensor.temperature())  # type: ignore[union-attr]
-        depth_sensor_m = float(self._depth_from_pressure(p_mbar))
-        depth_m = float(depth_sensor_m - float(self._depth_offset_m))
-
-        out = {
-            "ts": time.time(),
-            "sensor": self.name,
-            "type": "external_depth",
-            "depth_m": depth_m,
-            "depth_sensor_m": depth_sensor_m,
-            "depth_offset_m": float(self._depth_offset_m),
-            "temperature_c": t_c,
-            "pressure_mbar": p_mbar,
-            "fluid_density": float(self._fluid_density),
-            "model": self._model_detected or str(self._model_cfg),
-        }
-        if self._p0_mbar is not None:
-            out["surface_pressure_mbar"] = float(self._p0_mbar)
-        if self._bus_used is not None:
-            out["i2c_bus"] = int(self._bus_used)
-        return out
 
 
 class ExternalDepthSensor(MS5837Sensor):

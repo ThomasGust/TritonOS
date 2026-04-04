@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 import zmq
 
 import rov_config as cfg
-from sensors.navigator import NavigatorBoard
 from utils.config_store import (
     load_runtime_config_snapshot,
     reload_runtime_config_module,
@@ -28,9 +27,10 @@ from utils.vehicle_reference import (
 
 
 class ManagementRpcService:
-    def __init__(self, bind_endpoint: str, debug: bool = False):
+    def __init__(self, bind_endpoint: str, debug: bool = False, depth_sensor: Any | None = None):
         self.bind_endpoint = str(bind_endpoint)
         self.debug = bool(debug)
+        self._depth_sensor = depth_sensor
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -130,7 +130,12 @@ class ManagementRpcService:
             samples = int(args.get("samples", 20))
             delay_s = float(args.get("delay_s", 0.02))
             depth_path = str(args.get("path") or getattr(cfg_mod, "EXTERNAL_DEPTH_REFERENCE_PATH", DEFAULT_DEPTH_REFERENCE_PATH))
-            pressure_mbar = capture_surface_pressure_reference(cfg_mod, samples=samples, delay_s=delay_s)
+            pressure_mbar = capture_surface_pressure_reference(
+                cfg_mod,
+                samples=samples,
+                delay_s=delay_s,
+                sensor=self._depth_sensor,
+            )
             save_surface_pressure_reference(
                 depth_path,
                 pressure_mbar,
@@ -155,6 +160,8 @@ class ManagementRpcService:
             delay_s = float(args.get("delay_s", 0.02))
             yaw_deg = float(args.get("yaw_deg", getattr(cfg_mod, "ATTITUDE_AUTO_MOUNT_YAW_DEG", 0.0)))
             mount_path = str(args.get("path") or getattr(cfg_mod, "ATTITUDE_MOUNT", DEFAULT_FLAT_MOUNT_PATH))
+            from sensors.navigator import NavigatorBoard
+
             board = NavigatorBoard()
             mount, accel_avg = capture_flat_mount_reference(
                 board,

@@ -72,7 +72,7 @@ def start_video_service():
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
 
-def start_management_service():
+def start_management_service(*, depth_sensor=None):
     if not bool(getattr(cfg, "MANAGEMENT_RPC_ENABLE", True)):
         return None
 
@@ -84,7 +84,11 @@ def start_management_service():
         return None
 
     bind = str(getattr(cfg, "MANAGEMENT_RPC_ENDPOINT", "tcp://0.0.0.0:5556"))
-    svc = ManagementRpcService(bind_endpoint=bind, debug=bool(getattr(cfg, "DEBUG", False)))
+    svc = ManagementRpcService(
+        bind_endpoint=bind,
+        debug=bool(getattr(cfg, "DEBUG", False)),
+        depth_sensor=depth_sensor,
+    )
     svc.start()
     print(f"[rov/main] management RPC started on {bind}")
     return svc
@@ -191,6 +195,8 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     use_bar02 = bool(getattr(cfg, "USE_BAR02", False))
     use_bar30 = bool(getattr(cfg, "USE_BAR30", False))
 
+    depth_sensor = None
+
     if use_external or use_bar02 or use_bar30:
         try:
             depth_reference_path = str(
@@ -212,8 +218,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
 
             if use_bar02:
                 buses = _get_buses("BAR02")
-                sensor_list.append(
-                    Bar02Sensor(
+                depth_sensor = Bar02Sensor(
                         rate_hz=float(getattr(cfg, "BAR02_RATE_HZ", getattr(cfg, "BAR30_RATE_HZ", 5.0))),
                         bus=buses,
                         model=getattr(cfg, "BAR02_MODEL", "02BA"),
@@ -224,13 +229,12 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         surface_pressure_mbar=surface_pressure_mbar,
                         depth_offset_m=depth_offset_m,
                     )
-                )
+                sensor_list.append(depth_sensor)
             elif use_external:
                 buses = getattr(cfg, "EXTERNAL_DEPTH_I2C_BUSES", None)
                 if buses is None:
                     buses = _get_buses("BAR30")
-                sensor_list.append(
-                    ExternalDepthSensor(
+                depth_sensor = ExternalDepthSensor(
                         rate_hz=float(getattr(cfg, "EXTERNAL_DEPTH_RATE_HZ", getattr(cfg, "BAR30_RATE_HZ", 5.0))),
                         bus=buses,
                         model=getattr(cfg, "EXTERNAL_DEPTH_MODEL", getattr(cfg, "BAR30_MODEL", "auto")),
@@ -241,11 +245,10 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         surface_pressure_mbar=surface_pressure_mbar,
                         depth_offset_m=depth_offset_m,
                     )
-                )
+                sensor_list.append(depth_sensor)
             else:
                 buses = _get_buses("BAR30")
-                sensor_list.append(
-                    Bar30Sensor(
+                depth_sensor = Bar30Sensor(
                         rate_hz=float(getattr(cfg, "BAR30_RATE_HZ", 5.0)),
                         bus=buses,
                         model=getattr(cfg, "BAR30_MODEL", "auto"),
@@ -256,7 +259,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                         surface_pressure_mbar=surface_pressure_mbar,
                         depth_offset_m=depth_offset_m,
                     )
-                )
+                sensor_list.append(depth_sensor)
         except Exception as e:
             print("[rov/main] sensors: external depth enabled but failed to init:", e)
 
@@ -281,6 +284,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     )
     srv.start()
     print(f"[rov/main] sensor PUB started on {getattr(cfg, 'SENSOR_PUB_ENDPOINT', DEFAULT_SENSOR_PUB_ENDPOINT)}")
+    return srv, depth_sensor
 
 
 # --- 3) control / pilot ----------------------------------------------
@@ -529,9 +533,9 @@ def main():
 
     # start each service in turn
     start_video_service()
-    start_management_service()
     ctrl, pilot_rx, state = start_control_service()
-    start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
+    _, depth_sensor = start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
+    start_management_service(depth_sensor=depth_sensor)
 
     print("[rov/main] all services started.")
     try:

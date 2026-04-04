@@ -157,8 +157,8 @@ def build_depth_sensor_from_config(cfg: Any) -> Any:
     raise RuntimeError("External depth sensor is not enabled in rov_config")
 
 
-def capture_surface_pressure_reference(cfg: Any, *, samples: int, delay_s: float) -> float:
-    sensor = build_depth_sensor_from_config(cfg)
+def capture_surface_pressure_reference(cfg: Any, *, samples: int, delay_s: float, sensor: Any | None = None) -> float:
+    sensor = sensor if sensor is not None else build_depth_sensor_from_config(cfg)
     pressures = []
     for _ in range(max(1, int(samples))):
         row = sensor.read()
