@@ -189,6 +189,17 @@ def axis_to_01(axis_name: str, raw: float) -> float:
     return clamp01((v + 1.0) * 0.5)
 
 
+def _has_nonzero(values: Mapping[Any, Any], eps: float = 1e-6) -> bool:
+    """Return True when any mapping value is meaningfully non-zero."""
+    for v in values.values():
+        try:
+            if abs(float(v)) > float(eps):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 
 class ControlService:
     """
