@@ -708,7 +708,7 @@ ATTITUDE_YAW_ZERO_AT_START = False
 # Yaw presentation mode:
 #   - 'fused'      : current estimator output (gyro + gated mag correction)
 #   - 'direct_mag' : tilt-compensated heading directly from mag + current roll/pitch
-ATTITUDE_YAW_MODE = 'fused'
+ATTITUDE_YAW_MODE = 'direct_mag'
 
 # Auto-mount (boot-time leveling)
 #
