@@ -124,7 +124,8 @@ DEPTH_HOLD_TARGET_MAX_M = None
 # 2d) attitude hold (pitch & roll stabilization)
 # ---------------------------------------------------------------------------
 # Attitude hold is enabled/disabled by the pilot via PilotFrame.modes["attitude_hold"].
-# For current topside testing, the temporary keyboard shortcut is intended to be `L`.
+# Topside now routes it through the same controller pathway as depth hold
+# (left stick click for attitude, right stick click for depth).
 # Can run simultaneously with depth hold for full 3-axis stabilization.
 
 # Master switch to compile/initialize attitude-hold support.
@@ -488,8 +489,8 @@ LIGHTS_ENABLE = True
 #   - "axis": legacy brightness control using a trigger/axis
 LIGHTS_MODE = "toggle"
 
-# Toggle mode: press the LEFT stick (L3) to toggle.
-LIGHTS_TOGGLE_BUTTON = "lstick"
+# Toggle mode: topside maps the pilot keyboard `L` key onto this synthetic edge.
+LIGHTS_TOGGLE_BUTTON = "lights"
 LIGHTS_ON_BY_DEFAULT = True
 LIGHTS_DEFAULT = 0.75  # 75% brightness
 

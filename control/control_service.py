@@ -280,12 +280,12 @@ class ControlService:
         # Optional lights (aux PWM) control. The hardware mapping is handled by the PWM sink.
         self._lights_enabled = bool(getattr(cfg, "LIGHTS_ENABLE", hasattr(cfg, "LIGHTS_PWM_CHANNEL")))
         # Modes:
-        #   - "toggle" (default for this project): L3 toggles a fixed brightness.
+        #   - "toggle" (default for this project): a named button edge toggles a fixed brightness.
         #   - "axis": legacy trigger/axis brightness control.
         self._lights_mode = str(getattr(cfg, "LIGHTS_MODE", "toggle")).strip().lower()
 
         # Toggle-mode config
-        self._lights_toggle_button = str(getattr(cfg, "LIGHTS_TOGGLE_BUTTON", "lstick")).strip()
+        self._lights_toggle_button = str(getattr(cfg, "LIGHTS_TOGGLE_BUTTON", "lights")).strip()
         self._lights_default = float(getattr(cfg, "LIGHTS_DEFAULT", getattr(cfg, "LIGHTS_DEFAULT_BRIGHTNESS", 0.75)))
         self._lights_on = bool(getattr(cfg, "LIGHTS_ON_BY_DEFAULT", True))
 

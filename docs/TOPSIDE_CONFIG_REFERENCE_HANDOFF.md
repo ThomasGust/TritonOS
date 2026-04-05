@@ -502,14 +502,16 @@ Controls:
 
 - toggle: `Depth Hold`
 - toggle: `Attitude Hold`
-- temporary keyboard shortcut for testing: `L` toggles `PilotFrame.modes["attitude_hold"]`
+- controller mapping: `R3` toggles `PilotFrame.modes["depth_hold"]`
+- controller mapping: `L3` toggles `PilotFrame.modes["attitude_hold"]`
+- pilot keyboard: `L` toggles lights
 
 Behavior:
 
 - depth hold should keep using the existing topside interaction pattern
 - attitude hold should mirror it and write `PilotFrame.modes["attitude_hold"]`
 - keep accepting `PilotFrame.modes["depth_hold"]` for depth hold
-- only treat `L` as a temporary testing shortcut; it is not a long-term controller mapping
+- keep both hold modes on the same controller-driven topside pathway
 
 
 ### 5. Hold Runtime / Debug Panel
