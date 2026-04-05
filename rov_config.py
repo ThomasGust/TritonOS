@@ -594,7 +594,7 @@ ATTITUDE_FUSION = 'robust'
 ATTITUDE_INIT_SECONDS = 2.0
 
 # Madgwick beta scheduling (higher = faster convergence but noisier)
-ATTITUDE_BETA = 0.08
+ATTITUDE_BETA = 0.04
 ATTITUDE_BETA_INIT = 0.60
 ATTITUDE_BETA_STATIONARY = 0.12
 ATTITUDE_WARMUP_SECONDS = 1.5
@@ -630,9 +630,14 @@ ATTITUDE_MAG_ENABLE_UP = 0.75        # seconds to enable mag after it becomes he
 ATTITUDE_MAG_ENABLE_DOWN = 0.35      # seconds to disable mag after it becomes unhealthy
 
 # Optional sensor filtering (seconds; 0 disables)
-ATTITUDE_ACCEL_LPF_TAU_S = 0.05
+ATTITUDE_ACCEL_LPF_TAU_S = 0.10
 ATTITUDE_MAG_LPF_TAU_S = 0.20
 ATTITUDE_GYRO_LPF_TAU_S = 0.01
+
+# Output smoothing (seconds; 0 disables).
+# Applied to the final roll/pitch/yaw after all fusion. Adds a small amount
+# of lag but removes high-frequency jitter from the published stream.
+ATTITUDE_OUTPUT_LPF_TAU_S = 0.15
 
 # Accel sign handling:
 #   - 'auto'   : choose sign that yields smallest initial roll/pitch

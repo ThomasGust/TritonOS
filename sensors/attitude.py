@@ -199,6 +199,9 @@ class AttitudeSensor(BaseSensor):
         yaw_dynamic_gate = 1.5    # m/s² dynamic accel threshold (0 disables)
         yaw_gyro_gate_dps = 10.0  # deg/s gyro rate threshold (0 disables)
 
+        # Output smoothing
+        output_lpf_tau = 0.15     # seconds (0 disables)
+
         # Presentation options
         accel_sign = "auto"  # auto|normal|invert
         zero_attitude = False
@@ -304,6 +307,7 @@ class AttitudeSensor(BaseSensor):
 
             yaw_dynamic_gate = float(getattr(cfg, "ATTITUDE_YAW_DYNAMIC_GATE", yaw_dynamic_gate))
             yaw_gyro_gate_dps = float(getattr(cfg, "ATTITUDE_YAW_GYRO_GATE_DPS", yaw_gyro_gate_dps))
+            output_lpf_tau = float(getattr(cfg, "ATTITUDE_OUTPUT_LPF_TAU_S", output_lpf_tau))
         except Exception:
             pass
 
@@ -350,6 +354,12 @@ class AttitudeSensor(BaseSensor):
         self._lpf_a = EMA3(accel_lpf_tau)
         self._lpf_m = EMA3(mag_lpf_tau)
         self._lpf_g = EMA3(gyro_lpf_tau)
+
+        # Output smoothing (applied to final Euler angles)
+        self._output_lpf_tau = float(max(0.0, output_lpf_tau))
+        self._out_roll: Optional[float] = None
+        self._out_pitch: Optional[float] = None
+        self._out_yaw: Optional[float] = None
 
         # Calibrations
         self._mount = Mount.identity()
@@ -826,6 +836,21 @@ class AttitudeSensor(BaseSensor):
                 self._yaw0 = yaw
             if self._yaw0 is not None:
                 yaw = wrap_degrees(yaw - float(self._yaw0))
+
+        # Output low-pass filter (smooths final Euler angles)
+        if self._output_lpf_tau > 0:
+            a_out = dt / (dt + self._output_lpf_tau)
+            if self._out_roll is None:
+                self._out_roll = roll
+                self._out_pitch = pitch
+                self._out_yaw = yaw
+            else:
+                self._out_roll += a_out * (roll - self._out_roll)
+                self._out_pitch += a_out * (pitch - self._out_pitch)
+                # Wrap-safe yaw update: work on the shortest-path delta
+                yaw_diff = wrap_degrees(yaw - self._out_yaw)
+                self._out_yaw = wrap_degrees(self._out_yaw + a_out * yaw_diff)
+            roll, pitch, yaw = self._out_roll, self._out_pitch, self._out_yaw
 
         out: Dict[str, Any] = {
             "ts": time.time(),
