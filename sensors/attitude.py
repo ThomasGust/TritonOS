@@ -195,6 +195,10 @@ class AttitudeSensor(BaseSensor):
         mag_lpf_tau = 0.20
         gyro_lpf_tau = 0.00
 
+        # Motion gating for yaw correction (prevents tilt-error-induced yaw corruption)
+        yaw_dynamic_gate = 1.5    # m/s² dynamic accel threshold (0 disables)
+        yaw_gyro_gate_dps = 10.0  # deg/s gyro rate threshold (0 disables)
+
         # Presentation options
         accel_sign = "auto"  # auto|normal|invert
         zero_attitude = False
@@ -297,6 +301,9 @@ class AttitudeSensor(BaseSensor):
             mag_outlier_norm_frac = float(getattr(cfg, "ATTITUDE_MAG_FUSION_OUTLIER_NORM_FRAC", getattr(cfg, "MAG_FUSION_OUTLIER_NORM_FRAC", mag_outlier_norm_frac)))
             mag_output_lpf_tau_s = float(getattr(cfg, "ATTITUDE_MAG_FUSION_OUTPUT_LPF_TAU_S", getattr(cfg, "MAG_FUSION_OUTPUT_LPF_TAU_S", mag_output_lpf_tau_s)))
             mag_rate_hz = float(getattr(cfg, "ATTITUDE_MAG_RATE_HZ", mag_rate_hz))
+
+            yaw_dynamic_gate = float(getattr(cfg, "ATTITUDE_YAW_DYNAMIC_GATE", yaw_dynamic_gate))
+            yaw_gyro_gate_dps = float(getattr(cfg, "ATTITUDE_YAW_GYRO_GATE_DPS", yaw_gyro_gate_dps))
         except Exception:
             pass
 
@@ -326,6 +333,9 @@ class AttitudeSensor(BaseSensor):
         self._mag_max_step = float(max(0.0, mag_max_step))
         self._mag_enable_up = float(max(1e-3, mag_enable_up))
         self._mag_enable_down = float(max(1e-3, mag_enable_down))
+
+        self._yaw_dynamic_gate = float(max(0.0, yaw_dynamic_gate))
+        self._yaw_gyro_gate_rad = math.radians(float(max(0.0, yaw_gyro_gate_dps)))
 
         self._accel_sign_mode = accel_sign if accel_sign in ("auto", "normal", "invert") else "auto"
         self._zero_attitude = bool(zero_attitude)
@@ -414,6 +424,10 @@ class AttitudeSensor(BaseSensor):
         self._q_zero: Optional[Quaternion] = None
         self._yaw0: Optional[float] = None
         self._accel_sign_used = +1.0
+
+        # Dynamic acceleration estimator (for yaw motion gating)
+        self._prev_accel_v: Optional[np.ndarray] = None
+        self._dynamic_accel_ema = 0.0
 
         # For debugging/telemetry
         self._mount_auto_applied = False
@@ -616,9 +630,12 @@ class AttitudeSensor(BaseSensor):
         # Clamp dt (handles stalls / debugger pauses)
         dt = max(1e-4, min(0.25, dt))
 
-        # Read sensors
-        a = self.board.read_accel()
-        g = self.board.read_gyro()
+        # Read sensors (combined burst avoids accel/gyro temporal skew)
+        try:
+            a, g = self.board.read_imu()
+        except AttributeError:
+            a = self.board.read_accel()
+            g = self.board.read_gyro()
         mv_raw, mag_src, mag_meta = self._read_mag_selected()
 
         av = self._mount.apply((a.x, a.y, a.z))
@@ -646,6 +663,19 @@ class AttitudeSensor(BaseSensor):
         # Bias-correct gyro for filter update
         gv = gv_raw - self._gyro_bias
         gyro_norm = float(np.linalg.norm(gv))
+
+        # Estimate dynamic (non-gravitational) acceleration.
+        # In the body frame, gravity changes as dg/dt = -omega x g due to rotation.
+        # Any measured accel change beyond that is from vehicle thrust / drag.
+        if self._prev_accel_v is not None:
+            accel_change = av - self._prev_accel_v
+            gravity_change = -np.cross(gv, self._prev_accel_v) * dt
+            dynamic_impulse = accel_change - gravity_change
+            dynamic_norm = float(np.linalg.norm(dynamic_impulse)) / max(dt, 1e-6)
+            tau_dyn = 0.15  # seconds - smoothing on the estimate
+            alpha_dyn = dt / (dt + tau_dyn)
+            self._dynamic_accel_ema = (1.0 - alpha_dyn) * self._dynamic_accel_ema + alpha_dyn * dynamic_norm
+        self._prev_accel_v = av.copy()
 
         # Stationary detection
         a_norm = float(np.linalg.norm(av))
@@ -753,8 +783,16 @@ class AttitudeSensor(BaseSensor):
                         yaw_err = math.atan2(cross, dot)
                         yaw_err = max(-self._yaw_max_err, min(self._yaw_max_err, yaw_err))
 
-                        # Down-weight correction when mag is borderline.
-                        w = float(self._mag_enable) * float(mag_qual)
+                        # Down-weight correction when mag is borderline or
+                        # vehicle is under dynamic acceleration / rotation
+                        # (tilt estimate is unreliable during motion, which
+                        # corrupts the tilt-compensated mag projection).
+                        motion_w = 1.0
+                        if self._yaw_dynamic_gate > 0:
+                            motion_w *= max(0.0, 1.0 - self._dynamic_accel_ema / self._yaw_dynamic_gate)
+                        if self._yaw_gyro_gate_rad > 0:
+                            motion_w *= max(0.0, 1.0 - gyro_norm / self._yaw_gyro_gate_rad)
+                        w = float(self._mag_enable) * float(mag_qual) * motion_w
                         k = float((dt / self._yaw_tau) * w)
                         yaw_delta = k * yaw_err
 
@@ -813,6 +851,7 @@ class AttitudeSensor(BaseSensor):
                 "gyro_bias_rad_s": {"x": float(self._gyro_bias[0]), "y": float(self._gyro_bias[1]), "z": float(self._gyro_bias[2])},
                 "accel_sign": float(self._accel_sign_used),
                 "mount_auto": bool(self._mount_auto_applied),
+                "dynamic_accel": float(self._dynamic_accel_ema),
             },
         }
 

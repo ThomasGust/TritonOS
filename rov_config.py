@@ -601,7 +601,7 @@ ATTITUDE_WARMUP_SECONDS = 1.5
 
 # Accel gating (disable accel correction when vehicle is accelerating hard)
 ATTITUDE_ACCEL_G_TOL = 0.20          # allow +/- 0.20g deviation from 1g
-ATTITUDE_STATIONARY_GYRO_RAD = 0.20  # rad/s threshold for "stationary"
+ATTITUDE_STATIONARY_GYRO_RAD = 0.08  # rad/s threshold for "stationary"
 ATTITUDE_BIAS_ADAPT_TAU = 60.0       # seconds (0 disables stationary gyro bias learning)
 
 # Robust yaw correction tuning
@@ -614,6 +614,15 @@ ATTITUDE_YAW_BIAS_ADAPT_GYRO_RAD = 0.35
 ATTITUDE_YAW_BIAS_ADAPT_GYRO_NORM = 0.50
 ATTITUDE_MAG_REF_TAU = 300.0         # seconds (0 disables slow ref tracking)
 
+# Motion gating for yaw correction.
+# During motion, the accelerometer sees thrust/drag in addition to gravity,
+# which corrupts the Madgwick tilt estimate. Since the yaw correction relies
+# on tilt-compensating the magnetometer, a bad tilt drives yaw in the wrong
+# direction. These gates smoothly reduce the yaw correction weight during
+# dynamics so yaw relies on gyro integration (which is accurate short-term).
+ATTITUDE_YAW_DYNAMIC_GATE = 1.5      # m/s² (0 disables); estimated non-gravity accel
+ATTITUDE_YAW_GYRO_GATE_DPS = 10.0    # deg/s (0 disables); total rotation rate
+
 # Magnetometer health gating (magnitude + step)
 ATTITUDE_MAG_TOL = 0.35              # fractional tolerance on |B| relative to baseline
 ATTITUDE_MAG_MAX_STEP = 8.0          # uT: max allowed |B| step between samples
@@ -623,7 +632,7 @@ ATTITUDE_MAG_ENABLE_DOWN = 0.35      # seconds to disable mag after it becomes u
 # Optional sensor filtering (seconds; 0 disables)
 ATTITUDE_ACCEL_LPF_TAU_S = 0.05
 ATTITUDE_MAG_LPF_TAU_S = 0.20
-ATTITUDE_GYRO_LPF_TAU_S = 0.00
+ATTITUDE_GYRO_LPF_TAU_S = 0.01
 
 # Accel sign handling:
 #   - 'auto'   : choose sign that yields smallest initial roll/pitch

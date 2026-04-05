@@ -180,6 +180,17 @@ class NavigatorBoard:
             return _as_vec3(g)
         return _as_vec3(self._imu.read_gyro())  # type: ignore[union-attr]
 
+    def read_imu(self):
+        """Read accel + gyro from a single burst (same sample instant).
+
+        Returns (Vec3_accel, Vec3_gyro).  Falls back to two separate reads
+        when the bindings backend does not support a combined read.
+        """
+        if self._use_bindings:
+            return (self.read_accel(), self.read_gyro())
+        a, g = self._imu.read_all()  # type: ignore[union-attr]
+        return (_as_vec3(a), _as_vec3(g))
+
     def read_temp(self) -> float:
         if self._use_bindings:
             return float(self._nav.read_temp())  # type: ignore[union-attr]
