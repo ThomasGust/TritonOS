@@ -33,6 +33,7 @@ fi
 #   --project-dir <path>        (default: directory containing this script)
 #   --no-navigator-overlay      (skip BlueRobotics board overlay script)
 #   --no-legacy-camera          (skip enabling legacy camera + bcm2835-v4l2)
+#   --recreate-venv             (delete and rebuild .venv before reinstalling deps)
 #   --reboot                    (reboot automatically at the end)
 
 set -euo pipefail
@@ -44,6 +45,7 @@ PROJECT_DIR="/home/TritonOS"
 DO_NAV_OVERLAY=1
 DO_LEGACY_CAMERA=1
 DO_REBOOT=0
+DO_RECREATE_VENV=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reboot)
       DO_REBOOT=1
+      shift
+      ;;
+    --recreate-venv)
+      DO_RECREATE_VENV=1
       shift
       ;;
     *)
@@ -159,6 +165,93 @@ EOF
   systemctl unmask "$service_name" || true
   systemctl enable "$service_name"
   systemctl restart "$service_name"
+}
+
+run_as_target_user() {
+  sudo -H -u "$TARGET_USER" env HOME="$TARGET_HOME" PYTHONNOUSERSITE=1 "$@"
+}
+
+venv_python() {
+  run_as_target_user "$PROJECT_DIR/.venv/bin/python" "$@"
+}
+
+recreate_venv() {
+  local reason="${1:-requested}"
+  echo "[TritonOS] Recreating Python venv (${reason})..."
+  rm -rf "$PROJECT_DIR/.venv"
+  run_as_target_user python3 -m venv --system-site-packages "$PROJECT_DIR/.venv"
+}
+
+ensure_venv() {
+  local reason=""
+
+  if [[ "$DO_RECREATE_VENV" -eq 1 ]]; then
+    reason="requested via --recreate-venv"
+  elif [[ ! -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+    reason="missing .venv/bin/python"
+  elif [[ ! -f "$PROJECT_DIR/.venv/pyvenv.cfg" ]]; then
+    reason="missing pyvenv.cfg"
+  elif ! grep -Eq '^include-system-site-packages *= *true$' "$PROJECT_DIR/.venv/pyvenv.cfg"; then
+    reason="venv was not created with --system-site-packages"
+  elif ! venv_python -c "import sys; print(sys.executable)" >/dev/null 2>&1; then
+    reason="venv python is not runnable"
+  fi
+
+  if [[ -n "$reason" ]]; then
+    recreate_venv "$reason"
+  fi
+}
+
+install_python_deps() {
+  echo "[TritonOS] Installing Python deps..."
+  if [[ -f "$PROJECT_DIR/requirements.txt" ]]; then
+    # This venv uses --system-site-packages, so many hardware deps already come
+    # from apt. Do not use --upgrade here: it can force pip to replace working
+    # distro packages (for example python3-spidev) with a source build that then
+    # fails or becomes less stable.
+    venv_python -m pip install --prefer-binary -r "$PROJECT_DIR/requirements.txt"
+  fi
+}
+
+clean_navigator_install() {
+  echo "[TritonOS] Removing stale Navigator package state..."
+  venv_python -m pip uninstall -y bluerobotics-navigator bluerobotics_navigator >/dev/null 2>&1 || true
+  find "$PROJECT_DIR/.venv" \
+    \( \
+      -path '*/site-packages/bluerobotics_navigator*' -o \
+      -path '*/site-packages/bluerobotics-navigator-*.dist-info' -o \
+      -path '*/site-packages/bluerobotics_navigator-*.dist-info' \
+    \) \
+    -exec rm -rf {} + 2>/dev/null || true
+}
+
+install_navigator_bindings() {
+  echo "[TritonOS] Reinstalling Navigator Python bindings cleanly..."
+  clean_navigator_install
+  # The import name is ``bluerobotics_navigator`` but the canonical PyPI
+  # project name is ``bluerobotics-navigator``.
+  venv_python -m pip install --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
+}
+
+verify_navigator_bindings() {
+  echo "[TritonOS] Verifying Navigator Python bindings..."
+  venv_python - <<'PY'
+from utils.navigator_import import import_navigator_module, navigator_api_info
+
+nav = import_navigator_module()
+info = navigator_api_info(nav)
+print("Navigator API info:", info)
+
+missing = [
+    name for name in ("has_set_pwm_freq_hz", "has_set_pwm_enable", "has_set_pwm_channel_value")
+    if not info.get(name, False)
+]
+if missing:
+    raise SystemExit(
+        "Navigator Python bindings installed incorrectly. Missing required API: "
+        + ", ".join(missing)
+    )
+PY
 }
 
 # ----------------------------
@@ -261,12 +354,9 @@ for script in "$PROJECT_DIR"/bin/*.sh; do
 done
 echo "[TritonOS] Creating/Updating Python venv in project…"
 cd "$PROJECT_DIR"
-if [[ ! -d ".venv" ]]; then
-  # We need system-site-packages so python3-gi / Gst introspection works inside venv.
-  sudo -u "$TARGET_USER" python3 -m venv --system-site-packages .venv
-fi
+ensure_venv
 
-sudo -u "$TARGET_USER" .venv/bin/python -m pip install --upgrade pip setuptools wheel
+venv_python -m pip install --upgrade pip setuptools wheel
 
 echo "[TritonOS] Installing Python deps…"
 if [[ -f "requirements.txt" ]]; then
@@ -274,39 +364,25 @@ if [[ -f "requirements.txt" ]]; then
   # from apt. Do not use --upgrade here: it can force pip to replace working
   # distro packages (for example python3-spidev) with a source build that then
   # fails or becomes less stable.
-  sudo -u "$TARGET_USER" .venv/bin/pip install --prefer-binary -r requirements.txt
+  venv_python -m pip install --prefer-binary -r "$PROJECT_DIR/requirements.txt"
 fi
 
 echo "[TritonOS] Reinstalling Navigator Python bindings cleanly…"
-# Clean out stale/broken package layouts first. We've seen installs where an
-# almost-empty bluerobotics_navigator package directory was left behind and
-# shadowed the real compiled extension module.
-sudo -u "$TARGET_USER" .venv/bin/pip uninstall -y bluerobotics-navigator bluerobotics_navigator >/dev/null 2>&1 || true
-find "$PROJECT_DIR/.venv" -path '*/site-packages/bluerobotics_navigator*' -exec rm -rf {} + 2>/dev/null || true
+clean_navigator_install
 
 # Your code imports `bluerobotics_navigator` (underscore).
-# The PyPI project is "bluerobotics-navigator" but pip usually accepts both spellings.
-sudo -u "$TARGET_USER" .venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "bluerobotics-navigator" || \
-sudo -u "$TARGET_USER" .venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "bluerobotics_navigator"
+# The PyPI project is "bluerobotics-navigator".
+venv_python -m pip install --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
 
 echo "[TritonOS] Verifying Navigator Python bindings…"
-sudo -u "$TARGET_USER" .venv/bin/python - <<'PY'
-from utils.navigator_import import import_navigator_module, navigator_api_info
-
-nav = import_navigator_module()
-info = navigator_api_info(nav)
-print("Navigator API info:", info)
-
-missing = [
-    name for name in ("has_set_pwm_freq_hz", "has_set_pwm_enable", "has_set_pwm_channel_value")
-    if not info.get(name, False)
-]
-if missing:
-    raise SystemExit(
-        "Navigator Python bindings installed incorrectly. Missing required API: "
-        + ", ".join(missing)
-    )
-PY
+if ! verify_navigator_bindings; then
+  echo "[TritonOS] Navigator install/import failed; rebuilding venv and retrying once..."
+  recreate_venv "Navigator install/import verification failure"
+  venv_python -m pip install --upgrade pip setuptools wheel
+  install_python_deps
+  install_navigator_bindings
+  verify_navigator_bindings
+fi
 
 # ----------------------------
 # Boot-time ROV startup
@@ -317,7 +393,7 @@ install_rov_service
 # Quick sanity checks (non-fatal)
 # ----------------------------
 echo "[TritonOS] Sanity checks (non-fatal):"
-sudo -u "$TARGET_USER" .venv/bin/python - <<'PY' || true
+venv_python - <<'PY' || true
 import sys
 print("Python:", sys.version)
 try:
