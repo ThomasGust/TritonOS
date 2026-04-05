@@ -605,7 +605,7 @@ MAG_FUSION_ENABLE = True
 # Note: Setting MAG_FUSION_PREFER_AK = 0.0 is *almost* equivalent to "mmc"
 # when MMC is present, but MAG_OUTPUT_MODE is clearer and sets `mag_source`
 # appropriately.
-MAG_OUTPUT_MODE = "mmc"
+MAG_OUTPUT_MODE = "ak"
 
 # Relative preference (higher => more weight). Default: trust MMC slightly more.
 MAG_FUSION_PREFER_MMC = 1.6
