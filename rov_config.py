@@ -121,6 +121,54 @@ DEPTH_HOLD_TARGET_MIN_M = None
 DEPTH_HOLD_TARGET_MAX_M = None
 
 # ---------------------------------------------------------------------------
+# 2d) attitude hold (pitch & roll stabilization)
+# ---------------------------------------------------------------------------
+# Attitude hold is enabled/disabled by the pilot via PilotFrame.modes["attitude_hold"].
+# Can run simultaneously with depth hold for full 3-axis stabilization.
+
+# Master switch to compile/initialize attitude-hold support.
+ATTITUDE_HOLD_ENABLE = True
+
+# If attitude telemetry is older than this, attitude-hold will disengage to manual.
+ATTITUDE_HOLD_SENSOR_STALE_S = 1.0
+
+# Low-pass filter time constant on attitude angles (seconds).
+ATTITUDE_HOLD_LPF_TAU_S = 0.15
+
+# PID gains (command per degree / degree-second)
+ATTITUDE_HOLD_KP = 0.020
+ATTITUDE_HOLD_KI = 0.005
+ATTITUDE_HOLD_KD = 0.002
+
+# Error deadband in degrees (reduces thruster chatter near setpoint)
+ATTITUDE_HOLD_ERROR_DEADBAND_DEG = 0.5
+
+# Integrator clamp (in command units)
+ATTITUDE_HOLD_I_LIMIT = 0.20
+
+# Output clamp (in command units; keep < 1.0 while tuning)
+ATTITUDE_HOLD_OUT_LIMIT = 0.40
+
+# With the default mixer/attitude conventions, positive angle error should
+# command the opposite pitch/roll direction to level the vehicle. If your
+# vehicle corrects the wrong way, flip either sign to +1.0.
+ATTITUDE_HOLD_PITCH_SIGN = -1.0
+ATTITUDE_HOLD_ROLL_SIGN = -1.0
+
+# "Walk target" behavior: stick commands move the target angle; releasing holds.
+ATTITUDE_HOLD_WALK_TARGET = True
+ATTITUDE_HOLD_WALK_DEADBAND = 0.08
+ATTITUDE_HOLD_WALK_RATE_DPS = 15.0  # full stick => 15 deg/s target change
+
+# Optional clamp on target angles (degrees). Set to None to disable.
+ATTITUDE_HOLD_TARGET_MIN_DEG = -30.0
+ATTITUDE_HOLD_TARGET_MAX_DEG = 30.0
+
+# When attitude-hold is active, allow smaller vertical corrections through the
+# mix output deadband (same idea as DEPTH_HOLD_MIX_DEADBAND).
+ATTITUDE_HOLD_MIX_DEADBAND = 0.01
+
+# ---------------------------------------------------------------------------
 # 2b) arming safety
 # ---------------------------------------------------------------------------
 # If True, the ROV will refuse to ARM unless sticks are centered and triggers

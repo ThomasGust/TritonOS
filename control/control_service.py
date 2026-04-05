@@ -15,7 +15,8 @@ from motion.channel_map import ChannelMap
 
 from control.mixer import EightThrusterMixer, SimpleGroupMixer, global_limit
 from control.depth_hold import DepthHoldController, DepthHoldConfig
-from control.sensor_tap import DepthSensorTap
+from control.attitude_hold import AttitudeHoldController, AttitudeHoldConfig
+from control.sensor_tap import DepthSensorTap, AttitudeSensorTap
 
 
 @dataclass
@@ -399,6 +400,43 @@ class ControlService:
                     print("[rov/control] depth hold disabled (config/init failed):", e)
                 self._depth_hold = None
 
+        # --- attitude hold (pitch & roll) ----------------------------------
+        self._attitude_hold: Optional[AttitudeHoldController] = None
+        self._attitude_tap: Optional[AttitudeSensorTap] = None
+        self._last_attitude_status: Dict[str, Any] = {}
+
+        if bool(getattr(cfg, "ATTITUDE_HOLD_ENABLE", False)):
+            try:
+                self._attitude_tap = AttitudeSensorTap(getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001"))
+            except Exception as e:
+                if self.debug:
+                    print("[rov/control] attitude hold disabled (sensor tap init failed):", e)
+                self._attitude_tap = None
+
+            try:
+                ah_cfg = AttitudeHoldConfig(
+                    sensor_stale_s=float(getattr(cfg, "ATTITUDE_HOLD_SENSOR_STALE_S", 1.0)),
+                    lpf_tau_s=float(getattr(cfg, "ATTITUDE_HOLD_LPF_TAU_S", 0.15)),
+                    kp=float(getattr(cfg, "ATTITUDE_HOLD_KP", 0.020)),
+                    ki=float(getattr(cfg, "ATTITUDE_HOLD_KI", 0.005)),
+                    kd=float(getattr(cfg, "ATTITUDE_HOLD_KD", 0.002)),
+                    error_deadband_deg=float(getattr(cfg, "ATTITUDE_HOLD_ERROR_DEADBAND_DEG", 0.5)),
+                    i_limit=float(getattr(cfg, "ATTITUDE_HOLD_I_LIMIT", 0.20)),
+                    out_limit=float(getattr(cfg, "ATTITUDE_HOLD_OUT_LIMIT", 0.40)),
+                    pitch_sign=float(getattr(cfg, "ATTITUDE_HOLD_PITCH_SIGN", -1.0)),
+                    roll_sign=float(getattr(cfg, "ATTITUDE_HOLD_ROLL_SIGN", -1.0)),
+                    walk_target=bool(getattr(cfg, "ATTITUDE_HOLD_WALK_TARGET", True)),
+                    walk_deadband=float(getattr(cfg, "ATTITUDE_HOLD_WALK_DEADBAND", 0.08)),
+                    walk_rate_dps=float(getattr(cfg, "ATTITUDE_HOLD_WALK_RATE_DPS", 15.0)),
+                    target_min_deg=getattr(cfg, "ATTITUDE_HOLD_TARGET_MIN_DEG", -30.0),
+                    target_max_deg=getattr(cfg, "ATTITUDE_HOLD_TARGET_MAX_DEG", 30.0),
+                )
+                self._attitude_hold = AttitudeHoldController(ah_cfg)
+            except Exception as e:
+                if self.debug:
+                    print("[rov/control] attitude hold disabled (config/init failed):", e)
+                self._attitude_hold = None
+
     def _handle_lights_toggle(self, pilot: PilotFrame) -> Optional[str]:
         """Handle edge-based lights toggling.
 
@@ -669,27 +707,60 @@ class ControlService:
                             # Fail open to manual heave if anything goes wrong.
                             self._last_depth_status = {"enabled_cmd": enabled_cmd, "active": False, "reason": f"err:{e}"}
 
+                    # Attitude hold: modify pitch/roll commands in-place before mixing.
+                    if self._attitude_tap is not None:
+                        try:
+                            self._attitude_tap.poll()
+                        except Exception:
+                            pass
+                    if self._attitude_hold is not None:
+                        modes = fresh_pilot.modes or {}
+                        ah_enabled = bool(modes.get("attitude_hold", modes.get("attitude_hold_enabled", False)))
+                        pitch_deg = self._attitude_tap.last_pitch_deg if self._attitude_tap is not None else None
+                        roll_deg = self._attitude_tap.last_roll_deg if self._attitude_tap is not None else None
+                        att_age = self._attitude_tap.age_s(now) if self._attitude_tap is not None else None
+                        try:
+                            pitch_out, roll_out, att_st = self._attitude_hold.step(
+                                enabled=ah_enabled,
+                                manual_pitch=float(cmd6.get("pitch", 0.0)),
+                                manual_roll=float(cmd6.get("roll", 0.0)),
+                                pitch_deg=pitch_deg,
+                                roll_deg=roll_deg,
+                                sensor_age_s=att_age,
+                                dt=self.period,
+                            )
+                            cmd6["pitch"] = float(pitch_out)
+                            cmd6["roll"] = float(roll_out)
+                            self._last_attitude_status = att_st
+                        except Exception as e:
+                            self._last_attitude_status = {"enabled_cmd": ah_enabled, "active": False, "reason": f"err:{e}"}
+
                     raw_thr = self.mixer.mix(cmd6)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
                 dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
+                ah_db = float(getattr(cfg, "ATTITUDE_HOLD_MIX_DEADBAND", 0.01))
                 dh_cmd = False
+                ah_cmd = False
                 try:
                     modes = fresh_pilot.modes or {}
                     dh_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
+                    ah_cmd = bool(modes.get("attitude_hold", modes.get("attitude_hold_enabled", False)))
                 except Exception:
                     dh_cmd = False
+                    ah_cmd = False
 
                 for k, v in list(thr.items()):
                     if isinstance(k, str) and k.strip().lower() == "lights":
                         continue
 
                     db = base_db
-                    # When depth-hold is enabled, allow smaller vertical corrections.
-                    if dh_cmd and isinstance(k, str) and k.strip().upper().startswith("V_"):
-                        db = dh_db
+                    # When depth-hold or attitude-hold is enabled, allow smaller
+                    # vertical corrections so the controllers can make fine trim.
+                    if (dh_cmd or ah_cmd) and isinstance(k, str) and k.strip().upper().startswith("V_"):
+                        db = min(dh_db, ah_db) if (dh_cmd and ah_cmd) else (dh_db if dh_cmd else ah_db)
 
                     if abs(float(v)) < float(db):
                         thr[k] = 0.0
