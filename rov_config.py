@@ -124,6 +124,7 @@ DEPTH_HOLD_TARGET_MAX_M = None
 # 2d) attitude hold (pitch & roll stabilization)
 # ---------------------------------------------------------------------------
 # Attitude hold is enabled/disabled by the pilot via PilotFrame.modes["attitude_hold"].
+# For current topside testing, the temporary keyboard shortcut is intended to be `L`.
 # Can run simultaneously with depth hold for full 3-axis stabilization.
 
 # Master switch to compile/initialize attitude-hold support.

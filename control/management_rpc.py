@@ -27,10 +27,17 @@ from utils.vehicle_reference import (
 
 
 class ManagementRpcService:
-    def __init__(self, bind_endpoint: str, debug: bool = False, depth_sensor: Any | None = None):
+    def __init__(
+        self,
+        bind_endpoint: str,
+        debug: bool = False,
+        depth_sensor: Any | None = None,
+        control_service: Any | None = None,
+    ):
         self.bind_endpoint = str(bind_endpoint)
         self.debug = bool(debug)
         self._depth_sensor = depth_sensor
+        self._control_service = control_service
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -66,6 +73,38 @@ class ManagementRpcService:
             "mount_loaded": mount is not None,
         }
 
+    def _runtime_state(self) -> Dict[str, Any]:
+        empty_runtime = {
+            "control_loop_available": False,
+            "armed": False,
+            "updated_ts": None,
+            "depth_hold": {
+                "available": False,
+                "sensor_available": False,
+                "target_m": None,
+                "status": {},
+                "status_age_s": None,
+                "sensor": {},
+            },
+            "attitude_hold": {
+                "available": False,
+                "sensor_available": False,
+                "target_pitch_deg": None,
+                "target_roll_deg": None,
+                "status": {},
+                "status_age_s": None,
+                "sensor": {},
+            },
+        }
+        if self._control_service is None or not hasattr(self._control_service, "get_hold_status_snapshot"):
+            return empty_runtime
+        snapshot = self._control_service.get_hold_status_snapshot()
+        if not isinstance(snapshot, dict):
+            return empty_runtime
+        out = dict(snapshot)
+        out["control_loop_available"] = True
+        return out
+
     def _handle_request(self, req: Dict[str, Any]) -> Dict[str, Any]:
         cmd = str(req.get("cmd", "") or "").strip().lower()
         args = req.get("args", {}) or {}
@@ -81,14 +120,22 @@ class ManagementRpcService:
                     "config_path": getattr(cfg_mod, "__file__", None),
                     "config": load_runtime_config_snapshot(),
                     "references": self._reference_state(cfg_mod),
+                    "runtime": self._runtime_state(),
                     "commands": [
                         "get_state",
+                        "get_hold_status",
                         "set_config",
                         "set_surface_reference",
                         "capture_surface_reference",
                         "capture_flat_reference",
                     ],
                 },
+            }
+
+        if cmd in ("get_hold_status", "get_runtime_state", "hold_status"):
+            return {
+                "ok": True,
+                "data": self._runtime_state(),
             }
 
         if cmd == "set_config":

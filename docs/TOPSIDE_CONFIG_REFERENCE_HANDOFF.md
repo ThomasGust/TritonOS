@@ -12,6 +12,7 @@ The ROV now exposes a dedicated **management RPC service** that lets topside:
 
 - inspect the currently loaded `rov_config`
 - inspect the saved reference/calibration state
+- inspect live depth-hold and attitude-hold runtime state for debugging
 - persist selected config changes into `rov_config.py`
 - capture and save a **surface pressure reference**
 - capture and save a **flat mount reference**
@@ -190,8 +191,64 @@ Response shape:
       "mount_exists": true,
       "mount_loaded": true
     },
+    "runtime": {
+      "control_loop_available": true,
+      "armed": false,
+      "depth_hold": {
+        "available": true,
+        "sensor_available": true,
+        "target_m": 1.24,
+        "status_age_s": 0.03,
+        "status": {
+          "enabled_cmd": true,
+          "active": true,
+          "reason": "hold",
+          "depth_f_m": 1.21,
+          "target_m": 1.24,
+          "error_m": -0.03,
+          "u_out": 0.04
+        },
+        "sensor": {
+          "depth_m": 1.22,
+          "sample_age_s": 0.03,
+          "stream_age_s": 0.03,
+          "sensor_name": "bar30"
+        }
+      },
+      "attitude_hold": {
+        "available": true,
+        "sensor_available": true,
+        "target_pitch_deg": 0.0,
+        "target_roll_deg": 0.0,
+        "status_age_s": 0.02,
+        "status": {
+          "enabled_cmd": true,
+          "active": true,
+          "reason": "hold",
+          "pitch": {
+            "angle_f_deg": 1.4,
+            "target_deg": 0.0,
+            "error_deg": 1.4,
+            "u_out": -0.03
+          },
+          "roll": {
+            "angle_f_deg": -2.1,
+            "target_deg": 0.0,
+            "error_deg": -2.1,
+            "u_out": 0.05
+          }
+        },
+        "sensor": {
+          "pitch_deg": 1.5,
+          "roll_deg": -2.0,
+          "yaw_deg": 90.0,
+          "sample_age_s": 0.02
+        }
+      }
+    },
     "commands": [
       "get_state",
+      "get_hold_status",
       "set_config",
       "set_surface_reference",
       "capture_surface_reference",
@@ -202,6 +259,34 @@ Response shape:
 ```
 
 Use this to populate the GUI page.
+
+
+### `get_hold_status`
+
+Lightweight polling API for the hold tuning/debug page.
+
+Request:
+
+```json
+{"cmd": "get_hold_status"}
+```
+
+Response shape:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "control_loop_available": true,
+    "armed": false,
+    "depth_hold": { "...": "same shape as get_state.data.runtime.depth_hold" },
+    "attitude_hold": { "...": "same shape as get_state.data.runtime.attitude_hold" }
+  }
+}
+```
+
+Use this for periodic refresh while the page is open instead of reloading the
+full config document each time.
 
 
 ### `set_config`
@@ -411,7 +496,46 @@ UX note:
 - explain that the ROV should be held in the pose that should count as “flat”
 
 
-### 4. Config Controls
+### 4. Hold Controls
+
+Controls:
+
+- toggle: `Depth Hold`
+- toggle: `Attitude Hold`
+- temporary keyboard shortcut for testing: `L` toggles `PilotFrame.modes["attitude_hold"]`
+
+Behavior:
+
+- depth hold should keep using the existing topside interaction pattern
+- attitude hold should mirror it and write `PilotFrame.modes["attitude_hold"]`
+- keep accepting `PilotFrame.modes["depth_hold"]` for depth hold
+- only treat `L` as a temporary testing shortcut; it is not a long-term controller mapping
+
+
+### 5. Hold Runtime / Debug Panel
+
+Poll `get_hold_status` while the page is visible and show:
+
+- whether the control loop is available
+- whether the vehicle is armed
+- for depth hold:
+- `available`, `sensor_available`, `status.enabled_cmd`, `status.active`, `status.reason`
+- filtered/current depth, target depth, error, output command, sensor sample age
+- for attitude hold:
+- `available`, `sensor_available`, `status.enabled_cmd`, `status.active`, `status.reason`
+- current pitch, roll, yaw
+- target pitch and target roll
+- per-axis filtered angle, error, and output from `status.pitch` / `status.roll`
+- sensor sample age and status age
+
+UX notes:
+
+- color-code stale data when `sample_age_s` or `status_age_s` grows unexpectedly
+- expose the raw `reason` strings directly; they are useful during tuning
+- if `active=false` but `enabled_cmd=true`, show that as a warning state rather than as a normal off state
+
+
+### 6. Config Controls
 
 Expose selected safe/configured fields, not every value in `rov_config.py`.
 
@@ -423,13 +547,22 @@ Good first candidates:
 - `DEPTH_HOLD_LPF_TAU_S`
 - `DEPTH_HOLD_ERROR_DEADBAND_M`
 - `DEPTH_HOLD_OUT_LIMIT`
+- `ATTITUDE_HOLD_KP`
+- `ATTITUDE_HOLD_KI`
+- `ATTITUDE_HOLD_KD`
+- `ATTITUDE_HOLD_LPF_TAU_S`
+- `ATTITUDE_HOLD_ERROR_DEADBAND_DEG`
+- `ATTITUDE_HOLD_OUT_LIMIT`
+- `ATTITUDE_HOLD_WALK_RATE_DPS`
+- `ATTITUDE_HOLD_TARGET_MIN_DEG`
+- `ATTITUDE_HOLD_TARGET_MAX_DEG`
 - `EXTERNAL_DEPTH_SENSOR_TO_TOP_M`
 - possibly `EXTERNAL_DEPTH_RATE_HZ`
 
 The page should likely batch-save these through one `set_config` request.
 
 
-### 5. Restart Banner
+### 7. Restart Banner
 
 After any successful mutating operation, show a clear banner:
 
@@ -444,7 +577,8 @@ On page load:
 
 1. connect to management RPC
 2. send `get_state`
-3. populate the form from `data.config` and `data.references`
+3. populate the form from `data.config`, `data.references`, and `data.runtime`
+4. if the hold tuning/debug panel is visible, start polling `get_hold_status`
 
 On save:
 
@@ -464,6 +598,7 @@ On error:
 - disable capture buttons while the request is in flight
 - give operator instructions before each capture
 - show the exact returned values after capture
+- show the exact live controller reasons/states during tuning instead of collapsing them into a generic error banner
 - never edit `rov_config.py` from topside directly; always go through RPC
 - avoid exposing arbitrary free-form file/path editing in the GUI
 
@@ -495,4 +630,3 @@ python tools/management_rpc_client.py --endpoint tcp://tritonpi:5556 capture-fla
 ```
 
 This is the easiest executable reference for the topside model to follow.
-

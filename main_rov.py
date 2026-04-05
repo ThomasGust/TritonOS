@@ -72,7 +72,7 @@ def start_video_service():
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
 
-def start_management_service(*, depth_sensor=None):
+def start_management_service(*, depth_sensor=None, control_service=None):
     if not bool(getattr(cfg, "MANAGEMENT_RPC_ENABLE", True)):
         return None
 
@@ -88,6 +88,7 @@ def start_management_service(*, depth_sensor=None):
         bind_endpoint=bind,
         debug=bool(getattr(cfg, "DEBUG", False)),
         depth_sensor=depth_sensor,
+        control_service=control_service,
     )
     svc.start()
     print(f"[rov/main] management RPC started on {bind}")
@@ -535,7 +536,7 @@ def main():
     start_video_service()
     ctrl, pilot_rx, state = start_control_service()
     _, depth_sensor = start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
-    start_management_service(depth_sensor=depth_sensor)
+    start_management_service(depth_sensor=depth_sensor, control_service=ctrl)
 
     print("[rov/main] all services started.")
     try:
