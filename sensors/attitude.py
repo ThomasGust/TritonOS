@@ -145,6 +145,25 @@ def _initial_quaternion_from_accel_mag(accel: np.ndarray, mag: Optional[np.ndarr
     return (q_yaw * q_tilt).normalized()
 
 
+def _quaternion_from_rpy_deg(roll_deg: float, pitch_deg: float, yaw_deg: float) -> Quaternion:
+    """Build a BODY->WORLD quaternion from aerospace ZYX Euler angles."""
+    q_roll = Quaternion.from_axis_angle((1.0, 0.0, 0.0), math.radians(float(roll_deg)))
+    q_pitch = Quaternion.from_axis_angle((0.0, 1.0, 0.0), math.radians(float(pitch_deg)))
+    q_yaw = Quaternion.from_axis_angle((0.0, 0.0, 1.0), math.radians(float(yaw_deg)))
+    return (q_yaw * q_pitch * q_roll).normalized()
+
+
+def _direct_mag_yaw_deg(mag_body_uT: np.ndarray, roll_deg: float, pitch_deg: float) -> Optional[float]:
+    """Tilt-compensated yaw directly from magnetometer + current roll/pitch."""
+    q_rp = _quaternion_from_rpy_deg(roll_deg, pitch_deg, 0.0)
+    m_w = q_rp.rotate(mag_body_uT)
+    mh = np.array([m_w[0], m_w[1]], dtype=float)
+    mh = _normalize2(mh)
+    if mh is None:
+        return None
+    return wrap_degrees(-math.degrees(math.atan2(float(mh[1]), float(mh[0]))))
+
+
 def _load_optional_json(path: str) -> Optional[dict]:
     p = (path or "").strip()
     if not p:
@@ -206,6 +225,7 @@ class AttitudeSensor(BaseSensor):
         accel_sign = "auto"  # auto|normal|invert
         zero_attitude = False
         yaw_zero = False
+        yaw_mode = "fused"  # fused|direct_mag
 
         # Auto-mount (boot-time leveling)
         # If the IMU board (or Pi/Navigator) is mounted with some tilt inside the vehicle,
@@ -277,6 +297,7 @@ class AttitudeSensor(BaseSensor):
             accel_sign = str(getattr(cfg, "ATTITUDE_ACCEL_SIGN", accel_sign)).strip().lower()
             zero_attitude = bool(getattr(cfg, "ATTITUDE_ZERO_ATTITUDE_AT_START", zero_attitude))
             yaw_zero = bool(getattr(cfg, "ATTITUDE_YAW_ZERO_AT_START", yaw_zero))
+            yaw_mode = str(getattr(cfg, "ATTITUDE_YAW_MODE", yaw_mode)).strip().lower()
 
             auto_mount_enable = bool(getattr(cfg, "ATTITUDE_AUTO_MOUNT_FROM_LEVEL", auto_mount_enable))
             auto_mount_yaw_deg = float(getattr(cfg, "ATTITUDE_AUTO_MOUNT_YAW_DEG", auto_mount_yaw_deg))
@@ -344,6 +365,7 @@ class AttitudeSensor(BaseSensor):
         self._accel_sign_mode = accel_sign if accel_sign in ("auto", "normal", "invert") else "auto"
         self._zero_attitude = bool(zero_attitude)
         self._yaw_zero = bool(yaw_zero)
+        self._yaw_mode = yaw_mode if yaw_mode in ("fused", "direct_mag") else "fused"
 
         self._auto_mount_enable = bool(auto_mount_enable)
         self._auto_mount_yaw_deg = float(auto_mount_yaw_deg)
@@ -830,6 +852,14 @@ class AttitudeSensor(BaseSensor):
         roll, pitch, yaw = quat_to_euler_deg(q_out)
         yaw = wrap_degrees(yaw)
         roll = wrap_degrees(roll)
+        yaw_source = "fused"
+        direct_mag_yaw = None
+
+        if self._yaw_mode == "direct_mag" and mv is not None:
+            direct_mag_yaw = _direct_mag_yaw_deg(mv, roll, pitch)
+            if direct_mag_yaw is not None:
+                yaw = direct_mag_yaw
+                yaw_source = "direct_mag"
 
         if self._yaw_zero:
             if self._yaw0 is None and stationary:
@@ -862,6 +892,7 @@ class AttitudeSensor(BaseSensor):
             "mag_source": mag_src,
             "health": {
                 "mode": mode,
+                "yaw_source": yaw_source,
                 "accel_ok": bool(accel_ok),
                 "mag_ok": bool(mag_ok),
                 "mag_enable": float(self._mag_enable),
@@ -871,6 +902,7 @@ class AttitudeSensor(BaseSensor):
                 "beta": float(beta),
                 "yaw_err_deg": float(math.degrees(yaw_err)),
                 "yaw_delta_deg": float(math.degrees(yaw_delta)),
+                "direct_mag_yaw_deg": (None if direct_mag_yaw is None else float(direct_mag_yaw)),
                 "mag_norm_uT": float(mag_norm) if math.isfinite(mag_norm) else None,
                 "mag_step_uT": float(mag_step),
                 "gyro_bias_rad_s": {"x": float(self._gyro_bias[0]), "y": float(self._gyro_bias[1]), "z": float(self._gyro_bias[2])},

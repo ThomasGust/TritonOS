@@ -705,6 +705,11 @@ ATTITUDE_ACCEL_SIGN = 'auto'
 ATTITUDE_ZERO_ATTITUDE_AT_START = False
 ATTITUDE_YAW_ZERO_AT_START = False
 
+# Yaw presentation mode:
+#   - 'fused'      : current estimator output (gyro + gated mag correction)
+#   - 'direct_mag' : tilt-compensated heading directly from mag + current roll/pitch
+ATTITUDE_YAW_MODE = 'fused'
+
 # Auto-mount (boot-time leveling)
 #
 # If the Navigator/Pi is mounted with some *tilt* relative to the vehicle body,
