@@ -436,6 +436,7 @@ class ControlService:
                     ki=float(getattr(cfg, "ATTITUDE_HOLD_KI", 0.005)),
                     kd=float(getattr(cfg, "ATTITUDE_HOLD_KD", 0.002)),
                     error_deadband_deg=float(getattr(cfg, "ATTITUDE_HOLD_ERROR_DEADBAND_DEG", 0.5)),
+                    deadband_i_decay=float(getattr(cfg, "ATTITUDE_HOLD_DEADBAND_I_DECAY", 0.90)),
                     i_limit=float(getattr(cfg, "ATTITUDE_HOLD_I_LIMIT", 0.20)),
                     out_limit=float(getattr(cfg, "ATTITUDE_HOLD_OUT_LIMIT", 0.40)),
                     pitch_sign=float(getattr(cfg, "ATTITUDE_HOLD_PITCH_SIGN", -1.0)),
@@ -504,6 +505,7 @@ class ControlService:
             "roll_deg": None,
             "yaw_deg": None,
             "sample_age_s": None,
+            "stream_age_s": None,
             "raw": {},
         }
         if self._attitude_tap is not None:
@@ -512,6 +514,7 @@ class ControlService:
                 "roll_deg": (None if self._attitude_tap.last_roll_deg is None else float(self._attitude_tap.last_roll_deg)),
                 "yaw_deg": (None if self._attitude_tap.last_yaw_deg is None else float(self._attitude_tap.last_yaw_deg)),
                 "sample_age_s": self._attitude_tap.age_s(now),
+                "stream_age_s": self._attitude_tap.rx_age_s(now),
                 "raw": copy.deepcopy(self._attitude_tap.last_raw),
             }
 

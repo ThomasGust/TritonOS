@@ -83,6 +83,48 @@ def test_attitude_hold_walks_target_with_manual_input():
     assert pitch_out > 0.0
 
 
+def test_attitude_hold_true_deadband_suppresses_small_errors():
+    dt = 0.02
+    controller = AttitudeHoldController(
+        AttitudeHoldConfig(
+            lpf_tau_s=0.0,
+            kp=0.05,
+            ki=0.02,
+            kd=0.01,
+            error_deadband_deg=3.0,
+            deadband_i_decay=0.5,
+            out_limit=1.0,
+        )
+    )
+
+    controller.step(
+        enabled=True,
+        manual_pitch=0.0,
+        manual_roll=0.0,
+        pitch_deg=0.0,
+        roll_deg=0.0,
+        sensor_age_s=0.0,
+        dt=dt,
+    )
+
+    pitch_out, roll_out, status = controller.step(
+        enabled=True,
+        manual_pitch=0.0,
+        manual_roll=0.0,
+        pitch_deg=2.5,
+        roll_deg=-2.7,
+        sensor_age_s=0.0,
+        dt=dt,
+    )
+
+    assert pitch_out == 0.0
+    assert roll_out == 0.0
+    assert status["pitch"]["within_deadband"] is True
+    assert status["roll"]["within_deadband"] is True
+    assert status["pitch"]["u_out"] == 0.0
+    assert status["roll"]["u_out"] == 0.0
+
+
 def test_depth_and_attitude_hold_can_stabilize_together():
     dt = 0.02
 

@@ -44,6 +44,10 @@ class AttitudeHoldConfig:
     # Small error deadband to reduce thruster chatter (degrees)
     error_deadband_deg: float = 0.5
 
+    # When the axis is inside the acceptable deadband, gently bleed off any
+    # stored integrator so the controller settles back to zero command.
+    deadband_i_decay: float = 0.90
+
     # Integral anti-windup (in command units)
     i_limit: float = 0.20
 
@@ -167,9 +171,31 @@ class _SingleAxisHold:
         t = float(self._target)
 
         # Error: positive when angle exceeds target.
-        e = a_f - t
-        if abs(e) < float(cfg.error_deadband_deg):
-            e = 0.0
+        raw_error = a_f - t
+        within_deadband = abs(raw_error) <= float(cfg.error_deadband_deg)
+        if within_deadband:
+            decay = _clamp(float(cfg.deadband_i_decay), 0.0, 1.0)
+            self._i_state *= decay
+            if abs(self._i_state) < 1e-6:
+                self._i_state = 0.0
+            status.update(
+                {
+                    "active": True,
+                    "reason": "hold",
+                    "angle_deg": a,
+                    "angle_f_deg": a_f,
+                    "target_deg": t,
+                    "raw_error_deg": raw_error,
+                    "error_deg": 0.0,
+                    "da_dps": da,
+                    "u_raw": 0.0,
+                    "u_out": 0.0,
+                    "within_deadband": True,
+                }
+            )
+            return 0.0, status
+
+        e = raw_error
 
         kp = float(cfg.kp)
         ki = float(cfg.ki)
@@ -201,10 +227,12 @@ class _SingleAxisHold:
                 "angle_deg": a,
                 "angle_f_deg": a_f,
                 "target_deg": t,
+                "raw_error_deg": raw_error,
                 "error_deg": e,
                 "da_dps": da,
                 "u_raw": u_raw2,
                 "u_out": u2_clamped,
+                "within_deadband": False,
             }
         )
         return u2_clamped, status

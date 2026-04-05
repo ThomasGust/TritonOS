@@ -171,3 +171,11 @@ class AttitudeSensorTap:
         if now is None:
             now = time.time()
         return float(now) - float(self.last_ts)
+
+    def rx_age_s(self, now: Optional[float] = None) -> Optional[float]:
+        """Age since last attitude message of any kind (seconds)."""
+        if self.last_rx_ts is None:
+            return None
+        if now is None:
+            now = time.time()
+        return float(now) - float(self.last_rx_ts)

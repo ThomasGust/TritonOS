@@ -143,7 +143,11 @@ ATTITUDE_HOLD_KI = 0.005
 ATTITUDE_HOLD_KD = 0.002
 
 # Error deadband in degrees (reduces thruster chatter near setpoint)
-ATTITUDE_HOLD_ERROR_DEADBAND_DEG = 0.5
+ATTITUDE_HOLD_ERROR_DEADBAND_DEG = 3.0
+
+# While the attitude is inside the acceptable deadband, decay any leftover
+# integrator so small sensor jitter settles back to neutral output.
+ATTITUDE_HOLD_DEADBAND_I_DECAY = 0.90
 
 # Integrator clamp (in command units)
 ATTITUDE_HOLD_I_LIMIT = 0.20

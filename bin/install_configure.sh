@@ -234,18 +234,58 @@ install_navigator_bindings() {
 }
 
 verify_navigator_bindings() {
-  echo "[TritonOS] Verifying Navigator Python bindings..."
+  local pass_label="${1:-}"
+  if [[ -n "$pass_label" ]]; then
+    echo "[TritonOS] Verifying Navigator Python bindings (${pass_label})..."
+  else
+    echo "[TritonOS] Verifying Navigator Python bindings..."
+  fi
   venv_python - <<'PY'
+from pathlib import Path
+import importlib
+import importlib.metadata as md
+
 from utils.navigator_import import import_navigator_module, navigator_api_info
+
+required = ("set_pwm_freq_hz", "set_pwm_enable", "set_pwm_channel_value")
+
+try:
+    version = md.version("bluerobotics-navigator")
+except Exception as exc:
+    raise SystemExit(f"Navigator wheel metadata missing for bluerobotics-navigator: {exc}")
+
+try:
+    dist = md.distribution("bluerobotics-navigator")
+except Exception as exc:
+    raise SystemExit(f"Navigator distribution lookup failed: {exc}")
+
+dist_root = Path(dist.locate_file(""))
+dist_info_dirs = sorted(p.name for p in dist_root.glob("bluerobotics_navigator-*.dist-info"))
+if not dist_info_dirs:
+    raise SystemExit(
+        f"Navigator dist-info directory missing under {dist_root}"
+    )
+
+pkg = importlib.import_module("bluerobotics_navigator")
+pkg_file = Path(getattr(pkg, "__file__", ""))
+if not pkg_file.exists():
+    raise SystemExit(f"Navigator package __file__ missing on disk: {pkg_file}")
+
+pkg_dir = pkg_file.parent
+ext_candidates = sorted(p.name for p in pkg_dir.glob("bluerobotics_navigator*.so"))
+if not ext_candidates:
+    raise SystemExit(
+        f"Navigator compiled extension missing under {pkg_dir}"
+    )
 
 nav = import_navigator_module()
 info = navigator_api_info(nav)
 print("Navigator API info:", info)
+print("Navigator dist-info:", dist_info_dirs)
+print("Navigator extension candidates:", ext_candidates)
+print("Navigator version:", version)
 
-missing = [
-    name for name in ("has_set_pwm_freq_hz", "has_set_pwm_enable", "has_set_pwm_channel_value")
-    if not info.get(name, False)
-]
+missing = [name for name in required if not info.get(f"has_{name}", False)]
 if missing:
     raise SystemExit(
         "Navigator Python bindings installed incorrectly. Missing required API: "
@@ -375,13 +415,14 @@ clean_navigator_install
 venv_python -m pip install --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
 
 echo "[TritonOS] Verifying Navigator Python bindings…"
-if ! verify_navigator_bindings; then
+if ! verify_navigator_bindings "pass 1" || ! verify_navigator_bindings "pass 2"; then
   echo "[TritonOS] Navigator install/import failed; rebuilding venv and retrying once..."
   recreate_venv "Navigator install/import verification failure"
   venv_python -m pip install --upgrade pip setuptools wheel
   install_python_deps
   install_navigator_bindings
-  verify_navigator_bindings
+  verify_navigator_bindings "retry pass 1"
+  verify_navigator_bindings "retry pass 2"
 fi
 
 # ----------------------------
