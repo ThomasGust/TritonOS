@@ -164,6 +164,78 @@ def _direct_mag_yaw_deg(mag_body_uT: np.ndarray, roll_deg: float, pitch_deg: flo
     return wrap_degrees(-math.degrees(math.atan2(float(mh[1]), float(mh[0]))))
 
 
+def _mag_debug_entry(
+    raw_sample: Optional[Dict[str, Any]],
+    *,
+    roll_deg: float,
+    pitch_deg: float,
+    mount: Mount,
+    mag_cal: Optional[MagCalibration],
+) -> Optional[Dict[str, Any]]:
+    if raw_sample is None:
+        return None
+    raw_v = np.array(
+        [float(raw_sample.get("x", 0.0)), float(raw_sample.get("y", 0.0)), float(raw_sample.get("z", 0.0))],
+        dtype=float,
+    )
+    body_v = mount.apply(raw_v)
+    if mag_cal is not None:
+        body_v = mag_cal.apply(body_v)
+    heading_deg = _direct_mag_yaw_deg(body_v, roll_deg, pitch_deg)
+    return {
+        "raw_uT": {"x": float(raw_v[0]), "y": float(raw_v[1]), "z": float(raw_v[2])},
+        "body_uT": {"x": float(body_v[0]), "y": float(body_v[1]), "z": float(body_v[2])},
+        "norm_uT": float(np.linalg.norm(body_v)),
+        "heading_deg": (None if heading_deg is None else float(heading_deg)),
+    }
+
+
+def _mag_debug_summary(
+    mag_sources: Dict[str, Any],
+    *,
+    roll_deg: float,
+    pitch_deg: float,
+    mount: Mount,
+    mag_cal: Optional[MagCalibration],
+    selected_source: str,
+) -> Dict[str, Any]:
+    ak = _mag_debug_entry(
+        mag_sources.get("ak09915"),
+        roll_deg=roll_deg,
+        pitch_deg=pitch_deg,
+        mount=mount,
+        mag_cal=mag_cal,
+    )
+    mmc = _mag_debug_entry(
+        mag_sources.get("mmc5983"),
+        roll_deg=roll_deg,
+        pitch_deg=pitch_deg,
+        mount=mount,
+        mag_cal=mag_cal,
+    )
+    out: Dict[str, Any] = {
+        "selected_source": str(selected_source),
+        "ak09915": ak,
+        "mmc5983": mmc,
+        "heading_delta_deg": None,
+        "body_angle_deg": None,
+    }
+    if ak is not None and mmc is not None:
+        ak_heading = ak.get("heading_deg")
+        mmc_heading = mmc.get("heading_deg")
+        if ak_heading is not None and mmc_heading is not None:
+            out["heading_delta_deg"] = float(wrap_degrees(float(ak_heading) - float(mmc_heading)))
+        ak_body = np.array([ak["body_uT"]["x"], ak["body_uT"]["y"], ak["body_uT"]["z"]], dtype=float)
+        mmc_body = np.array([mmc["body_uT"]["x"], mmc["body_uT"]["y"], mmc["body_uT"]["z"]], dtype=float)
+        n_ak = float(np.linalg.norm(ak_body))
+        n_mmc = float(np.linalg.norm(mmc_body))
+        if n_ak > 1e-9 and n_mmc > 1e-9:
+            c = float(np.dot(ak_body, mmc_body) / (n_ak * n_mmc))
+            c = max(-1.0, min(1.0, c))
+            out["body_angle_deg"] = float(math.degrees(math.acos(c)))
+    return out
+
+
 def _load_optional_json(path: str) -> Optional[dict]:
     p = (path or "").strip()
     if not p:
@@ -882,6 +954,16 @@ class AttitudeSensor(BaseSensor):
                 self._out_yaw = wrap_degrees(self._out_yaw + a_out * yaw_diff)
             roll, pitch, yaw = self._out_roll, self._out_pitch, self._out_yaw
 
+        mag_sources = mag_meta.get("mag_sources", {}) if isinstance(mag_meta, dict) else {}
+        mag_debug = _mag_debug_summary(
+            mag_sources if isinstance(mag_sources, dict) else {},
+            roll_deg=float(roll),
+            pitch_deg=float(pitch),
+            mount=self._mount,
+            mag_cal=self._mag_cal,
+            selected_source=mag_src,
+        )
+
         out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,
@@ -910,6 +992,7 @@ class AttitudeSensor(BaseSensor):
                 "mount_auto": bool(self._mount_auto_applied),
                 "dynamic_accel": float(self._dynamic_accel_ema),
             },
+            "mag_debug": mag_debug,
         }
 
         # Optional mount debug (small; safe for old pilots to ignore)
