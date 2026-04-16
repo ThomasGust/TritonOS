@@ -428,7 +428,7 @@ PWM_DIRECT_OE_ACTIVE_LOW = True
 #   If yaw/sway directions feel wrong later, you’ll either:
 #     - swap which physical motor is assigned to which name here, or
 #     - set THRUSTER_REVERSED for that named thruster.
-
+"""
 CHANNEL_MAP = {
     "thrusters": {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
@@ -453,6 +453,35 @@ CHANNEL_MAP = {
         "wrist_rotate": 10,  # physical channel 10 (T200 wrist rotate motor)
         "gripper_left": 12,  # physical channel 12 (differential servo)
         "gripper_right": 13, # physical channel 13 (differential servo)
+    },
+}
+"""
+
+
+CHANNEL_MAP = {
+    "thrusters": {
+        # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
+        "H_FL": 1,  # motor7 -> physical channel 8
+        "H_FR": 2,  # motor5 -> physical channel 6
+        "H_RL": 3,  # motor6 -> physical channel 7
+        "H_RR": 4,  # motor1 -> physical channel 2
+
+        # Verticals (heave/pitch/roll)
+        # Your wiring (physical Navigator channels):
+        #   V_FL (front-left)  = 3
+        #   V_FR (front-right) = 4
+        #   V_RL (rear-left)   = 9
+        #   V_RR (rear-right)  = 1
+        "V_FL": 12,
+        "V_FR": 13,
+        "V_RL": 14,
+        "V_RR": 15,
+    },
+    "aux": {
+        "lights": 5,         # physical channel 5
+        "wrist_rotate": 16,  # physical channel 10 (T200 wrist rotate motor)
+        "gripper_left": 6,  # physical channel 12 (differential servo)
+        "gripper_right": 7, # physical channel 13 (differential servo)
     },
 }
 
