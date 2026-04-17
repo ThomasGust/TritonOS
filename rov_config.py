@@ -461,10 +461,10 @@ CHANNEL_MAP = {
 CHANNEL_MAP = {
     "thrusters": {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
-        "H_FL": 1,  # motor7 -> physical channel 8
+        "H_FL": 12,  # motor7 -> physical channel 8
         "H_FR": 2,  # motor5 -> physical channel 6
         "H_RL": 3,  # motor6 -> physical channel 7
-        "H_RR": 4,  # motor1 -> physical channel 2
+        "H_RR": 14,  # motor1 -> physical channel 2
 
         # Verticals (heave/pitch/roll)
         # Your wiring (physical Navigator channels):
@@ -472,16 +472,16 @@ CHANNEL_MAP = {
         #   V_FR (front-right) = 4
         #   V_RL (rear-left)   = 9
         #   V_RR (rear-right)  = 1
-        "V_FL": 12,
-        "V_FR": 13,
-        "V_RL": 14,
+        "V_FL": 13,
+        "V_FR": 1,
+        "V_RL": 4,
         "V_RR": 15,
     },
     "aux": {
         "lights": 5,         # physical channel 5
         "wrist_rotate": 16,  # physical channel 10 (T200 wrist rotate motor)
-        "gripper_left": 6,  # physical channel 12 (differential servo)
-        "gripper_right": 7, # physical channel 13 (differential servo)
+        "gripper_left": 10,  # physical channel 12 (differential servo)
+        "gripper_right": 11, # physical channel 13 (differential servo)
     },
 }
 
@@ -497,6 +497,7 @@ MOTOR_PWM_CHANNELS = sorted(THRUSTER_CHANNELS.values())
 
 # Optional per-thruster direction flips.
 # Keys should be thruster names (preferred) or raw channel numbers.
+"""
 THRUSTER_REVERSED = {
       "H_FL": True,
     # "H_FR": True,
@@ -506,6 +507,18 @@ THRUSTER_REVERSED = {
       "V_FR": True,
     # "V_RL": True,
       "V_RR": True,
+}
+"""
+
+THRUSTER_REVERSED = {
+      "H_FL": True,
+    # "H_FR": True,
+      "H_RL": True,
+    # "H_RR": True,
+    # "V_FL": True,
+      "V_FR": True,
+      "V_RL": True,
+      #"V_RR": True,
 }
 CHANNEL_REVERSED = {
     # 8: True,
