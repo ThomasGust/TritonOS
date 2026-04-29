@@ -336,6 +336,8 @@ class ControlService:
         # rather than springing back to center. This latches the last mixed differential
         # output until a new pitch/yaw command arrives.
         self._gripper_hold_last = bool(getattr(cfg, "GRIPPER_HOLD_LAST_POSITION", True))
+        self._gripper_park_on_arm_disarm = bool(getattr(cfg, "GRIPPER_PARK_ON_ARM_DISARM", True))
+        self._gripper_park_settle_s = float(getattr(cfg, "GRIPPER_PARK_SETTLE_S", 0.50))
         self._gripper_last_pitch = self._gripper_park_pitch
         self._gripper_last_yaw = self._gripper_park_yaw
         self._gripper_last_left = self._gripper_park_left
@@ -588,6 +590,8 @@ class ControlService:
 
         # Best-effort: physically disable outputs.
         try:
+            if self.state.is_armed():
+                self._send_gripper_park_pose(settle_s=self._gripper_park_settle_s)
             self.state.set_armed(False)
             self._set_gripper_park_pose()
             self._sync_sink_armed(force=True)
@@ -681,10 +685,7 @@ class ControlService:
         for b in self._kill_buttons:
             if edges.get(b) == "down" or is_pressed(b):
                 if self.state.is_armed():
-                    self.state.set_armed(False)
-                    self._armed_since = None
-                    self._set_gripper_park_pose()
-                    self._sync_sink_armed(force=True)
+                    self._disarm_with_gripper_park()
                     return f"KILL ({b}) -> DISARMED"
                 return f"KILL ({b}) (already disarmed)"
 
@@ -702,17 +703,10 @@ class ControlService:
                             self._set_gripper_park_pose()
                             self._sync_sink_armed(force=True)
                             return f"REFUSED ARM ({b}): {why}"
-                    self.state.set_armed(True)
-                    hold_s = float(getattr(cfg, "ARM_HW_INIT_HOLD_S", 0.0) or 0.0)
-                    self._armed_since = time.time() + hold_s
-                    self._set_gripper_park_pose()
-                    self._sync_sink_armed(force=True)
+                    self._arm_with_gripper_park()
                     return f"TOGGLE ({b}) -> ARMED"
                 else:
-                    self.state.set_armed(False)
-                    self._armed_since = None
-                    self._set_gripper_park_pose()
-                    self._sync_sink_armed(force=True)
+                    self._disarm_with_gripper_park()
                     return f"TOGGLE ({b}) -> DISARMED"
 
         return None
@@ -746,10 +740,7 @@ class ControlService:
                     if self._stale_since is None:
                         self._stale_since = now
                     elif (now - self._stale_since) >= self.failsafe_disarm_s:
-                        self.state.set_armed(False)
-                        self._armed_since = None
-                        self._set_gripper_park_pose()
-                        self._sync_sink_armed(force=True)
+                        self._disarm_with_gripper_park()
                         arming_event = f"FAILSAFE (stale>{self.failsafe_disarm_s:.1f}s) -> DISARMED"
                 else:
                     self._stale_since = None
@@ -757,10 +748,7 @@ class ControlService:
             # Deadman: if enabled, you must hold the button to remain armed.
             if self.state.is_armed() and self.deadman_button and fresh_pilot is not None:
                 if not bool(getattr(fresh_pilot.buttons, self.deadman_button, False)):
-                    self.state.set_armed(False)
-                    self._armed_since = None
-                    self._set_gripper_park_pose()
-                    self._sync_sink_armed(force=True)
+                    self._disarm_with_gripper_park()
                     arming_event = f"DEADMAN ({self.deadman_button}) released -> DISARMED"
 
             if fresh_pilot is None or not self.state.is_armed():
@@ -1094,6 +1082,42 @@ class ControlService:
         self._gripper_last_yaw = float(self._gripper_park_yaw)
         self._gripper_last_left = float(self._gripper_park_left)
         self._gripper_last_right = float(self._gripper_park_right)
+
+    def _gripper_park_payload(self) -> Dict[str, float]:
+        if not self._gripper_enabled:
+            return {}
+        self._set_gripper_park_pose()
+        return {
+            self._gripper_left_key: float(self._gripper_last_left),
+            self._gripper_right_key: float(self._gripper_last_right),
+        }
+
+    def _send_gripper_park_pose(self, *, settle_s: float = 0.0) -> None:
+        if not self._gripper_park_on_arm_disarm:
+            return
+        payload = self._gripper_park_payload()
+        if not payload:
+            return
+        self._send_to_hw(payload)
+        if settle_s > 0.0 and (not self.dry_run) and self._hw_sink is not None:
+            time.sleep(float(settle_s))
+
+    def _arm_with_gripper_park(self) -> None:
+        self.state.set_armed(True)
+        hold_s = float(getattr(cfg, "ARM_HW_INIT_HOLD_S", 0.0) or 0.0)
+        self._armed_since = time.time() + hold_s
+        self._set_gripper_park_pose()
+        self._sync_sink_armed(force=True)
+        self._send_gripper_park_pose(settle_s=0.0)
+
+    def _disarm_with_gripper_park(self) -> None:
+        # Send the park command while the PWM sink is still armed, then give the
+        # servos a short window to move before PWM is disabled.
+        self._send_gripper_park_pose(settle_s=self._gripper_park_settle_s)
+        self.state.set_armed(False)
+        self._armed_since = None
+        self._set_gripper_park_pose()
+        self._sync_sink_armed(force=True)
 
     def _compute_lights(self, pilot: Optional[PilotFrame]) -> Optional[float]:
         """Return a normalized lights value in [0..1], or None if lights disabled."""
