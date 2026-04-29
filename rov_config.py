@@ -592,10 +592,10 @@ GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Keep the differential wrist servos powered on disarm so the arm stays folded in.
 GRIPPER_HOLD_PWM_ON_DISARM = False # if False, the servos will be unpowered on disarm (arm will go limp)
-# Park the differential wrist in a tucked pose on transitions so it protrudes less.
-# This roughly matches commanding gripper_pitch=-0.95 and gripper_yaw=+0.95.
-GRIPPER_DISARM_PITCH = -0.95
-GRIPPER_DISARM_YAW = 0.95
+# Park the differential wrist on transitions. Pitch is preserved first; yaw is
+# limited if the requested pitch+yaw pose exceeds the two-servo range.
+GRIPPER_DISARM_PITCH = 0.25
+GRIPPER_DISARM_YAW = -1.0
 # On arm, default back to the same tucked pose instead of reviving the last live command.
 GRIPPER_ARM_PITCH = GRIPPER_DISARM_PITCH
 GRIPPER_ARM_YAW = GRIPPER_DISARM_YAW

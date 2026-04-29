@@ -393,8 +393,10 @@ def start_control_service():
                         if disarm_pitch is not None:
                             pitch_v = float(disarm_pitch)
                             yaw_v = float(disarm_yaw or 0.0)
-                            left_disarm = _clamp_signed_norm(pitch_v + yaw_v)
-                            right_disarm = _clamp_signed_norm(pitch_v - yaw_v)
+                            pitch_v, yaw_v = ControlService._limit_gripper_axes_preserve_pitch(pitch_v, yaw_v)
+                            left_disarm, right_disarm = ControlService._mix_gripper_axes(pitch_v, yaw_v)
+                            left_disarm = _clamp_signed_norm(left_disarm)
+                            right_disarm = _clamp_signed_norm(right_disarm)
 
                         gripper_cfg_base = dict(
                             min_us=int(getattr(cfg, "GRIPPER_SERVO_MIN_US", 500)),
