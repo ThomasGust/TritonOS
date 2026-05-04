@@ -90,31 +90,30 @@ DEPTH_HOLD_ENABLE = True
 DEPTH_HOLD_SENSOR_STALE_S = 2.0
 
 # Low-pass filter time constant on depth (seconds).
-# A slightly shorter filter helps the hold react sooner in a shallow pool while
-# still smoothing sensor noise.
+# Keep enough smoothing to avoid pressure-sensor chatter without adding much lag.
 DEPTH_HOLD_LPF_TAU_S = 0.30
 
 # PI(D) gains (heave-command per meter / meter-second)
-DEPTH_HOLD_KP = 0.55
-DEPTH_HOLD_KI = 0.12
-DEPTH_HOLD_KD = 0.00
+DEPTH_HOLD_KP = 0.45
+DEPTH_HOLD_KI = 0.06
+DEPTH_HOLD_KD = 0.08
 
 # Error deadband in meters (reduces thruster chatter near setpoint)
-DEPTH_HOLD_ERROR_DEADBAND_M = 0.015
+DEPTH_HOLD_ERROR_DEADBAND_M = 0.035
 
 # Integrator clamp (in heave-command units)
-DEPTH_HOLD_I_LIMIT = 0.25
+DEPTH_HOLD_I_LIMIT = 0.15
 
 # Output clamp (in heave command units; keep < 1.0 while tuning)
-DEPTH_HOLD_OUT_LIMIT = 0.55
+DEPTH_HOLD_OUT_LIMIT = 0.45
 
 # If the controller pushes the wrong way, flip this to -1.0.
 DEPTH_HOLD_SIGN = 1.0
 
 # "Walk target" behavior: stick commands move the target depth; releasing holds.
 DEPTH_HOLD_WALK_TARGET = True
-DEPTH_HOLD_WALK_DEADBAND = 0.08
-DEPTH_HOLD_WALK_RATE_MPS = 0.60  # full stick => ~0.6 m/s target change
+DEPTH_HOLD_WALK_DEADBAND = 0.10
+DEPTH_HOLD_WALK_RATE_MPS = 0.45  # full stick => ~0.45 m/s target change
 
 # Optional clamp on target depth (meters, depth positive down). Set to None to disable.
 DEPTH_HOLD_TARGET_MIN_M = None
