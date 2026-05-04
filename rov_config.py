@@ -99,7 +99,7 @@ DEPTH_HOLD_KI = 0.06
 DEPTH_HOLD_KD = 0.08
 
 # Error deadband in meters (reduces thruster chatter near setpoint)
-DEPTH_HOLD_ERROR_DEADBAND_M = 0.035
+DEPTH_HOLD_ERROR_DEADBAND_M = 0.010
 
 # Integrator clamp (in heave-command units)
 DEPTH_HOLD_I_LIMIT = 0.15
