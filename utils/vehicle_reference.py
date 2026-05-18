@@ -1,26 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
-
-import numpy as np
-
-from triton_ahrs.calibration import Mount, load_json, save_json
-from triton_ahrs.quaternion import Quaternion
+from typing import Any, Dict, Optional
 
 
 DEFAULT_DEPTH_REFERENCE_PATH = "calibration/depth_reference.json"
-DEFAULT_FLAT_MOUNT_PATH = "calibration/flat_mount.json"
-
-
-def _normalize3(v: Iterable[float]) -> Optional[np.ndarray]:
-    a = np.array([float(x) for x in v], dtype=float).reshape(3)
-    n = float(np.linalg.norm(a))
-    if (not math.isfinite(n)) or n <= 1e-12:
-        return None
-    return a / n
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -32,7 +19,7 @@ def load_optional_json(path: str | Path) -> Optional[Dict[str, Any]]:
     if not p.exists():
         return None
     try:
-        data = load_json(p)
+        data = json.loads(p.read_text())
     except Exception:
         return None
     return dict(data) if isinstance(data, dict) else None
@@ -56,52 +43,11 @@ def save_surface_pressure_reference(path: str | Path, surface_pressure_mbar: flo
     }
     if meta:
         payload["meta"] = dict(meta)
-    save_json(payload, resolve_path(path))
-
-
-def compute_level_mount(accel_xyz: Iterable[float], *, yaw_deg: float = 0.0) -> Mount:
-    a_n = _normalize3(accel_xyz)
-    if a_n is None:
-        return Mount.identity()
-
-    z_b = np.array([0.0, 0.0, 1.0], dtype=float)
-    q_level = Quaternion.from_two_vectors(a_n, z_b)
-    yaw_rad = math.radians(float(yaw_deg))
-    q_yaw = Quaternion.from_axis_angle((0.0, 0.0, 1.0), yaw_rad) if abs(yaw_rad) > 1e-12 else Quaternion.identity()
-    q_extra = (q_yaw * q_level).normalized()
-    return Mount(R=q_extra.to_rotation_matrix())
-
-
-def average_accel_samples(board: Any, *, samples: int, delay_s: float) -> np.ndarray:
-    acc = np.zeros(3, dtype=float)
-    n = 0
-    for _ in range(max(1, int(samples))):
-        a = board.read_accel()
-        acc += np.array([float(a.x), float(a.y), float(a.z)], dtype=float)
-        n += 1
-        if delay_s > 0:
-            time.sleep(float(delay_s))
-    if n <= 0:
-        raise RuntimeError("No accelerometer samples captured")
-    return acc / float(n)
-
-
-def save_mount_reference(path: str | Path, mount: Mount, *, meta: Optional[Dict[str, Any]] = None) -> None:
-    payload = mount.to_dict()
-    payload["created_ts"] = time.time()
-    if meta:
-        payload["meta"] = dict(meta)
-    save_json(payload, resolve_path(path))
-
-
-def load_mount_reference(path: str | Path) -> Optional[Mount]:
-    data = load_optional_json(path)
-    if not data:
-        return None
-    try:
-        return Mount.from_dict(data)
-    except Exception:
-        return None
+    path_obj = resolve_path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path_obj.with_suffix(path_obj.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path_obj)
 
 
 def build_depth_sensor_from_config(cfg: Any) -> Any:
@@ -170,6 +116,3 @@ def capture_surface_pressure_reference(cfg: Any, *, samples: int, delay_s: float
     return sum(pressures) / float(len(pressures))
 
 
-def capture_flat_mount_reference(board: Any, *, samples: int, delay_s: float, yaw_deg: float) -> tuple[Mount, np.ndarray]:
-    accel_avg = average_accel_samples(board, samples=samples, delay_s=delay_s)
-    return (compute_level_mount(accel_avg, yaw_deg=yaw_deg), accel_avg)

@@ -16,8 +16,7 @@ from motion.channel_map import ChannelMap
 
 from control.mixer import EightThrusterMixer, SimpleGroupMixer, global_limit
 from control.depth_hold import DepthHoldController, DepthHoldConfig
-from control.attitude_hold import AttitudeHoldController, AttitudeHoldConfig
-from control.sensor_tap import DepthSensorTap, AttitudeSensorTap
+from control.sensor_tap import DepthSensorTap
 
 
 @dataclass
@@ -422,75 +421,21 @@ class ControlService:
                     print("[rov/control] depth hold disabled (config/init failed):", e)
                 self._depth_hold = None
 
-        # --- attitude hold (pitch & roll) ----------------------------------
-        self._attitude_hold: Optional[AttitudeHoldController] = None
-        self._attitude_tap: Optional[AttitudeSensorTap] = None
-        self._last_attitude_status: Dict[str, Any] = {}
-        self._last_attitude_status_ts: Optional[float] = None
-
-        if bool(getattr(cfg, "ATTITUDE_HOLD_ENABLE", False)):
-            try:
-                self._attitude_tap = AttitudeSensorTap(getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001"))
-            except Exception as e:
-                if self.debug:
-                    print("[rov/control] attitude hold disabled (sensor tap init failed):", e)
-                self._attitude_tap = None
-
-            try:
-                ah_cfg = AttitudeHoldConfig(
-                    sensor_stale_s=float(getattr(cfg, "ATTITUDE_HOLD_SENSOR_STALE_S", 1.0)),
-                    lpf_tau_s=float(getattr(cfg, "ATTITUDE_HOLD_LPF_TAU_S", 0.15)),
-                    kp=float(getattr(cfg, "ATTITUDE_HOLD_KP", 0.020)),
-                    ki=float(getattr(cfg, "ATTITUDE_HOLD_KI", 0.005)),
-                    kd=float(getattr(cfg, "ATTITUDE_HOLD_KD", 0.002)),
-                    error_deadband_deg=float(getattr(cfg, "ATTITUDE_HOLD_ERROR_DEADBAND_DEG", 0.5)),
-                    deadband_i_decay=float(getattr(cfg, "ATTITUDE_HOLD_DEADBAND_I_DECAY", 0.90)),
-                    i_limit=float(getattr(cfg, "ATTITUDE_HOLD_I_LIMIT", 0.20)),
-                    out_limit=float(getattr(cfg, "ATTITUDE_HOLD_OUT_LIMIT", 0.40)),
-                    pitch_sign=float(getattr(cfg, "ATTITUDE_HOLD_PITCH_SIGN", -1.0)),
-                    roll_sign=float(getattr(cfg, "ATTITUDE_HOLD_ROLL_SIGN", -1.0)),
-                    walk_target=bool(getattr(cfg, "ATTITUDE_HOLD_WALK_TARGET", True)),
-                    walk_deadband=float(getattr(cfg, "ATTITUDE_HOLD_WALK_DEADBAND", 0.08)),
-                    walk_rate_dps=float(getattr(cfg, "ATTITUDE_HOLD_WALK_RATE_DPS", 15.0)),
-                    target_min_deg=getattr(cfg, "ATTITUDE_HOLD_TARGET_MIN_DEG", -30.0),
-                    target_max_deg=getattr(cfg, "ATTITUDE_HOLD_TARGET_MAX_DEG", 30.0),
-                )
-                self._attitude_hold = AttitudeHoldController(ah_cfg)
-            except Exception as e:
-                if self.debug:
-                    print("[rov/control] attitude hold disabled (config/init failed):", e)
-                self._attitude_hold = None
-
     def _set_depth_status(self, status: Dict[str, Any]) -> None:
         with self._hold_status_lock:
             self._last_depth_status = dict(status or {})
             self._last_depth_status_ts = time.time()
-
-    def _set_attitude_status(self, status: Dict[str, Any]) -> None:
-        with self._hold_status_lock:
-            self._last_attitude_status = dict(status or {})
-            self._last_attitude_status_ts = time.time()
 
     def get_hold_status_snapshot(self) -> Dict[str, Any]:
         """Return a JSON-friendly snapshot of live hold state for topside/debugging."""
         now = time.time()
         with self._hold_status_lock:
             depth_status = copy.deepcopy(self._last_depth_status)
-            attitude_status = copy.deepcopy(self._last_attitude_status)
             depth_status_ts = self._last_depth_status_ts
-            attitude_status_ts = self._last_attitude_status_ts
 
         depth_target_m: Optional[float] = None
         if self._depth_hold is not None and self._depth_hold.target_depth_m is not None:
             depth_target_m = float(self._depth_hold.target_depth_m)
-
-        attitude_target_pitch_deg: Optional[float] = None
-        attitude_target_roll_deg: Optional[float] = None
-        if self._attitude_hold is not None:
-            if self._attitude_hold.target_pitch_deg is not None:
-                attitude_target_pitch_deg = float(self._attitude_hold.target_pitch_deg)
-            if self._attitude_hold.target_roll_deg is not None:
-                attitude_target_roll_deg = float(self._attitude_hold.target_roll_deg)
 
         depth_sensor: Dict[str, Any] = {
             "depth_m": None,
@@ -508,24 +453,6 @@ class ControlService:
                 "raw": copy.deepcopy(self._depth_tap.last_raw),
             }
 
-        attitude_sensor: Dict[str, Any] = {
-            "pitch_deg": None,
-            "roll_deg": None,
-            "yaw_deg": None,
-            "sample_age_s": None,
-            "stream_age_s": None,
-            "raw": {},
-        }
-        if self._attitude_tap is not None:
-            attitude_sensor = {
-                "pitch_deg": (None if self._attitude_tap.last_pitch_deg is None else float(self._attitude_tap.last_pitch_deg)),
-                "roll_deg": (None if self._attitude_tap.last_roll_deg is None else float(self._attitude_tap.last_roll_deg)),
-                "yaw_deg": (None if self._attitude_tap.last_yaw_deg is None else float(self._attitude_tap.last_yaw_deg)),
-                "sample_age_s": self._attitude_tap.age_s(now),
-                "stream_age_s": self._attitude_tap.rx_age_s(now),
-                "raw": copy.deepcopy(self._attitude_tap.last_raw),
-            }
-
         return {
             "armed": bool(self.state.is_armed()),
             "updated_ts": now,
@@ -536,15 +463,6 @@ class ControlService:
                 "status": depth_status,
                 "status_age_s": (None if depth_status_ts is None else float(now - depth_status_ts)),
                 "sensor": depth_sensor,
-            },
-            "attitude_hold": {
-                "available": self._attitude_hold is not None,
-                "sensor_available": self._attitude_tap is not None,
-                "target_pitch_deg": attitude_target_pitch_deg,
-                "target_roll_deg": attitude_target_roll_deg,
-                "status": attitude_status,
-                "status_age_s": (None if attitude_status_ts is None else float(now - attitude_status_ts)),
-                "sensor": attitude_sensor,
             },
         }
 
@@ -804,60 +722,28 @@ class ControlService:
                             # Fail open to manual heave if anything goes wrong.
                             self._set_depth_status({"enabled_cmd": enabled_cmd, "active": False, "reason": f"err:{e}"})
 
-                    # Attitude hold: modify pitch/roll commands in-place before mixing.
-                    if self._attitude_tap is not None:
-                        try:
-                            self._attitude_tap.poll()
-                        except Exception:
-                            pass
-                    if self._attitude_hold is not None:
-                        modes = fresh_pilot.modes or {}
-                        ah_enabled = bool(modes.get("attitude_hold", modes.get("attitude_hold_enabled", False)))
-                        pitch_deg = self._attitude_tap.last_pitch_deg if self._attitude_tap is not None else None
-                        roll_deg = self._attitude_tap.last_roll_deg if self._attitude_tap is not None else None
-                        att_age = self._attitude_tap.age_s(now) if self._attitude_tap is not None else None
-                        try:
-                            pitch_out, roll_out, att_st = self._attitude_hold.step(
-                                enabled=ah_enabled,
-                                manual_pitch=float(cmd6.get("pitch", 0.0)),
-                                manual_roll=float(cmd6.get("roll", 0.0)),
-                                pitch_deg=pitch_deg,
-                                roll_deg=roll_deg,
-                                sensor_age_s=att_age,
-                                dt=self.period,
-                            )
-                            cmd6["pitch"] = float(pitch_out)
-                            cmd6["roll"] = float(roll_out)
-                            self._set_attitude_status(att_st)
-                        except Exception as e:
-                            self._set_attitude_status({"enabled_cmd": ah_enabled, "active": False, "reason": f"err:{e}"})
-
                     raw_thr = self.mixer.mix(cmd6)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
                 dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
-                ah_db = float(getattr(cfg, "ATTITUDE_HOLD_MIX_DEADBAND", 0.01))
                 dh_cmd = False
-                ah_cmd = False
                 try:
                     modes = fresh_pilot.modes or {}
                     dh_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
-                    ah_cmd = bool(modes.get("attitude_hold", modes.get("attitude_hold_enabled", False)))
                 except Exception:
                     dh_cmd = False
-                    ah_cmd = False
 
                 for k, v in list(thr.items()):
                     if isinstance(k, str) and k.strip().lower() == "lights":
                         continue
 
                     db = base_db
-                    # When depth-hold or attitude-hold is enabled, allow smaller
-                    # vertical corrections so the controllers can make fine trim.
-                    if (dh_cmd or ah_cmd) and isinstance(k, str) and k.strip().upper().startswith("V_"):
-                        db = min(dh_db, ah_db) if (dh_cmd and ah_cmd) else (dh_db if dh_cmd else ah_db)
+                    # When depth hold is enabled, allow smaller vertical
+                    # corrections so the controller can make fine trim.
+                    if dh_cmd and isinstance(k, str) and k.strip().upper().startswith("V_"):
+                        db = dh_db
 
                     if abs(float(v)) < float(db):
                         thr[k] = 0.0

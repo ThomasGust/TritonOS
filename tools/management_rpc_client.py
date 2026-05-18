@@ -31,11 +31,6 @@ def main() -> int:
     p_surface.add_argument("--samples", type=int, default=20)
     p_surface.add_argument("--delay-s", type=float, default=0.02)
 
-    p_flat = sub.add_parser("capture-flat")
-    p_flat.add_argument("--samples", type=int, default=200)
-    p_flat.add_argument("--delay-s", type=float, default=0.02)
-    p_flat.add_argument("--yaw-deg", type=float, default=None)
-
     args = ap.parse_args()
 
     if args.cmd == "get-state":
@@ -45,10 +40,7 @@ def main() -> int:
     elif args.cmd == "capture-surface":
         req = {"cmd": "capture_surface_reference", "args": {"samples": args.samples, "delay_s": args.delay_s}}
     else:
-        req_args = {"samples": args.samples, "delay_s": args.delay_s}
-        if args.yaw_deg is not None:
-            req_args["yaw_deg"] = args.yaw_deg
-        req = {"cmd": "capture_flat_reference", "args": req_args}
+        raise AssertionError(f"unhandled command: {args.cmd}")
 
     print(json.dumps(_request(args.endpoint, req), indent=2, sort_keys=True))
     return 0

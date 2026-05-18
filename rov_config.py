@@ -94,7 +94,7 @@ DEPTH_HOLD_SENSOR_STALE_S = 2.0
 DEPTH_HOLD_LPF_TAU_S = 0.30
 
 # PI(D) gains (heave-command per meter / meter-second)
-DEPTH_HOLD_KP = 0.45
+DEPTH_HOLD_KP = 0.55
 DEPTH_HOLD_KI = 0.06
 DEPTH_HOLD_KD = 0.08
 
@@ -120,61 +120,7 @@ DEPTH_HOLD_TARGET_MIN_M = None
 DEPTH_HOLD_TARGET_MAX_M = None
 
 # ---------------------------------------------------------------------------
-# 2d) attitude hold (pitch & roll stabilization)
-# ---------------------------------------------------------------------------
-# Attitude hold is enabled/disabled by the pilot via PilotFrame.modes["attitude_hold"].
-# Topside now routes it through the same controller pathway as depth hold
-# (left stick click for attitude, right stick click for depth).
-# Can run simultaneously with depth hold for full 3-axis stabilization.
-
-# Master switch to compile/initialize attitude-hold support.
-ATTITUDE_HOLD_ENABLE = True
-
-# If attitude telemetry is older than this, attitude-hold will disengage to manual.
-ATTITUDE_HOLD_SENSOR_STALE_S = 1.0
-
-# Low-pass filter time constant on attitude angles (seconds).
-ATTITUDE_HOLD_LPF_TAU_S = 0.15
-
-# PID gains (command per degree / degree-second)
-ATTITUDE_HOLD_KP = 0.020
-ATTITUDE_HOLD_KI = 0.005
-ATTITUDE_HOLD_KD = 0.002
-
-# Error deadband in degrees (reduces thruster chatter near setpoint)
-ATTITUDE_HOLD_ERROR_DEADBAND_DEG = 3.0
-
-# While the attitude is inside the acceptable deadband, decay any leftover
-# integrator so small sensor jitter settles back to neutral output.
-ATTITUDE_HOLD_DEADBAND_I_DECAY = 0.90
-
-# Integrator clamp (in command units)
-ATTITUDE_HOLD_I_LIMIT = 0.20
-
-# Output clamp (in command units; keep < 1.0 while tuning)
-ATTITUDE_HOLD_OUT_LIMIT = 0.40
-
-# With the default mixer/attitude conventions, positive angle error should
-# command the opposite pitch/roll direction to level the vehicle. If your
-# vehicle corrects the wrong way, flip either sign to +1.0.
-ATTITUDE_HOLD_PITCH_SIGN = -1.0
-ATTITUDE_HOLD_ROLL_SIGN = -1.0
-
-# "Walk target" behavior: stick commands move the target angle; releasing holds.
-ATTITUDE_HOLD_WALK_TARGET = True
-ATTITUDE_HOLD_WALK_DEADBAND = 0.08
-ATTITUDE_HOLD_WALK_RATE_DPS = 15.0  # full stick => 15 deg/s target change
-
-# Optional clamp on target angles (degrees). Set to None to disable.
-ATTITUDE_HOLD_TARGET_MIN_DEG = -30.0
-ATTITUDE_HOLD_TARGET_MAX_DEG = 30.0
-
-# When attitude-hold is active, allow smaller vertical corrections through the
-# mix output deadband (same idea as DEPTH_HOLD_MIX_DEADBAND).
-ATTITUDE_HOLD_MIX_DEADBAND = 0.01
-
-# ---------------------------------------------------------------------------
-# 2b) arming safety
+# 2d) arming safety
 # ---------------------------------------------------------------------------
 # If True, the ROV will refuse to ARM unless sticks are centered and triggers
 # are at rest. This prevents "ARM -> instant max thrust" when the topside axis
@@ -565,7 +511,7 @@ LIGHTS_TRIM_US = 0
 WRIST_ROTATE_ENABLE = True
 WRIST_ROTATE_CMD_KEY = "wrist_rotate"
 
-# 9) Differential-servo gripper head (2-DOF orientation on channels 11/12)
+# 9) Differential-servo gripper head (pitch/yaw servos on channels 11/12)
 # Topside sends keyboard-derived normalized commands in PilotFrame.aux:
 #   W/S -> gripper_pitch in [-1..1]
 #   A/D -> gripper_yaw   in [-1..1]
@@ -627,174 +573,8 @@ MMC5983_USE_SET_RESET = True
 MMC5983_I2C_BUSES = (6, 1)
 MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 
-# ---------------------------------------------------------------------------
-# Magnetometer fusion (AK09915 + MMC5983)
-# ---------------------------------------------------------------------------
-# TritonOS can publish a *single* `imu.mag` vector that is a robust blend of
-# both onboard magnetometers. This mainly reduces *random* sensor noise and
-# provides some outlier rejection when the sensors disagree.
-#
-# Notes:
-#   - This does NOT replace proper hard/soft-iron calibration.
-#   - For heading, you still want an AHRS (gyro integration + mag correction).
-
-MAG_FUSION_ENABLE = True
-
-
-# Which magnetometer to publish as `imu.mag`:
-#   "fused" (default): blend AK09915 + MMC5983 for lower random noise.
-#   "mmc":   publish MMC5983 only (falls back to AK if MMC is unavailable).
-#   "ak":    publish AK09915 only.
-#
-# Note: Setting MAG_FUSION_PREFER_AK = 0.0 is *almost* equivalent to "mmc"
-# when MMC is present, but MAG_OUTPUT_MODE is clearer and sets `mag_source`
-# appropriately.
-MAG_OUTPUT_MODE = "fused"
-
-# Relative preference (higher => more weight). Default: trust MMC slightly more.
-MAG_FUSION_PREFER_MMC = 1.6
-MAG_FUSION_PREFER_AK = 1.0
-
-# Per-sensor statistics:
-MAG_FUSION_SENSOR_LPF_ALPHA = 0.20   # 0..1 (larger = faster, less smoothing)
-MAG_FUSION_NOISE_EMA_BETA = 0.05     # 0..1 (larger = faster noise tracking)
-
-# Agreement / outlier thresholds:
-MAG_FUSION_AGREE_ANGLE_DEG = 15.0
-MAG_FUSION_AGREE_NORM_FRAC = 0.12
-MAG_FUSION_OUTLIER_ANGLE_DEG = 35.0
-MAG_FUSION_OUTLIER_NORM_FRAC = 0.25
-
-# Output smoothing (seconds). Set to 0 to disable.
-MAG_FUSION_OUTPUT_LPF_TAU_S = 0.15
-# ---------------------------------------------------------------------------
-# Attitude estimation (AHRS)
-# ---------------------------------------------------------------------------
-# TritonOS can publish an additional `type='attitude'` message that contains
-# a fused orientation estimate (roll/pitch/yaw + quaternion) computed *on the
-# ROV* and streamed topside.
-#
-# Recommended settings:
-#   - Keep ATTITUDE_FUSION='robust' for stable yaw (heading) with mag spike rejection.
-#   - Tune ATTITUDE_YAW_TAU larger for smoother yaw, smaller for faster response.
-#   - If your heading still jitters, ensure your magnetometers are calibrated
-#     (hard/soft iron) and that the IMU is mounted away from high-current wiring.
-
-ATTITUDE_ENABLE = True
-ATTITUDE_RATE_HZ = 50.0
-
-# Fusion mode:
-#   - 'robust'  : 6DOF Madgwick for roll/pitch + smooth magnetometer yaw correction (recommended)
-#   - 'madgwick': classic 6DOF/9DOF Madgwick (more sensitive to mag disturbances)
-ATTITUDE_FUSION = 'robust'
-
-# Initial alignment averaging window (seconds)
-ATTITUDE_INIT_SECONDS = 2.0
-
-# Madgwick beta scheduling (higher = faster convergence but noisier)
-ATTITUDE_BETA = 0.04
-ATTITUDE_BETA_INIT = 0.60
-ATTITUDE_BETA_STATIONARY = 0.12
-ATTITUDE_WARMUP_SECONDS = 1.5
-
-# Accel gating (disable accel correction when vehicle is accelerating hard)
-ATTITUDE_ACCEL_G_TOL = 0.20          # allow +/- 0.20g deviation from 1g
-ATTITUDE_STATIONARY_GYRO_RAD = 0.08  # rad/s threshold for "stationary"
-ATTITUDE_BIAS_ADAPT_TAU = 60.0       # seconds (0 disables stationary gyro bias learning)
-
-# Robust yaw correction tuning
-ATTITUDE_YAW_TAU = 8.0               # seconds (larger = smoother yaw)
-ATTITUDE_YAW_MAX_ERR_DEG = 25.0      # clamp mag yaw error to reject spikes
-ATTITUDE_YAW_KI = 0.02               # 1/s (0 disables Z-gyro bias learning from yaw error)
-ATTITUDE_YAW_BIAS_MAX_DPS = 5.0      # clamp learned Z-bias magnitude
-ATTITUDE_YAW_BIAS_ADAPT_ERR_DEG = 10.0
-ATTITUDE_YAW_BIAS_ADAPT_GYRO_RAD = 0.35
-ATTITUDE_YAW_BIAS_ADAPT_GYRO_NORM = 0.50
-ATTITUDE_MAG_REF_TAU = 300.0         # seconds (0 disables slow ref tracking)
-
-# Motion gating for yaw correction.
-# During motion, the accelerometer sees thrust/drag in addition to gravity,
-# which corrupts the Madgwick tilt estimate. Since the yaw correction relies
-# on tilt-compensating the magnetometer, a bad tilt drives yaw in the wrong
-# direction. These gates smoothly reduce the yaw correction weight during
-# dynamics so yaw relies on gyro integration (which is accurate short-term).
-ATTITUDE_YAW_DYNAMIC_GATE = 1.5      # m/s² (0 disables); estimated non-gravity accel
-ATTITUDE_YAW_GYRO_GATE_DPS = 10.0    # deg/s (0 disables); total rotation rate
-
-# Magnetometer health gating (magnitude + step)
-ATTITUDE_MAG_TOL = 0.35              # fractional tolerance on |B| relative to baseline
-ATTITUDE_MAG_MAX_STEP = 8.0          # uT: max allowed |B| step between samples
-ATTITUDE_MAG_ENABLE_UP = 0.75        # seconds to enable mag after it becomes healthy
-ATTITUDE_MAG_ENABLE_DOWN = 0.35      # seconds to disable mag after it becomes unhealthy
-
-# Optional sensor filtering (seconds; 0 disables)
-ATTITUDE_ACCEL_LPF_TAU_S = 0.10
-ATTITUDE_MAG_LPF_TAU_S = 0.20
-ATTITUDE_GYRO_LPF_TAU_S = 0.01
-
-# Output smoothing (seconds; 0 disables).
-# Applied to the final roll/pitch/yaw after all fusion. Adds a small amount
-# of lag but removes high-frequency jitter from the published stream.
-ATTITUDE_OUTPUT_LPF_TAU_S = 0.15
-
-# Accel sign handling:
-#   - 'auto'   : choose sign that yields smallest initial roll/pitch
-#   - 'normal' : use accel as read
-#   - 'invert' : flip accel
-ATTITUDE_ACCEL_SIGN = 'auto'
-
-# Output zeroing (presentation):
-#   - ZERO_ATTITUDE: output is relative to startup attitude (startup becomes 0,0,0)
-#   - YAW_ZERO:      subtract an initial yaw reference (operator-friendly)
-ATTITUDE_ZERO_ATTITUDE_AT_START = False
-ATTITUDE_YAW_ZERO_AT_START = False
-
-# Yaw presentation mode:
-#   - 'fused'      : current estimator output (gyro + gated mag correction)
-#   - 'direct_mag' : tilt-compensated heading directly from mag + current roll/pitch
-ATTITUDE_YAW_MODE = 'direct_mag'
-
-# Auto-mount (boot-time leveling)
-#
-# If the Navigator/Pi is mounted with some *tilt* relative to the vehicle body,
-# roll/pitch will be coupled and the attitude stream won't match the robot axes.
-#
-# When you can guarantee the vehicle boots in a known "level" pose, enabling this
-# will compute a tilt-only correction from the averaged accelerometer vector during
-# the init window and apply it as an additional mount transform.
-#
-# Notes:
-#   - This fixes the common case where the electronics stack is installed "crooked".
-#   - It does NOT automatically determine any yaw-about-Z mounting angle.
-#     If your board is also rotated in yaw (not pointing straight ahead), you can
-#     either set ATTITUDE_YAW_ZERO_AT_START=True (to make yaw=0 at boot) or use
-#     ATTITUDE_AUTO_MOUNT_YAW_DEG below to rotate axes.
-ATTITUDE_AUTO_MOUNT_FROM_LEVEL = True
-
-# Optional extra yaw rotation (degrees) applied after leveling. Use this if your
-# board is mounted rotated left/right relative to the vehicle forward axis.
-ATTITUDE_AUTO_MOUNT_YAW_DEG = 90
-
-# Optional: save the computed mount matrix (JSON) so you can reuse it later.
-# The set_vehicle_reference tool writes the same file so startup no longer needs
-# to happen in a known flat pose once you have captured it.
-ATTITUDE_AUTO_MOUNT_SAVE_PATH = 'calibration/flat_mount.json'
-
-# Optional calibration files (JSON) produced by tools in triton_ahrs/.
-# Leave blank to disable.
-ATTITUDE_GYRO_CAL = ''
-ATTITUDE_MAG_CAL = ''
-ATTITUDE_MOUNT = 'calibration/flat_mount.json'
-
-# If a saved mount file is present, prefer it and skip the boot-time auto-level
-# step so the vehicle no longer depends on being flat at startup.
-ATTITUDE_AUTO_MOUNT_WITH_SAVED_MOUNT = False
-
-# Magnetometer input selection for attitude (defaults to MAG_OUTPUT_MODE)
-#   'fused' | 'mmc' | 'ak'
-ATTITUDE_MAG_OUTPUT_MODE = MAG_OUTPUT_MODE
-# Throttle magnetometer reads for the AHRS (Hz). Set <=0 to read at full AHRS rate.
-ATTITUDE_MAG_RATE_HZ = 25.0
+# IMU telemetry publishes raw accel, gyro, AK09915 mag, and optional MMC5983
+# mag samples. Higher-level orientation messages will be rebuilt separately.
 
 
 # ---------------------------------------------------------------------------

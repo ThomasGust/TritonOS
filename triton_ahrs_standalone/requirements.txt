@@ -1,3 +1,0 @@
-numpy>=1.20
-smbus2>=0.4
-spidev>=3.5

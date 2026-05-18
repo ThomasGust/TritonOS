@@ -15,13 +15,9 @@ from utils.config_store import (
 )
 from utils.vehicle_reference import (
     DEFAULT_DEPTH_REFERENCE_PATH,
-    DEFAULT_FLAT_MOUNT_PATH,
-    capture_flat_mount_reference,
     capture_surface_pressure_reference,
-    load_mount_reference,
     load_surface_pressure_reference_mbar,
     resolve_path,
-    save_mount_reference,
     save_surface_pressure_reference,
 )
 
@@ -60,17 +56,12 @@ class ManagementRpcService:
 
     def _reference_state(self, cfg_mod: Any) -> Dict[str, Any]:
         depth_path = str(getattr(cfg_mod, "EXTERNAL_DEPTH_REFERENCE_PATH", DEFAULT_DEPTH_REFERENCE_PATH))
-        mount_path = str(getattr(cfg_mod, "ATTITUDE_MOUNT", DEFAULT_FLAT_MOUNT_PATH))
         pressure = load_surface_pressure_reference_mbar(depth_path)
-        mount = load_mount_reference(mount_path)
         return {
             "depth_reference_path": depth_path,
             "depth_reference_exists": resolve_path(depth_path).exists(),
             "surface_pressure_mbar": pressure,
             "depth_sensor_to_top_m": float(getattr(cfg_mod, "EXTERNAL_DEPTH_SENSOR_TO_TOP_M", 0.0)),
-            "mount_path": mount_path,
-            "mount_exists": resolve_path(mount_path).exists(),
-            "mount_loaded": mount is not None,
         }
 
     def _runtime_state(self) -> Dict[str, Any]:
@@ -82,15 +73,6 @@ class ManagementRpcService:
                 "available": False,
                 "sensor_available": False,
                 "target_m": None,
-                "status": {},
-                "status_age_s": None,
-                "sensor": {},
-            },
-            "attitude_hold": {
-                "available": False,
-                "sensor_available": False,
-                "target_pitch_deg": None,
-                "target_roll_deg": None,
                 "status": {},
                 "status_age_s": None,
                 "sensor": {},
@@ -127,7 +109,6 @@ class ManagementRpcService:
                         "set_config",
                         "set_surface_reference",
                         "capture_surface_reference",
-                        "capture_flat_reference",
                     ],
                 },
             }
@@ -198,40 +179,6 @@ class ManagementRpcService:
                 "data": {
                     "surface_pressure_mbar": pressure_mbar,
                     "path": depth_path,
-                    "restart_required": True,
-                },
-            }
-
-        if cmd == "capture_flat_reference":
-            samples = int(args.get("samples", 200))
-            delay_s = float(args.get("delay_s", 0.02))
-            yaw_deg = float(args.get("yaw_deg", getattr(cfg_mod, "ATTITUDE_AUTO_MOUNT_YAW_DEG", 0.0)))
-            mount_path = str(args.get("path") or getattr(cfg_mod, "ATTITUDE_MOUNT", DEFAULT_FLAT_MOUNT_PATH))
-            from sensors.navigator import NavigatorBoard
-
-            board = NavigatorBoard()
-            mount, accel_avg = capture_flat_mount_reference(
-                board,
-                samples=samples,
-                delay_s=delay_s,
-                yaw_deg=yaw_deg,
-            )
-            save_mount_reference(
-                mount_path,
-                mount,
-                meta={
-                    "source": "rpc_capture",
-                    "samples": samples,
-                    "delay_s": delay_s,
-                    "yaw_deg": yaw_deg,
-                    "accel_avg": [float(x) for x in accel_avg.tolist()],
-                },
-            )
-            return {
-                "ok": True,
-                "data": {
-                    "path": mount_path,
-                    "yaw_deg": yaw_deg,
                     "restart_required": True,
                 },
             }

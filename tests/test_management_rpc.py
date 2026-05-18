@@ -16,13 +16,11 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
     root = _scratch_dir()
     try:
         depth_path = root / "depth_reference.json"
-        mount_path = root / "flat_mount.json"
 
         cfg_stub = SimpleNamespace(
             __file__="sample_rov_config.py",
             EXTERNAL_DEPTH_REFERENCE_PATH=str(depth_path),
             EXTERNAL_DEPTH_SENSOR_TO_TOP_M=0.15,
-            ATTITUDE_MOUNT=str(mount_path),
         )
 
         runtime_snapshot = {
@@ -35,15 +33,6 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
                 "status": {"enabled_cmd": True, "active": True, "reason": "hold"},
                 "status_age_s": 0.05,
                 "sensor": {"depth_m": 1.18},
-            },
-            "attitude_hold": {
-                "available": True,
-                "sensor_available": True,
-                "target_pitch_deg": 0.0,
-                "target_roll_deg": 0.0,
-                "status": {"enabled_cmd": True, "active": False, "reason": "stale_sensor"},
-                "status_age_s": 0.08,
-                "sensor": {"pitch_deg": 1.0, "roll_deg": -2.0, "yaw_deg": 90.0},
             },
         }
 
@@ -60,13 +49,12 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
         assert resp["data"]["config"]["DEPTH_HOLD_KP"] == 0.55
         assert resp["data"]["runtime"]["control_loop_available"] is True
         assert resp["data"]["runtime"]["depth_hold"]["target_m"] == 1.2
-        assert resp["data"]["runtime"]["attitude_hold"]["sensor"]["yaw_deg"] == 90.0
         assert "get_hold_status" in resp["data"]["commands"]
 
         resp_runtime = svc._handle_request({"cmd": "get_hold_status"})
         assert resp_runtime["ok"] is True
         assert resp_runtime["data"]["control_loop_available"] is True
-        assert resp_runtime["data"]["attitude_hold"]["status"]["reason"] == "stale_sensor"
+        assert resp_runtime["data"]["depth_hold"]["status"]["reason"] == "hold"
 
         resp2 = svc._handle_request(
             {"cmd": "set_surface_reference", "args": {"surface_pressure_mbar": 1014.5}}

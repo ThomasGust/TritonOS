@@ -112,7 +112,6 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
             Bar02Sensor,
             Bar30Sensor,
         )
-        from sensors.attitude import AttitudeSensor
         from sensors.sensor_pub_service import SensorPublisherService
     except Exception as e:
         print("[rov/main] sensors: could not import sensors modules:", e)
@@ -123,19 +122,10 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
 
     sensor_list = [
         IMUSensor(board, rate_hz=20.0),
-        # High-level attitude estimate derived from IMU + magnetometers.
-        # Disable with ATTITUDE_ENABLE=False.
-        (AttitudeSensor(
-            board,
-            rate_hz=float(getattr(cfg, 'ATTITUDE_RATE_HZ', 50.0)),
-        ) if bool(getattr(cfg, 'ATTITUDE_ENABLE', True)) else None),
         EnvSensor(board, rate_hz=2.0),
         LeakSensor(board, rate_hz=2.0),
         ADCSensor(board, rate_hz=5.0),
     ]
-
-    # Remove None entries (when ATTITUDE_ENABLE is False)
-    sensor_list = [s for s in sensor_list if s is not None]
 
     # Power Sense Module -> publish converted voltage/current telemetry.
     if bool(getattr(cfg, "POWER_SENSE_ENABLE", False)):

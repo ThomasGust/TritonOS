@@ -64,7 +64,8 @@ class ICM20602:
         time.sleep(0.05)
 
         # Set sample rate and basic filtering.
-        # Keep it conservative; the AHRS runs its own filtering.
+        # Keep it conservative so raw IMU telemetry stays stable without
+        # hiding dynamics from downstream consumers.
         self.bus.write_byte_data(self.addr, self.REG_SMPLRT_DIV, 0x04)  # ~200 Hz base
         self.bus.write_byte_data(self.addr, self.REG_CONFIG, 0x03)      # DLPF
 

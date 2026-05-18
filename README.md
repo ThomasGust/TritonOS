@@ -1,60 +1,20 @@
-# Triton Standalone AHRS (RPi + Navigator)
+# TritonOS
 
-This is a standalone attitude estimator (AHRS) designed to run on a Raspberry Pi + Blue Robotics Navigator-style sensor stack.
+TritonOS is the onboard runtime for the ROV. It starts the pilot/control loop,
+hardware output sink, sensor publisher, video RPC service, and management RPC
+service used by the topside TritonPilot app.
 
-Features:
-- Reads **ICM20602 accel/gyro** (SPI preferred, I2C fallback)
-- Reads **AK09915 mag** (I2C), optional **MMC5983** if present
-- **Madgwick quaternion AHRS** (IMU-only roll/pitch) + **robust magnetometer yaw correction** (default), with classic 9DOF Madgwick available
-- **Startup gyro bias calibration**
-- **Startup attitude seeding** (fast lock, no long settle)
-- **Gain scheduling** (fast warmup, stable steady-state)
-- **Accel/mag health gating** + mag hysteresis
-- Optional **stationary gyro-bias refinement**
-- Optional **LPF** on accel/mag
-- Output as human text or JSON lines
+Current stability software is intentionally limited to depth hold. Raw IMU
+telemetry still publishes accelerometer, gyroscope, AK09915 magnetometer, and
+optional MMC5983 magnetometer samples so the next estimator pipeline can be
+built from clean primitives.
 
-## Install
-
-Enable SPI + I2C with `raspi-config`, then:
+## Test
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
+pytest
 ```
 
-## Run
-
-You can run either module path:
-
-```bash
-python -m triton_ahrs.run_ahrs --auto-gyro-cal --yaw-zero --prefer-spi --zero-attitude
-# OR (compat wrapper)
-python -m triton_ahrs_standalone.triton_ahrs.run_ahrs --auto-gyro-cal --yaw-zero --prefer-spi --zero-attitude
-```
-
-## Calibration (recommended)
-
-Gyro bias:
-```bash
-python -m triton_ahrs.calibrate_gyro --seconds 8 --out gyro_cal.json --prefer-spi
-```
-
-Mag calibration:
-```bash
-python -m triton_ahrs.calibrate_mag --seconds 90 --out mag_cal.json --prefer-spi
-```
-
-Then:
-```bash
-python -m triton_ahrs.run_ahrs --gyro-cal gyro_cal.json --mag-cal mag_cal.json --yaw-zero --prefer-spi --zero-attitude
-```
-
-## Notes
-
-- If you still see a 180° flip when level, try:
-  - `--accel-sign invert` (forces accel sign), or
-  - provide a proper mount matrix (`--mount mount.json`).
-
-- For operator-friendly behavior, `--zero-attitude` is recommended during bringup.
+The pytest configuration uses a repo-local `.pytest-tmp` directory and skips
+tests marked `hardware` by default so the suite can run on a development
+machine without touching physical ROV devices.
