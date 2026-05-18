@@ -22,7 +22,7 @@ def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
     """Best-effort low-latency / QoS hints for telemetry sockets."""
     for opt, val in [
         (getattr(zmq, "LINGER", None), 0),
-        (getattr(zmq, "SNDHWM", None), 1),
+        (getattr(zmq, "SNDHWM", None), 1000),
         (getattr(zmq, "SNDTIMEO", None), 0),
     ]:
         try:
@@ -31,7 +31,6 @@ def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
         except Exception:
             pass
     for opt, val in [
-        (getattr(zmq, "CONFLATE", None), 1),
         (getattr(zmq, "IMMEDIATE", None), 1),
         (getattr(zmq, "TCP_NODELAY", None), 1),
         (getattr(zmq, "TOS", None), 0x88),   # AF41 telemetry

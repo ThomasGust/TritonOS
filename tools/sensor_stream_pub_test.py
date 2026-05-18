@@ -11,16 +11,16 @@ The message shapes match what the topside UI expects (see
 Examples
 --------
   # Bind using rov_config.SENSOR_PUB_ENDPOINT (default tcp://0.0.0.0:6001)
-  python3 tests/sensor_stream_pub_test.py
+  python3 tools/sensor_stream_pub_test.py
 
   # Force fake sensors (no hardware required)
-  python3 tests/sensor_stream_pub_test.py --fake
+  python3 tools/sensor_stream_pub_test.py --fake
 
   # Include Bar30 on I2C bus 6
-  python3 tests/sensor_stream_pub_test.py --bar30 --bar30-bus 6
+  python3 tools/sensor_stream_pub_test.py --bar30 --bar30-bus 6
 
 On the topside computer, run:
-  python3 tests/sensor_stream_sub_test.py --endpoint tcp://<pi-ip>:6001
+  python3 tools/sensor_stream_sub_test.py --endpoint tcp://<pi-ip>:6001
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import zmq
 
-# Ensure repo root is on sys.path when run as `python3 tests/...`
+# Ensure repo root is on sys.path when run as `python3 tools/...`
 _THIS = Path(__file__).resolve()
 _REPO_ROOT = _THIS.parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -91,6 +91,11 @@ class FakeIMUSensor(BaseSensor):
             "accel": {"x": ax, "y": ay, "z": az},
             "gyro": {"x": gx, "y": gy, "z": gz},
             "mag": {"x": mx, "y": my, "z": mz},
+            "mag_source": "ak09915",
+            "mag_sources": {
+                "ak09915": {"x": mx, "y": my, "z": mz, "ts": time.time()},
+                "mmc5983": {"x": mx * 1.05, "y": my + 0.03, "z": mz * 0.98, "ts": time.time()},
+            },
         }
 
 
