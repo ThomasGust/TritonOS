@@ -210,13 +210,39 @@ github_network_ready() {
 }
 
 diagnose_git_failure() {
+  local status=""
+  if [[ -d "$DEST_DIR/.git" ]]; then
+    status="$(run_as_target git -C "$DEST_DIR" status --short 2>/dev/null || true)"
+  fi
+
   cat >&2 <<EOF
 
 [TritonOS update] Git fetch/pull failed.
 
 Most common causes:
-  1. The Pi cannot reach github.com on the current network.
-  2. The repository is private and $TARGET_USER has no stored GitHub credential.
+  1. The checkout has local modified/untracked files that block the merge.
+  2. The Pi cannot reach github.com on the current network.
+  3. The repository is private and $TARGET_USER has no stored GitHub credential.
+
+EOF
+
+  if [[ -n "$status" ]]; then
+    cat >&2 <<EOF
+Current local checkout changes:
+$status
+
+To preserve those local changes before updating, inspect them and then run:
+  cd "$DEST_DIR"
+  git stash push --include-untracked -m 'pre-update local changes'
+  sudo bash bin/update_code.sh
+
+Avoid git reset/clean unless you are certain there is no local calibration or
+bench data you want to keep.
+
+EOF
+  fi
+
+  cat >&2 <<EOF
 
 Quick checks on the Pi:
   ping -c 2 github.com
