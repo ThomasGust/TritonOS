@@ -1,28 +1,4 @@
 #!/usr/bin/env bash
-#This is bad practice, the pat in question though is read only to one repository so I don't really care
-set -euo pipefail
-
-REPO_URL="https://github.com/ThomasGust/TritonOS.git"
-DEST_DIR="/home/TritonOS"
-
-# HARD-CODED CREDS (yes, bad practice)
-GIT_USER="ThomasGust"
-GIT_TOKEN="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"
-
-sudo apt-get update -y
-sudo apt-get install -y --no-install-recommends git ca-certificates curl
-
-# Store credentials (plaintext on disk).
-# Git's "store" helper writes to ~/.git-credentials. 
-git config --global credential.helper store
-printf "protocol=https\nhost=github.com\nusername=%s\npassword=%s\n\n" \
-  "$GIT_USER" "$GIT_TOKEN" | git credential approve >/dev/null
-
-if [ -d "$DEST_DIR/.git" ]; then
-  git -C "$DEST_DIR" pull --ff-only
-else
-  git clone "$REPO_URL" "$DEST_DIR"
-fi
 # install_tritonos_pi.sh
 #
 # Usage (from your TritonOS repo root):
@@ -34,6 +10,9 @@ fi
 #   --no-navigator-overlay      (skip BlueRobotics board overlay script)
 #   --no-legacy-camera          (skip enabling legacy camera + bcm2835-v4l2)
 #   --recreate-venv             (delete and rebuild .venv before reinstalling deps)
+#   --skip-apt-update           (use existing apt indexes)
+#   --skip-os-packages          (skip apt package installation)
+#   --skip-python-deps          (reuse the existing venv without pip installs)
 #   --reboot                    (reboot automatically at the end)
 
 set -euo pipefail
@@ -46,6 +25,9 @@ DO_NAV_OVERLAY=1
 DO_LEGACY_CAMERA=1
 DO_REBOOT=0
 DO_RECREATE_VENV=0
+DO_APT_UPDATE=1
+DO_OS_PACKAGES=1
+DO_PYTHON_DEPS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,6 +49,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --recreate-venv)
       DO_RECREATE_VENV=1
+      shift
+      ;;
+    --skip-apt-update)
+      DO_APT_UPDATE=0
+      shift
+      ;;
+    --skip-os-packages)
+      DO_OS_PACKAGES=0
+      DO_APT_UPDATE=0
+      shift
+      ;;
+    --skip-python-deps)
+      DO_PYTHON_DEPS=0
       shift
       ;;
     *)
@@ -105,16 +100,42 @@ echo "[TritonOS] Boot config:  $BOOT_CONFIG"
 # ----------------------------
 # Helpers
 # ----------------------------
+APT_OPTS=(
+  -o Acquire::ForceIPv4=true
+  -o Acquire::Retries=1
+  -o Acquire::http::Timeout=8
+  -o Acquire::https::Timeout=8
+  -o DPkg::Lock::Timeout=30
+)
+
+CURL_OPTS=(
+  --fail
+  --show-error
+  --silent
+  --location
+  --connect-timeout 8
+  --max-time 90
+  --retry 2
+  --retry-delay 1
+)
+
+apt_update_quick() {
+  echo "[TritonOS] Refreshing apt indexes with short IPv4-only timeouts..."
+  DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" update
+}
+
 apt_install() {
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+  DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" install -y --no-install-recommends "$@"
 }
 
 apt_install_optional() {
   local pkg="$1"
   if apt-cache show "$pkg" >/dev/null 2>&1; then
     apt_install "$pkg"
+    return 0
   else
     echo "[TritonOS] Optional package not found in apt repo: $pkg (skipping)"
+    return 1
   fi
 }
 
@@ -209,7 +230,7 @@ install_python_deps() {
     # from apt. Do not use --upgrade here: it can force pip to replace working
     # distro packages (for example python3-spidev) with a source build that then
     # fails or becomes less stable.
-    venv_python -m pip install --prefer-binary -r "$PROJECT_DIR/requirements.txt"
+    venv_python -m pip install --timeout 30 --retries 2 --prefer-binary -r "$PROJECT_DIR/requirements.txt"
   fi
 }
 
@@ -230,7 +251,7 @@ install_navigator_bindings() {
   clean_navigator_install
   # The import name is ``bluerobotics_navigator`` but the canonical PyPI
   # project name is ``bluerobotics-navigator``.
-  venv_python -m pip install --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
+  venv_python -m pip install --timeout 30 --retries 2 --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
 }
 
 verify_navigator_bindings() {
@@ -297,43 +318,55 @@ PY
 # ----------------------------
 # OS packages
 # ----------------------------
-echo "[TritonOS] Installing OS dependencies…"
-apt-get update -y
+if [[ "$DO_OS_PACKAGES" -eq 1 ]]; then
+  echo "[TritonOS] Installing OS dependencies..."
+  if [[ "$DO_APT_UPDATE" -eq 1 ]]; then
+    if ! apt_update_quick; then
+      echo "[TritonOS] WARNING: apt index refresh failed. Trying package install with existing indexes..."
+    fi
+  else
+    echo "[TritonOS] Skipping apt index refresh (--skip-apt-update)."
+  fi
 
-apt_install \
-  ca-certificates curl git \
-  build-essential pkg-config \
-  python3 python3-dev python3-pip python3-venv \
-  python3-numpy python3-zmq python3-smbus2 python3-libgpiod python3-spidev \
-  i2c-tools v4l-utils \
-  python3-gi python3-gi-cairo \
-  gstreamer1.0-tools \
-  gstreamer1.0-plugins-base \
-  gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad \
-  gstreamer1.0-plugins-ugly \
-  gstreamer1.0-libav \
-  gir1.2-gstreamer-1.0
+  apt_install \
+    ca-certificates curl git \
+    build-essential pkg-config \
+    python3 python3-dev python3-pip python3-venv \
+    python3-numpy python3-zmq python3-smbus2 python3-libgpiod python3-spidev \
+    i2c-tools v4l-utils \
+    python3-gi python3-gi-cairo \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gir1.2-gstreamer-1.0
 
-# Helpful camera-related packages (availability varies by Pi OS release)
-apt_install_optional libcamera-apps
-apt_install_optional libcamera0.7 || apt_install_optional libcamera0.6
-apt_install_optional gstreamer1.0-libcamera
-apt_install_optional ffmpeg
+  # Helpful camera-related packages (availability varies by Pi OS release)
+  apt_install_optional libcamera-apps || true
+  if ! apt_install_optional libcamera0.7; then
+    apt_install_optional libcamera0.6 || true
+  fi
+  apt_install_optional gstreamer1.0-libcamera || true
+  apt_install_optional ffmpeg || true
 
-# raspi-config isn't always installed on minimal images
-apt_install_optional raspi-config
+  # raspi-config isn't always installed on minimal images
+  apt_install_optional raspi-config || true
+else
+  echo "[TritonOS] Skipping OS package installation (--skip-os-packages)."
+fi
 
 # ----------------------------
 # Permissions/groups for hardware access
 # ----------------------------
-echo "[TritonOS] Adding user '$TARGET_USER' to groups: i2c, gpio, video…"
+echo "[TritonOS] Adding user '$TARGET_USER' to groups: i2c, gpio, video..."
 usermod -aG i2c,gpio,video "$TARGET_USER" || true
 
 # ----------------------------
 # Enable interfaces
 # ----------------------------
-echo "[TritonOS] Enabling I2C…"
+echo "[TritonOS] Enabling I2C..."
 if command -v raspi-config >/dev/null 2>&1; then
   # Official docs: raspi-config nonint do_i2c 0 enables I2C
   raspi-config nonint do_i2c 0 || true
@@ -346,10 +379,12 @@ fi
 # Navigator board overlay setup (recommended by Blue Robotics docs)
 # ----------------------------
 if [[ "$DO_NAV_OVERLAY" -eq 1 ]]; then
-  echo "[TritonOS] Running Blue Robotics 'configure_board.sh' (Navigator overlays, I2C/SPI/GPIO, etc)…"
+  echo "[TritonOS] Running Blue Robotics 'configure_board.sh' (Navigator overlays, I2C/SPI/GPIO, etc)..."
   # Source referenced by the official Navigator package docs.
   # This will edit boot config/overlays; a reboot is required afterwards.
-  curl -fsSL https://raw.githubusercontent.com/bluerobotics/blueos-docker/master/install/boards/configure_board.sh | bash
+  if ! curl "${CURL_OPTS[@]}" https://raw.githubusercontent.com/bluerobotics/blueos-docker/master/install/boards/configure_board.sh | bash; then
+    echo "[TritonOS] WARNING: Navigator overlay download/setup failed. Continuing; rerun without --no-navigator-overlay when internet is available if hardware interfaces are not configured."
+  fi
 else
   echo "[TritonOS] Skipping Navigator overlay setup (--no-navigator-overlay)."
 fi
@@ -358,7 +393,7 @@ fi
 # Legacy camera (/dev/video0) for v4l2src pipelines
 # ----------------------------
 if [[ "$DO_LEGACY_CAMERA" -eq 1 ]]; then
-  echo "[TritonOS] Enabling legacy camera support (for /dev/video0 via bcm2835-v4l2) …"
+  echo "[TritonOS] Enabling legacy camera support (for /dev/video0 via bcm2835-v4l2)..."
   if command -v raspi-config >/dev/null 2>&1; then
     # For legacy camera support, raspi-config uses do_legacy on newer raspi-config versions.
     # If it fails (older builds), we fall back to config.txt edits below.
@@ -392,37 +427,41 @@ for script in "$PROJECT_DIR"/bin/*.sh; do
   [[ -e "$script" ]] || continue
   chmod +x "$script"
 done
-echo "[TritonOS] Creating/Updating Python venv in project…"
+echo "[TritonOS] Creating/Updating Python venv in project..."
 cd "$PROJECT_DIR"
 ensure_venv
 
-venv_python -m pip install --upgrade pip setuptools wheel
+if [[ "$DO_PYTHON_DEPS" -eq 1 ]]; then
+  venv_python -m pip install --timeout 30 --retries 2 --upgrade pip setuptools wheel
 
-echo "[TritonOS] Installing Python deps…"
-if [[ -f "requirements.txt" ]]; then
-  # This venv uses --system-site-packages, so many hardware deps already come
-  # from apt. Do not use --upgrade here: it can force pip to replace working
-  # distro packages (for example python3-spidev) with a source build that then
-  # fails or becomes less stable.
-  venv_python -m pip install --prefer-binary -r "$PROJECT_DIR/requirements.txt"
-fi
+  echo "[TritonOS] Installing Python deps..."
+  if [[ -f "requirements.txt" ]]; then
+    # This venv uses --system-site-packages, so many hardware deps already come
+    # from apt. Do not use --upgrade here: it can force pip to replace working
+    # distro packages (for example python3-spidev) with a source build that then
+    # fails or becomes less stable.
+    venv_python -m pip install --timeout 30 --retries 2 --prefer-binary -r "$PROJECT_DIR/requirements.txt"
+  fi
 
-echo "[TritonOS] Reinstalling Navigator Python bindings cleanly…"
-clean_navigator_install
+  echo "[TritonOS] Reinstalling Navigator Python bindings cleanly..."
+  clean_navigator_install
 
-# Your code imports `bluerobotics_navigator` (underscore).
-# The PyPI project is "bluerobotics-navigator".
-venv_python -m pip install --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
+  # Your code imports `bluerobotics_navigator` (underscore).
+  # The PyPI project is "bluerobotics-navigator".
+  venv_python -m pip install --timeout 30 --retries 2 --no-cache-dir --force-reinstall --upgrade --prefer-binary "bluerobotics-navigator"
 
-echo "[TritonOS] Verifying Navigator Python bindings…"
-if ! verify_navigator_bindings "pass 1" || ! verify_navigator_bindings "pass 2"; then
-  echo "[TritonOS] Navigator install/import failed; rebuilding venv and retrying once..."
-  recreate_venv "Navigator install/import verification failure"
-  venv_python -m pip install --upgrade pip setuptools wheel
-  install_python_deps
-  install_navigator_bindings
-  verify_navigator_bindings "retry pass 1"
-  verify_navigator_bindings "retry pass 2"
+  echo "[TritonOS] Verifying Navigator Python bindings..."
+  if ! verify_navigator_bindings "pass 1" || ! verify_navigator_bindings "pass 2"; then
+    echo "[TritonOS] Navigator install/import failed; rebuilding venv and retrying once..."
+    recreate_venv "Navigator install/import verification failure"
+    venv_python -m pip install --timeout 30 --retries 2 --upgrade pip setuptools wheel
+    install_python_deps
+    install_navigator_bindings
+    verify_navigator_bindings "retry pass 1"
+    verify_navigator_bindings "retry pass 2"
+  fi
+else
+  echo "[TritonOS] Skipping Python dependency installation (--skip-python-deps)."
 fi
 
 # ----------------------------
@@ -472,6 +511,6 @@ echo
 echo "NOTE: Interface/camera/overlay changes usually require a reboot to take full effect."
 
 if [[ "$DO_REBOOT" -eq 1 ]]; then
-  echo "[TritonOS] Rebooting now…"
+  echo "[TritonOS] Rebooting now..."
   reboot
 fi

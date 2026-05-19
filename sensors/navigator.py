@@ -256,24 +256,45 @@ class NavigatorBoard:
 
 
 class IMUSensor(BaseSensor):
-    def __init__(self, board: NavigatorBoard, rate_hz: float = 20.0):
+    def __init__(self, board: NavigatorBoard, rate_hz: float = 20.0, include_mag: bool = False):
         super().__init__("imu", rate_hz)
         self.board = board
+        self.include_mag = bool(include_mag)
 
     def read(self) -> Dict[str, Any]:
-        a = self.board.read_accel()
-        g = self.board.read_gyro()
-        mags = self.board.read_mags()
-        ak = mags.get("ak09915") or {"x": 0.0, "y": 0.0, "z": 0.0}
-
-        return {
+        a, g = self.board.read_imu()
+        out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,
             "type": "imu",
             "accel": {"x": a.x, "y": a.y, "z": a.z},
             "gyro": {"x": g.x, "y": g.y, "z": g.z},
-            # Backward-compatible primary mag vector. It is the raw AK09915
-            # sample; all available raw magnetometers are also exposed below.
+        }
+        if self.include_mag:
+            mags = self.board.read_mags()
+            ak = mags.get("ak09915") or {"x": 0.0, "y": 0.0, "z": 0.0}
+            out.update(
+                {
+                    "mag": {"x": float(ak["x"]), "y": float(ak["y"]), "z": float(ak["z"])},
+                    "mag_source": "ak09915",
+                    "mag_sources": mags,
+                }
+            )
+        return out
+
+
+class MagSensor(BaseSensor):
+    def __init__(self, board: NavigatorBoard, rate_hz: float = 5.0):
+        super().__init__("mag", rate_hz)
+        self.board = board
+
+    def read(self) -> Dict[str, Any]:
+        mags = self.board.read_mags()
+        ak = mags.get("ak09915") or {"x": 0.0, "y": 0.0, "z": 0.0}
+        return {
+            "ts": time.time(),
+            "sensor": self.name,
+            "type": "mag",
             "mag": {"x": float(ak["x"]), "y": float(ak["y"]), "z": float(ak["z"])},
             "mag_source": "ak09915",
             "mag_sources": mags,

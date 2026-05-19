@@ -10,6 +10,7 @@ import zmq
 from sensors.navigator import (
     NavigatorBoard,
     IMUSensor,
+    MagSensor,
     EnvSensor,
     LeakSensor,
     ADCSensor,

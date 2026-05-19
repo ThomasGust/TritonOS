@@ -83,18 +83,40 @@ class FakeIMUSensor(BaseSensor):
         gx = 0.01 * math.sin(2 * math.pi * 0.3 * t)
         gy = 0.01 * math.sin(2 * math.pi * 0.4 * t + 0.3)
         gz = 0.01 * math.sin(2 * math.pi * 0.2 * t + 0.7)
-        mx, my, mz = 0.2, 0.0, 0.5
         return {
             "ts": time.time(),
             "sensor": self.name,
             "type": "imu",
             "accel": {"x": ax, "y": ay, "z": az},
             "gyro": {"x": gx, "y": gy, "z": gz},
+        }
+
+
+class FakeMagSensor(BaseSensor):
+    """Synthetic raw magnetometer readings shaped like Navigator mag telemetry."""
+
+    def __init__(self, rate_hz: float = 5.0):
+        super().__init__("mag", rate_hz)
+        self._t0 = time.time()
+
+    def read(self) -> Dict[str, Any]:
+        t = time.time() - self._t0
+        mx = 42.0 + 0.3 * math.sin(2 * math.pi * 0.08 * t)
+        my = 18.0 + 0.2 * math.sin(2 * math.pi * 0.05 * t + 0.7)
+        mz = -11.0 + 0.25 * math.sin(2 * math.pi * 0.04 * t + 1.1)
+        mmc_x = 35.0 + 0.25 * math.sin(2 * math.pi * 0.07 * t + 0.2)
+        mmc_y = -44.0 + 0.2 * math.sin(2 * math.pi * 0.05 * t + 1.5)
+        mmc_z = -9.0 + 0.2 * math.sin(2 * math.pi * 0.04 * t + 0.4)
+        now = time.time()
+        return {
+            "ts": now,
+            "sensor": self.name,
+            "type": "mag",
             "mag": {"x": mx, "y": my, "z": mz},
             "mag_source": "ak09915",
             "mag_sources": {
-                "ak09915": {"x": mx, "y": my, "z": mz, "ts": time.time()},
-                "mmc5983": {"x": mx * 1.05, "y": my + 0.03, "z": mz * 0.98, "ts": time.time()},
+                "ak09915": {"x": mx, "y": my, "z": mz, "ts": now},
+                "mmc5983": {"x": mmc_x, "y": mmc_y, "z": mmc_z, "ts": now},
             },
         }
 
@@ -197,6 +219,7 @@ def _build_sensors(args) -> Tuple[List[BaseSensor], bool, Optional[str]]:
     if args.fake:
         sensors: List[BaseSensor] = [
             FakeIMUSensor(rate_hz=args.imu_rate),
+            FakeMagSensor(rate_hz=args.mag_rate),
             FakeEnvSensor(rate_hz=args.env_rate),
         ]
         if args.bar30:
@@ -205,11 +228,12 @@ def _build_sensors(args) -> Tuple[List[BaseSensor], bool, Optional[str]]:
 
     # Real hardware path.
     try:
-        from sensors.navigator import NavigatorBoard, IMUSensor, EnvSensor, Bar30Sensor  # type: ignore
+        from sensors.navigator import NavigatorBoard, IMUSensor, MagSensor, EnvSensor, Bar30Sensor  # type: ignore
 
         board = NavigatorBoard()
         sensors = [
             IMUSensor(board, rate_hz=args.imu_rate),
+            MagSensor(board, rate_hz=args.mag_rate),
             EnvSensor(board, rate_hz=args.env_rate),
         ]
         if args.bar30:
@@ -222,6 +246,7 @@ def _build_sensors(args) -> Tuple[List[BaseSensor], bool, Optional[str]]:
             raise
         sensors = [
             FakeIMUSensor(rate_hz=args.imu_rate),
+            FakeMagSensor(rate_hz=args.mag_rate),
             FakeEnvSensor(rate_hz=args.env_rate),
         ]
         if args.bar30:
@@ -237,6 +262,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="ROV-side sensor streaming publisher test")
     ap.add_argument("--bind", default=default_bind, help="ZMQ endpoint to bind, e.g. tcp://0.0.0.0:6001")
     ap.add_argument("--imu-rate", type=float, default=20.0, help="IMU publish rate (Hz)")
+    ap.add_argument("--mag-rate", type=float, default=5.0, help="Raw magnetometer publish rate (Hz)")
     ap.add_argument("--env-rate", type=float, default=2.0, help="Temperature/pressure publish rate (Hz)")
     ap.add_argument("--bar30", action="store_true", help="Include external depth sensor (Bar30)")
     ap.add_argument("--bar30-rate", type=float, default=5.0, help="Bar30 publish rate (Hz)")

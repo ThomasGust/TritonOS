@@ -105,6 +105,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
         from sensors.navigator import (
             NavigatorBoard,
             IMUSensor,
+            MagSensor,
             EnvSensor,
             LeakSensor,
             ADCSensor,
@@ -121,7 +122,8 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     board = NavigatorBoard()
 
     sensor_list = [
-        IMUSensor(board, rate_hz=20.0),
+        IMUSensor(board, rate_hz=float(getattr(cfg, "IMU_RATE_HZ", 20.0))),
+        MagSensor(board, rate_hz=float(getattr(cfg, "MAG_RATE_HZ", 5.0))),
         EnvSensor(board, rate_hz=2.0),
         LeakSensor(board, rate_hz=2.0),
         ADCSensor(board, rate_hz=5.0),

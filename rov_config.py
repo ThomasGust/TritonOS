@@ -559,8 +559,10 @@ WRIST_ROTATE_SPEED = 0.50  # max normalized command at full trigger
 
 NAV_IMU_I2C_BUS = 1
 NAV_IMU_SPI_DEVICES = None
+IMU_RATE_HZ = 20.0
 
 NAV_MAG_I2C_BUS = 1
+MAG_RATE_HZ = 5.0
 NAV_ENV_I2C_BUS = 1
 NAV_ADC_I2C_BUS = 1
 
@@ -573,8 +575,9 @@ MMC5983_USE_SET_RESET = True
 MMC5983_I2C_BUSES = (6, 1)
 MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 
-# IMU telemetry publishes raw accel, gyro, AK09915 mag, and optional MMC5983
-# mag samples. Higher-level orientation messages will be rebuilt separately.
+# IMU telemetry publishes accel/gyro at IMU_RATE_HZ. Magnetometers publish as
+# a separate raw mag stream at MAG_RATE_HZ so they can be visualized without
+# slowing down the accel/gyro cadence.
 
 
 # ---------------------------------------------------------------------------

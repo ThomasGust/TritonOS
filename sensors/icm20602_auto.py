@@ -184,6 +184,29 @@ class ICM20602:
             z=(gz / self._gyro_lsb_per_dps) * dps_to_rad,
         )
 
+    def read_all(self):
+        """Read accel + gyro from one burst at the same sample instant."""
+        b = self._read14()
+        ax = _twos((b[0] << 8) | b[1])
+        ay = _twos((b[2] << 8) | b[3])
+        az = _twos((b[4] << 8) | b[5])
+        gx = _twos((b[8] << 8) | b[9])
+        gy = _twos((b[10] << 8) | b[11])
+        gz = _twos((b[12] << 8) | b[13])
+        g = 9.80665
+        dps_to_rad = math.pi / 180.0
+        accel = Vec3(
+            x=(ax / self._accel_lsb_per_g) * g,
+            y=(ay / self._accel_lsb_per_g) * g,
+            z=(az / self._accel_lsb_per_g) * g,
+        )
+        gyro = Vec3(
+            x=(gx / self._gyro_lsb_per_dps) * dps_to_rad,
+            y=(gy / self._gyro_lsb_per_dps) * dps_to_rad,
+            z=(gz / self._gyro_lsb_per_dps) * dps_to_rad,
+        )
+        return (accel, gyro)
+
     def read_temp_c(self) -> float:
         b = self._read14()
         tr = _twos((b[6] << 8) | b[7])

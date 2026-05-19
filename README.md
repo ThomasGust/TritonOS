@@ -5,15 +5,16 @@ hardware output sink, sensor publisher, video RPC service, and management RPC
 service used by the topside TritonPilot app.
 
 Current stability software is intentionally limited to depth hold. Raw IMU
-telemetry still publishes accelerometer, gyroscope, AK09915 magnetometer, and
-optional MMC5983 magnetometer samples so the next estimator pipeline can be
-built from clean primitives.
+telemetry publishes accelerometer and gyroscope samples at the IMU rate, while
+raw magnetometers publish separately so AK09915 and optional MMC5983 samples
+can be compared without slowing down accel/gyro telemetry.
 
 ## Raw Sensor Stream
 
 The ROV publishes sensor telemetry on `rov_config.SENSOR_PUB_ENDPOINT`, usually
-`tcp://0.0.0.0:6001`. IMU messages include raw accel, gyro, the primary AK09915
-mag vector, and `mag_sources` for all detected raw magnetometers.
+`tcp://0.0.0.0:6001`. IMU messages include raw accel/gyro only. Raw
+magnetometer messages use `type: "mag"` and include the primary AK09915 vector
+plus `mag_sources` for all detected raw magnetometers.
 
 For isolated stream testing on the ROV:
 
@@ -36,3 +37,40 @@ pytest
 The pytest configuration uses a repo-local `.pytest-tmp` directory and skips
 tests marked `hardware` by default so the suite can run on a development
 machine without touching physical ROV devices.
+
+## ROV Setup And Updates
+
+For normal code updates on the Pi, use:
+
+```bash
+sudo bash bin/update_code.sh
+```
+
+That path avoids `apt-get update` and full repository checks by default so it
+stays fast on the bench network. Use `--with-apt` only when you actually want
+the script to refresh/install base OS tools, and `--fsck` only when you suspect
+repository corruption.
+
+Initial provisioning remains:
+
+```bash
+sudo bash bin/install_configure.sh
+```
+
+Both scripts force apt to IPv4 with short network timeouts, which avoids long
+IPv6 stalls on networks where the Pi has no IPv6 route.
+
+If the repo is private and the update fails at Git fetch/pull, the updater will
+try to copy an existing root GitHub credential into the `triton` user's
+credential store. If no credential exists, set a fresh read-only token once:
+
+```bash
+export TRITON_GITHUB_TOKEN='...'
+sudo -E bash bin/update_code.sh
+```
+
+For an offline-ish repair when the Pi already has dependencies installed:
+
+```bash
+sudo bash bin/install_configure.sh --skip-os-packages --skip-python-deps --no-navigator-overlay
+```
