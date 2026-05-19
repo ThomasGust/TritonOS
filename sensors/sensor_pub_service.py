@@ -2,6 +2,7 @@
 from __future__ import annotations
 import time
 import json
+import os
 import threading
 from typing import List
 
@@ -21,9 +22,13 @@ from sensors.navigator import (
 
 def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
     """Best-effort low-latency / QoS hints for telemetry sockets."""
+    try:
+        snd_hwm = int(os.environ.get("TRITON_SENSOR_SNDHWM", "200"))
+    except Exception:
+        snd_hwm = 200
     for opt, val in [
         (getattr(zmq, "LINGER", None), 0),
-        (getattr(zmq, "SNDHWM", None), 1000),
+        (getattr(zmq, "SNDHWM", None), max(1, snd_hwm)),
         (getattr(zmq, "SNDTIMEO", None), 0),
     ]:
         try:
@@ -34,6 +39,13 @@ def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
     for opt, val in [
         (getattr(zmq, "IMMEDIATE", None), 1),
         (getattr(zmq, "TCP_NODELAY", None), 1),
+        (getattr(zmq, "TCP_KEEPALIVE", None), 1),
+        (getattr(zmq, "TCP_KEEPALIVE_IDLE", None), 10),
+        (getattr(zmq, "TCP_KEEPALIVE_INTVL", None), 5),
+        (getattr(zmq, "TCP_KEEPALIVE_CNT", None), 3),
+        (getattr(zmq, "HEARTBEAT_IVL", None), 1000),
+        (getattr(zmq, "HEARTBEAT_TIMEOUT", None), 3000),
+        (getattr(zmq, "HEARTBEAT_TTL", None), 6000),
         (getattr(zmq, "TOS", None), 0x88),   # AF41 telemetry
         (getattr(zmq, "PRIORITY", None), 5), # Linux socket priority (best-effort)
     ]:
@@ -91,7 +103,7 @@ class SensorPublisherService:
                         }
                     s.mark_polled(now)
                     try:
-                        self.sock.send_string(json.dumps(reading), flags=zmq.NOBLOCK)
+                        self.sock.send_string(json.dumps(reading, separators=(",", ":")), flags=zmq.NOBLOCK)
                     except zmq.Again:
                         # Drop stale telemetry rather than blocking sensor threads under congestion.
                         pass
