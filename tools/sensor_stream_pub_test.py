@@ -274,6 +274,7 @@ def main() -> int:
     )
     ap.add_argument("--fake", action="store_true", help="Publish synthetic data (no hardware required)")
     ap.add_argument("--require-hw", action="store_true", help="Exit if hardware sensors cannot be initialized")
+    ap.add_argument("--no-attitude", action="store_true", help="Do not publish derived attitude telemetry")
     ap.add_argument("--quiet", action="store_true", help="Don't print publish stats")
     args = ap.parse_args()
 
@@ -285,6 +286,16 @@ def main() -> int:
             print(f"[sensor-pub] hardware init failed; falling back to FAKE sensors ({reason})", flush=True)
     else:
         print("[sensor-pub] using hardware sensors", flush=True)
+
+    derived_processors = []
+    if not args.no_attitude:
+        try:
+            from sensors.attitude_estimator import AttitudeEstimatorProcessor
+
+            derived_processors.append(AttitudeEstimatorProcessor())
+            print("[sensor-pub] onboard attitude estimator enabled", flush=True)
+        except Exception as e:
+            print(f"[sensor-pub] attitude estimator disabled: {e}", flush=True)
 
     # Bind ZMQ PUB socket and stream readings.
     ctx = zmq.Context.instance()
@@ -314,6 +325,19 @@ def main() -> int:
                         }
                     s.mark_polled(now)
                     pub.send_string(json.dumps(reading))
+                    for processor in derived_processors:
+                        try:
+                            derived = processor.process(reading)
+                        except Exception as e:
+                            if not args.quiet:
+                                print(f"[sensor-pub] derived telemetry failed: {e}", flush=True)
+                            continue
+                        if isinstance(derived, dict):
+                            pub.send_string(json.dumps(derived))
+                        elif isinstance(derived, list):
+                            for item in derived:
+                                if isinstance(item, dict):
+                                    pub.send_string(json.dumps(item))
             time.sleep(0.01)
     except KeyboardInterrupt:
         print("\n[sensor-pub] stopping...", flush=True)

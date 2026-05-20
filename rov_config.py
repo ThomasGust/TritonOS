@@ -579,6 +579,33 @@ MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 # a separate raw mag stream at MAG_RATE_HZ so they can be visualized without
 # slowing down the accel/gyro cadence.
 
+# Onboard attitude estimator.
+# This publishes type='attitude' telemetry derived from the local IMU/mag stream.
+# It is diagnostic-only for now; future attitude hold should consume this onboard
+# estimate directly instead of sending raw IMU data to topside first.
+ATTITUDE_ESTIMATOR_ENABLE = True
+ATTITUDE_CALIBRATION_SAMPLES = 30
+ATTITUDE_MAX_DT_S = 0.25
+ATTITUDE_ACCEL_TAU_S = 0.16
+ATTITUDE_ACCEL_FAST_TAU_S = 0.055
+ATTITUDE_ACCEL_FAST_ERROR_DEG = 3.0
+ATTITUDE_ACCEL_MIN_WEIGHT = 0.02
+ATTITUDE_ACCEL_MAX_WEIGHT = 0.90
+ATTITUDE_ACCEL_NORM_GATE = 0.18
+ATTITUDE_CALIBRATION_MAX_TILT_STD_DEG = 1.25
+ATTITUDE_CALIBRATION_MAX_GYRO_RMS_DPS = 3.0
+ATTITUDE_YAW_MAG_SOURCE = "auto"  # auto prefers MMC5983 when available/clean
+ATTITUDE_YAW_TAU_S = 0.45
+ATTITUDE_YAW_MIN_WEIGHT = 0.02
+ATTITUDE_YAW_MAX_WEIGHT = 0.65
+ATTITUDE_YAW_MAX_MAG_AGE_S = 0.75
+ATTITUDE_YAW_MAG_NORM_GATE = 0.45
+ATTITUDE_STATIONARY_BIAS_ENABLE = True
+ATTITUDE_STATIONARY_BIAS_TAU_S = 15.0
+ATTITUDE_STATIONARY_GYRO_MAX_DPS = 1.0
+ATTITUDE_STATIONARY_ACCEL_ERROR_MAX_DEG = 1.5
+ATTITUDE_STATIONARY_ACCEL_NORM_ERROR_MAX = 0.05
+
 
 # ---------------------------------------------------------------------------
 # Print config identity + channel map on import (debugging “wrong file” issues)

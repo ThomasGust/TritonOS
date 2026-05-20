@@ -4,7 +4,7 @@ import time
 import json
 import os
 import threading
-from typing import List
+from typing import Any, List
 
 import zmq
 
@@ -60,9 +60,11 @@ class SensorPublisherService:
     def __init__(self,
                  bind_endpoint: str,
                  sensors: List[BaseSensor],
+                 derived_processors: List[Any] | None = None,
                  debug: bool = False):
         self.bind_endpoint = bind_endpoint
         self.sensors = sensors
+        self.derived_processors = list(derived_processors or [])
         self.debug = debug
 
         ctx = zmq.Context.instance()
@@ -102,11 +104,31 @@ class SensorPublisherService:
                             "error": str(e),
                         }
                     s.mark_polled(now)
-                    try:
-                        self.sock.send_string(json.dumps(reading, separators=(",", ":")), flags=zmq.NOBLOCK)
-                    except zmq.Again:
-                        # Drop stale telemetry rather than blocking sensor threads under congestion.
-                        pass
+                    self._publish(reading)
+                    for derived in self._derive(reading):
+                        self._publish(derived)
                     #if self.debug:
                     #    print("[rov/sensors]", reading)
             time.sleep(0.01)
+
+    def _publish(self, reading: dict) -> None:
+        try:
+            self.sock.send_string(json.dumps(reading, separators=(",", ":")), flags=zmq.NOBLOCK)
+        except zmq.Again:
+            # Drop stale telemetry rather than blocking sensor threads under congestion.
+            pass
+
+    def _derive(self, reading: dict) -> list[dict]:
+        out: list[dict] = []
+        for processor in self.derived_processors:
+            try:
+                derived = processor.process(reading)
+            except Exception as e:
+                if self.debug:
+                    print("[rov/sensors] derived telemetry failed:", e)
+                continue
+            if isinstance(derived, dict):
+                out.append(derived)
+            elif isinstance(derived, list):
+                out.extend(item for item in derived if isinstance(item, dict))
+        return out

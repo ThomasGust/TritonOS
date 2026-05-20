@@ -270,9 +270,42 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
         except Exception as e:
             print("[rov/main] network stats sensor disabled:", e)
 
+    derived_processors = []
+    if bool(getattr(cfg, "ATTITUDE_ESTIMATOR_ENABLE", True)):
+        try:
+            from sensors.attitude_estimator import AttitudeEstimatorProcessor, RollPitchConfig, RollPitchEstimator
+
+            attitude_cfg = RollPitchConfig(
+                calibration_samples=int(getattr(cfg, "ATTITUDE_CALIBRATION_SAMPLES", 30)),
+                max_dt_s=float(getattr(cfg, "ATTITUDE_MAX_DT_S", 0.25)),
+                accel_tau_s=float(getattr(cfg, "ATTITUDE_ACCEL_TAU_S", 0.16)),
+                accel_fast_tau_s=float(getattr(cfg, "ATTITUDE_ACCEL_FAST_TAU_S", 0.055)),
+                accel_fast_error_deg=float(getattr(cfg, "ATTITUDE_ACCEL_FAST_ERROR_DEG", 3.0)),
+                accel_min_weight=float(getattr(cfg, "ATTITUDE_ACCEL_MIN_WEIGHT", 0.02)),
+                accel_max_weight=float(getattr(cfg, "ATTITUDE_ACCEL_MAX_WEIGHT", 0.90)),
+                accel_norm_gate=float(getattr(cfg, "ATTITUDE_ACCEL_NORM_GATE", 0.18)),
+                calibration_max_tilt_std_deg=float(getattr(cfg, "ATTITUDE_CALIBRATION_MAX_TILT_STD_DEG", 1.25)),
+                calibration_max_gyro_rms_dps=float(getattr(cfg, "ATTITUDE_CALIBRATION_MAX_GYRO_RMS_DPS", 3.0)),
+                yaw_mag_source=str(getattr(cfg, "ATTITUDE_YAW_MAG_SOURCE", "auto")),
+                yaw_tau_s=float(getattr(cfg, "ATTITUDE_YAW_TAU_S", 0.45)),
+                yaw_min_weight=float(getattr(cfg, "ATTITUDE_YAW_MIN_WEIGHT", 0.02)),
+                yaw_max_weight=float(getattr(cfg, "ATTITUDE_YAW_MAX_WEIGHT", 0.65)),
+                yaw_max_mag_age_s=float(getattr(cfg, "ATTITUDE_YAW_MAX_MAG_AGE_S", 0.75)),
+                yaw_mag_norm_gate=float(getattr(cfg, "ATTITUDE_YAW_MAG_NORM_GATE", 0.45)),
+                stationary_bias_enable=bool(getattr(cfg, "ATTITUDE_STATIONARY_BIAS_ENABLE", True)),
+                stationary_bias_tau_s=float(getattr(cfg, "ATTITUDE_STATIONARY_BIAS_TAU_S", 15.0)),
+                stationary_gyro_max_dps=float(getattr(cfg, "ATTITUDE_STATIONARY_GYRO_MAX_DPS", 1.0)),
+                stationary_accel_error_max_deg=float(getattr(cfg, "ATTITUDE_STATIONARY_ACCEL_ERROR_MAX_DEG", 1.5)),
+                stationary_accel_norm_error_max=float(getattr(cfg, "ATTITUDE_STATIONARY_ACCEL_NORM_ERROR_MAX", 0.05)),
+            )
+            derived_processors.append(AttitudeEstimatorProcessor(RollPitchEstimator(attitude_cfg)))
+        except Exception as e:
+            print("[rov/main] onboard attitude estimator disabled:", e)
+
     srv = SensorPublisherService(
         bind_endpoint=getattr(cfg, "SENSOR_PUB_ENDPOINT", DEFAULT_SENSOR_PUB_ENDPOINT),
         sensors=sensor_list,
+        derived_processors=derived_processors,
         debug=bool(getattr(cfg, "DEBUG", False)),
     )
     srv.start()
