@@ -162,7 +162,9 @@ AUTOPILOT_YAW_KD = 0.0015
 AUTOPILOT_YAW_ERROR_DEADBAND_DEG = 1.0
 AUTOPILOT_YAW_I_LIMIT = 0.08
 AUTOPILOT_YAW_OUT_LIMIT = 0.12
-AUTOPILOT_YAW_SIGN = 1.0
+# Positive yaw-hold error must command the vehicle back toward increasing yaw.
+# The current horizontal thruster/mixer convention needs the inverted sign here.
+AUTOPILOT_YAW_SIGN = -1.0
 AUTOPILOT_YAW_MANUAL_DEADBAND = 0.08
 AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 
