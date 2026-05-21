@@ -191,6 +191,8 @@ class RollPitchConfig:
     yaw_max_weight: float = 0.65
     yaw_max_mag_age_s: float = 0.75
     yaw_mag_norm_gate: float = 0.45
+    yaw_mag_smooth_tau_s: float = 0.65
+    yaw_reference_samples: int = 30
     yaw_min_horizontal_norm: float = 1e-6
     stationary_bias_enable: bool = True
     stationary_bias_tau_s: float = 15.0
@@ -218,6 +220,7 @@ class RollPitchEstimator:
             self._cal_accel_units: list[Vec3] = []
             self._cal_accel_raw: list[Vec3] = []
             self._cal_gyro: list[Vec3] = []
+            self._cal_mag_samples: dict[str, list[Vec3]] = {}
             self._reference_accel: Optional[Vec3] = None
             self._reference_norm: Optional[float] = None
             self._gyro_bias: Vec3 = (0.0, 0.0, 0.0)
@@ -227,9 +230,11 @@ class RollPitchEstimator:
             self._calibration_gyro_rms_dps: Optional[float] = None
             self._gravity_est: Optional[Vec3] = None
             self._latest_mag: dict[str, tuple[float, Vec3, float]] = {}
+            self._mag_filtered: dict[str, tuple[float, Vec3, float]] = {}
             self._latest_primary_mag_source: Optional[str] = None
             self._reference_mag: dict[str, Vec3] = {}
             self._reference_mag_norm: dict[str, float] = {}
+            self._reference_mag_samples: dict[str, int] = {}
             self._yaw_est_rad: Optional[float] = None
             self._last_yaw_mag_correction: tuple[str, float] | None = None
             self._last_ts: Optional[float] = None
@@ -250,6 +255,7 @@ class RollPitchEstimator:
                 "calibration_gyro_rms_dps": self._calibration_gyro_rms_dps,
                 "yaw_state": "ready" if self._yaw_est_rad is not None else "waiting_for_mag",
                 "yaw_sources": sorted(self._reference_mag.keys()),
+                "yaw_reference_samples": dict(self._reference_mag_samples),
                 "latest_mag_sources": sorted(self._latest_mag.keys()),
                 "last_output": dict(self._last_output) if self._last_output else None,
             }
@@ -279,7 +285,10 @@ class RollPitchEstimator:
             if primary_source:
                 self._latest_primary_mag_source = primary_source
             for source, vec in samples.items():
-                self._latest_mag[source] = (float(sensor_ts), vec, _norm(vec))
+                if self._reference_accel is None:
+                    self._record_cal_mag_sample_locked(source, vec)
+                filtered, filtered_norm = self._smooth_mag_locked(source, float(sensor_ts), vec)
+                self._latest_mag[source] = (float(sensor_ts), filtered, filtered_norm)
             self._seed_yaw_references_locked()
 
     def update(self, imu_msg: dict[str, Any], *, recv_time_s: float | None = None) -> Optional[dict[str, Any]]:
@@ -491,17 +500,51 @@ class RollPitchEstimator:
         self._seed_yaw_references_locked()
         return True
 
+    def _record_cal_mag_sample_locked(self, source: str, mag: Vec3) -> None:
+        cap = max(1, int(self.config.yaw_reference_samples))
+        samples = self._cal_mag_samples.setdefault(source, [])
+        samples.append(mag)
+        if len(samples) > cap:
+            del samples[: len(samples) - cap]
+
+    def _smooth_mag_locked(self, source: str, sensor_ts: float, mag: Vec3) -> tuple[Vec3, float]:
+        tau = max(0.0, float(self.config.yaw_mag_smooth_tau_s))
+        previous = self._mag_filtered.get(source)
+        if previous is None or tau <= 1e-6:
+            filtered = mag
+        else:
+            prev_ts, prev_mag, _prev_norm = previous
+            dt = float(sensor_ts) - float(prev_ts)
+            if dt > 0.0:
+                alpha = 1.0 - math.exp(-dt / max(1e-6, tau))
+            else:
+                alpha = 0.05
+            alpha = _clamp(alpha, 0.0, 1.0)
+            filtered = _add(_scale(prev_mag, 1.0 - alpha), _scale(mag, alpha))
+        filtered_norm = _norm(filtered)
+        self._mag_filtered[source] = (float(sensor_ts), filtered, filtered_norm)
+        return filtered, filtered_norm
+
     def _seed_yaw_references_locked(self) -> None:
         if self._reference_accel is None:
             return
         for source, (_ts, mag, mag_norm) in self._latest_mag.items():
             if source in self._reference_mag:
                 continue
-            horizontal = self._level_mag(mag, self._reference_accel)
+            ref_mag = mag
+            ref_norm = mag_norm
+            ref_sample_count = 1
+            cal_samples = self._cal_mag_samples.get(source)
+            if cal_samples:
+                ref_mag = _mean_vec(cal_samples)
+                ref_norm = _norm(ref_mag)
+                ref_sample_count = len(cal_samples)
+            horizontal = self._level_mag(ref_mag, self._reference_accel)
             if horizontal is None:
                 continue
             self._reference_mag[source] = horizontal
-            self._reference_mag_norm[source] = mag_norm
+            self._reference_mag_norm[source] = ref_norm
+            self._reference_mag_samples[source] = ref_sample_count
 
     def _level_mag(self, mag: Vec3, gravity: Vec3) -> Optional[Vec3]:
         if self._reference_accel is None:
@@ -593,6 +636,7 @@ class RollPitchEstimator:
             "yaw_mag_rad": yaw_mag,
             "mag_norm": mag_norm,
             "mag_norm_error": norm_err,
+            "reference_mag_samples": self._reference_mag_samples.get(source, 0),
             "reference_mag": reference_h,
             "current_mag": current_h,
         }
@@ -646,6 +690,7 @@ class RollPitchEstimator:
                 "yaw_mag_age_s": mag_age_s,
                 "yaw_mag_norm": mag_info["mag_norm"],
                 "yaw_mag_norm_error": mag_info["mag_norm_error"],
+                "yaw_reference_mag_samples": mag_info["reference_mag_samples"],
                 "reference_mag": {
                     "x": mag_info["reference_mag"][0],
                     "y": mag_info["reference_mag"][1],

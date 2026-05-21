@@ -318,6 +318,58 @@ def test_roll_pitch_estimator_auto_uses_clean_yaw_source():
     assert out["yaw_mag_deg"] == pytest.approx(12.0, abs=0.2)
 
 
+def test_roll_pitch_estimator_averages_yaw_reference_samples():
+    est = RollPitchEstimator(
+        _config(
+            calibration_samples=5,
+            accel_correction=1.0,
+            yaw_mag_smooth_tau_s=0.0,
+            yaw_reference_samples=5,
+        )
+    )
+    reference_noise_deg = [-1.5, 1.5, -1.5, 1.5, 1.5]
+    for i, yaw_deg in enumerate(reference_noise_deg):
+        yaw = math.radians(yaw_deg)
+        ts = i * 0.05
+        est.update_mag(_mag(ts, (math.cos(yaw), -math.sin(yaw), 0.0)))
+        assert est.update(_imu(ts, (0.0, 0.0, 9.80665))) is None
+
+    est.update_mag(_mag(0.30, (1.0, 0.0, 0.0)))
+    out = est.update(_imu(0.30, (0.0, 0.0, 9.80665)))
+
+    assert out is not None
+    assert abs(out["yaw_mag_deg"]) < 0.5
+    assert out["yaw_reference_mag_samples"] == 5
+
+
+def test_roll_pitch_estimator_smooths_short_mag_spikes():
+    est = RollPitchEstimator(
+        _config(
+            calibration_samples=5,
+            accel_correction=1.0,
+            yaw_mag_smooth_tau_s=1.0,
+            yaw_reference_samples=5,
+        )
+    )
+    for i in range(5):
+        ts = i * 0.05
+        est.update_mag(_mag(ts, (1.0, 0.0, 0.0)))
+        assert est.update(_imu(ts, (0.0, 0.0, 9.80665))) is None
+
+    est.update_mag(_mag(0.25, (1.0, 0.0, 0.0)))
+    out0 = est.update(_imu(0.25, (0.0, 0.0, 9.80665)))
+    assert out0 is not None
+    assert out0["yaw_deg"] == pytest.approx(0.0, abs=0.2)
+
+    spike_yaw = math.radians(30.0)
+    est.update_mag(_mag(0.30, (math.cos(spike_yaw), -math.sin(spike_yaw), 0.0)))
+    out = est.update(_imu(0.30, (0.0, 0.0, 9.80665)))
+
+    assert out is not None
+    assert abs(out["yaw_mag_deg"]) < 3.0
+    assert abs(out["yaw_deg"]) < 0.2
+
+
 def test_attitude_estimator_processor_derives_onboard_attitude():
     processor = AttitudeEstimatorProcessor(
         RollPitchEstimator(_config(calibration_samples=5, accel_correction=1.0))
