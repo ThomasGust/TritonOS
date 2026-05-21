@@ -763,7 +763,9 @@ class ControlService:
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
                 dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
+                ap_db = float(getattr(cfg, "AUTOPILOT_MIX_DEADBAND", dh_db))
                 autopilot_vertical_cmd = False
+                autopilot_horizontal_cmd = False
                 try:
                     modes = fresh_pilot.modes or {}
                     ap_modes = modes.get("autopilot") if isinstance(modes.get("autopilot"), dict) else {}
@@ -772,11 +774,15 @@ class ControlService:
                     rp_level = bool(ap_modes.get("roll_pitch_level", modes.get("roll_pitch_level", False)))
                     roll_mode = str(ap_modes.get("roll", modes.get("attitude_roll", ""))).strip().lower()
                     pitch_mode = str(ap_modes.get("pitch", modes.get("attitude_pitch", ""))).strip().lower()
+                    yaw_mode = str(ap_modes.get("yaw", modes.get("attitude_yaw", modes.get("yaw_hold", "")))).strip().lower()
                     roll_cmd = rp_level or roll_mode not in ("", "off", "free", "manual", "none", "false", "0")
                     pitch_cmd = rp_level or pitch_mode not in ("", "off", "free", "manual", "none", "false", "0")
+                    yaw_cmd = bool(modes.get("yaw_hold", False)) or yaw_mode not in ("", "off", "free", "manual", "none", "false", "0")
                     autopilot_vertical_cmd = bool(depth_cmd or roll_cmd or pitch_cmd)
+                    autopilot_horizontal_cmd = bool(yaw_cmd)
                 except Exception:
                     autopilot_vertical_cmd = False
+                    autopilot_horizontal_cmd = False
 
                 for k, v in list(thr.items()):
                     if isinstance(k, str) and k.strip().lower() == "lights":
@@ -786,7 +792,9 @@ class ControlService:
                     # When depth hold is enabled, allow smaller vertical
                     # corrections so the controller can make fine trim.
                     if autopilot_vertical_cmd and isinstance(k, str) and k.strip().upper().startswith("V_"):
-                        db = dh_db
+                        db = ap_db
+                    elif autopilot_horizontal_cmd and isinstance(k, str) and k.strip().upper().startswith("H_"):
+                        db = ap_db
 
                     if abs(float(v)) < float(db):
                         thr[k] = 0.0

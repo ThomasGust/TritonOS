@@ -90,6 +90,38 @@ def test_autopilot_keeps_yaw_free_for_roll_pitch_level():
     assert cmd["yaw"] == pytest.approx(0.25)
 
 
+def test_autopilot_holds_yaw_without_forcing_roll_pitch():
+    autopilot = AutopilotController(_config())
+
+    cmd, status0 = autopilot.step(
+        modes={"autopilot": {"yaw": "hold"}},
+        cmd=_cmd(),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=10.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+    assert status0["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(10.0)
+    assert cmd["yaw"] == pytest.approx(0.0)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold"}},
+        cmd=_cmd(),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=25.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    assert status["attitude"]["axes"]["yaw"]["mode"] == "hold"
+    assert status["attitude"]["axes"]["roll"]["enabled_cmd"] is False
+    assert cmd["yaw"] == pytest.approx(-0.15)
+    assert cmd["roll"] == pytest.approx(0.0)
+    assert cmd["pitch"] == pytest.approx(0.0)
+
+
 def test_autopilot_fails_open_to_manual_when_attitude_stale():
     autopilot = AutopilotController(_config())
 
