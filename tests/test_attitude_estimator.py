@@ -69,6 +69,33 @@ def test_roll_pitch_estimator_default_uses_standard_vehicle_axes():
     assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
 
 
+def test_roll_pitch_estimator_can_swap_vehicle_roll_axis_to_sensor_y():
+    est = RollPitchEstimator(
+        RollPitchConfig(
+            calibration_samples=5,
+            accel_correction=1.0,
+            vehicle_roll_axis="y",
+        )
+    )
+    for i in range(5):
+        assert est.update(_imu(float(i), (0.0, 0.0, 9.80665))) is None
+
+    theta = math.radians(12.0)
+    sensor_x_tilt = (math.sin(theta) * 9.80665, 0.0, math.cos(theta) * 9.80665)
+    out = est.update(_imu(5.05, sensor_x_tilt))
+
+    assert out is not None
+    assert out["roll_deg"] == pytest.approx(12.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
+
+    sensor_y_tilt = (0.0, math.sin(theta) * 9.80665, math.cos(theta) * 9.80665)
+    out = est.update(_imu(5.10, sensor_y_tilt))
+
+    assert out is not None
+    assert out["roll_deg"] == pytest.approx(0.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(12.0, abs=0.15)
+
+
 def test_roll_pitch_estimator_zeros_current_rest_pose():
     est = RollPitchEstimator(_config(calibration_samples=8, accel_correction=1.0))
     rest = (3.379, -9.315, -0.232)

@@ -156,12 +156,12 @@ AUTOPILOT_PITCH_MANUAL_DEADBAND = 0.08
 AUTOPILOT_PITCH_WALK_RATE_DPS = 35.0
 
 AUTOPILOT_YAW_MODE_DEFAULT = "off"
-AUTOPILOT_YAW_KP = 0.006
-AUTOPILOT_YAW_KI = 0.0
+AUTOPILOT_YAW_KP = 0.009
+AUTOPILOT_YAW_KI = 0.0008
 AUTOPILOT_YAW_KD = 0.0015
 AUTOPILOT_YAW_ERROR_DEADBAND_DEG = 1.0
-AUTOPILOT_YAW_I_LIMIT = 0.08
-AUTOPILOT_YAW_OUT_LIMIT = 0.12
+AUTOPILOT_YAW_I_LIMIT = 0.05
+AUTOPILOT_YAW_OUT_LIMIT = 0.14
 # Positive yaw-hold error must command the vehicle back toward increasing yaw.
 # The current horizontal thruster/mixer convention needs the inverted sign here.
 AUTOPILOT_YAW_SIGN = -1.0
@@ -643,7 +643,10 @@ ATTITUDE_ACCEL_MAX_WEIGHT = 0.90
 ATTITUDE_ACCEL_NORM_GATE = 0.18
 ATTITUDE_CALIBRATION_MAX_TILT_STD_DEG = 1.25
 ATTITUDE_CALIBRATION_MAX_GYRO_RMS_DPS = 3.0
-ATTITUDE_VEHICLE_ROLL_AXIS = "x"  # Vehicle convention: roll about X, pitch about Y
+# Navigator mount/body-frame convention on this ROV: physical roll appears on
+# sensor X and physical pitch appears on sensor Y, so sensor Y is the vehicle
+# roll-axis reference used to derive the perpendicular pitch axis.
+ATTITUDE_VEHICLE_ROLL_AXIS = "y"
 ATTITUDE_ROLL_SIGN = 1.0
 ATTITUDE_PITCH_SIGN = 1.0
 ATTITUDE_YAW_MAG_SOURCE = "auto"  # auto prefers MMC5983 when available/clean
