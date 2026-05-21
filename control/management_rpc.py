@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import zmq
@@ -36,6 +39,10 @@ class ManagementRpcService:
         self._control_service = control_service
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parents[1]
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -94,6 +101,63 @@ class ManagementRpcService:
         out["control_loop_available"] = True
         return out
 
+    def _schedule_self_restart(self, delay_s: float = 1.0) -> None:
+        def _restart() -> None:
+            time.sleep(max(0.1, float(delay_s)))
+            os._exit(0)
+
+        threading.Thread(target=_restart, daemon=True).start()
+
+    def _run_update_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        repo_root = self._repo_root()
+        branch = str(args.get("branch") or getattr(cfg, "TRITONOS_BRANCH", "main") or "main").strip() or "main"
+        force = bool(args.get("force", True))
+        restart = bool(args.get("restart", False))
+        timeout_s = float(args.get("timeout_s", 180.0))
+        script = repo_root / "bin" / "update_code.sh"
+        if not script.exists():
+            return {"ok": False, "error": f"update script not found: {script}"}
+
+        cmd = ["bash", str(script), "--dir", str(repo_root), "--branch", branch]
+        if force:
+            cmd.append("--force")
+        if bool(args.get("with_apt", False)):
+            cmd.append("--with-apt")
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(repo_root),
+                text=True,
+                capture_output=True,
+                timeout=max(5.0, timeout_s),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "ok": False,
+                "error": f"update timed out after {timeout_s:.0f}s",
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        data = {
+            "returncode": int(proc.returncode),
+            "stdout": proc.stdout[-12000:],
+            "stderr": proc.stderr[-12000:],
+            "branch": branch,
+            "force": force,
+            "restart_requested": restart,
+        }
+        if proc.returncode != 0:
+            return {"ok": False, "error": f"update failed with exit code {proc.returncode}", "data": data}
+        if restart:
+            self._schedule_self_restart(1.0)
+            data["restart_scheduled"] = True
+        return {"ok": True, "data": data}
+
     def _handle_request(self, req: Dict[str, Any]) -> Dict[str, Any]:
         cmd = str(req.get("cmd", "") or "").strip().lower()
         args = req.get("args", {}) or {}
@@ -116,6 +180,8 @@ class ManagementRpcService:
                         "set_config",
                         "set_surface_reference",
                         "capture_surface_reference",
+                        "update_code",
+                        "restart_service",
                     ],
                 },
             }
@@ -138,6 +204,19 @@ class ManagementRpcService:
                     "updated": written,
                     "references": self._reference_state(cfg_mod),
                     "restart_required": True,
+                },
+            }
+
+        if cmd == "update_code":
+            return self._run_update_code(args)
+
+        if cmd in ("restart_service", "restart"):
+            self._schedule_self_restart(float(args.get("delay_s", 1.0)))
+            return {
+                "ok": True,
+                "data": {
+                    "restart_scheduled": True,
+                    "delay_s": float(args.get("delay_s", 1.0)),
                 },
             }
 

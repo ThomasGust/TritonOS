@@ -1,3 +1,4 @@
+import subprocess
 import shutil
 import uuid
 from pathlib import Path
@@ -50,6 +51,8 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
         assert resp["data"]["runtime"]["control_loop_available"] is True
         assert resp["data"]["runtime"]["depth_hold"]["target_m"] == 1.2
         assert "get_hold_status" in resp["data"]["commands"]
+        assert "update_code" in resp["data"]["commands"]
+        assert "restart_service" in resp["data"]["commands"]
 
         resp_runtime = svc._handle_request({"cmd": "get_hold_status"})
         assert resp_runtime["ok"] is True
@@ -63,3 +66,24 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
         assert depth_path.exists()
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_management_rpc_update_code_runs_force_update(monkeypatch, tmp_path):
+    svc = ManagementRpcService(bind_endpoint="tcp://127.0.0.1:0")
+    monkeypatch.setattr(svc, "_repo_root", lambda: tmp_path)
+    script = tmp_path / "bin" / "update_code.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("control.management_rpc.subprocess.run", _run)
+    resp = svc._handle_request({"cmd": "update_code", "args": {"branch": "main", "force": True}})
+
+    assert resp["ok"] is True
+    assert "--force" in calls[0][0]
+    assert calls[0][0][:2] == ["bash", str(script)]

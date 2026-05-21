@@ -11,6 +11,7 @@ set -euo pipefail
 # Useful flags:
 #   --with-apt       refresh/install base packages even if tools exist
 #   --fsck           run git fsck --connectivity-only before pulling
+#   --force          reset tracked files to origin/<branch> and remove untracked code files
 #   --dir <path>     repository path (default: current repo, else /home/TritonOS)
 #   --branch <name>  branch to pull (default: current branch, else main)
 
@@ -19,6 +20,7 @@ DEST_DIR="${TRITONOS_DIR:-}"
 BRANCH="${TRITONOS_BRANCH:-}"
 DO_APT=0
 DO_FSCK=0
+DO_FORCE="${TRITON_UPDATE_FORCE:-0}"
 GIT_TIMEOUT_S="${TRITON_GIT_TIMEOUT_S:-30}"
 
 log() {
@@ -44,6 +46,7 @@ Usage:
 Options:
   --with-apt       refresh/install base packages even if tools exist
   --fsck           run git fsck --connectivity-only before pulling
+  --force          discard local code changes and reset to origin/<branch>
   --dir <path>     repository path (default: current repo, else /home/TritonOS)
   --branch <name>  branch to pull (default: current branch, else main)
   -h, --help       show this help
@@ -52,6 +55,7 @@ Environment:
   TRITONOS_REPO_URL      repository URL
   TRITONOS_DIR           repository path
   TRITONOS_BRANCH        branch name
+  TRITON_UPDATE_FORCE    set to 1 to behave like --force
   TRITON_GITHUB_TOKEN    optional GitHub token to store for private repos
   TRITON_GITHUB_USER     GitHub username for that token
 EOF
@@ -65,6 +69,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fsck)
       DO_FSCK=1
+      shift
+      ;;
+    --force)
+      DO_FORCE=1
       shift
       ;;
     --dir)
@@ -293,8 +301,21 @@ if [[ -d "$DEST_DIR/.git" ]]; then
 
   git_as_target -C "$DEST_DIR" remote set-url origin "$REPO_URL"
   git_as_target -C "$DEST_DIR" fetch --prune origin "$BRANCH"
-  git_as_target -C "$DEST_DIR" checkout "$BRANCH"
-  git_as_target -C "$DEST_DIR" pull --ff-only origin "$BRANCH"
+  if [[ "$DO_FORCE" == "1" || "$DO_FORCE" == "true" || "$DO_FORCE" == "yes" ]]; then
+    log "Force update enabled: resetting tracked code to origin/$BRANCH."
+    git_as_target -C "$DEST_DIR" reset --hard
+    log "Removing untracked code files while preserving local runtime data directories."
+    git_as_target -C "$DEST_DIR" clean -fd \
+      -e calibration/ \
+      -e recordings/ \
+      -e logs/ \
+      -e .venv/
+    git_as_target -C "$DEST_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+    git_as_target -C "$DEST_DIR" reset --hard "origin/$BRANCH"
+  else
+    git_as_target -C "$DEST_DIR" checkout "$BRANCH"
+    git_as_target -C "$DEST_DIR" pull --ff-only origin "$BRANCH"
+  fi
 else
   log "Cloning $REPO_URL into $DEST_DIR"
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
