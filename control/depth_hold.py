@@ -15,6 +15,16 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return x
 
 
+def _finite_float(value) -> Optional[float]:
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(v):
+        return None
+    return v
+
+
 @dataclass
 class DepthHoldConfig:
     """Configuration for depth-hold.
@@ -83,6 +93,24 @@ class DepthHoldController:
     def target_depth_m(self) -> Optional[float]:
         return self._z_target
 
+    def _clamp_target(self, target_m: float) -> float:
+        target = float(target_m)
+        if self.cfg.target_min_m is not None:
+            target = max(float(self.cfg.target_min_m), target)
+        if self.cfg.target_max_m is not None:
+            target = min(float(self.cfg.target_max_m), target)
+        return target
+
+    def _apply_target_command(self, target_m: Optional[float]) -> bool:
+        target = _finite_float(target_m)
+        if target is None:
+            return False
+        target = self._clamp_target(target)
+        if self._z_target is None or abs(float(self._z_target) - target) > 1e-9:
+            self._z_target = target
+            self._i_state = 0.0
+        return True
+
     def step(
         self,
         *,
@@ -91,6 +119,7 @@ class DepthHoldController:
         depth_m: Optional[float],
         depth_age_s: Optional[float],
         dt: float,
+        target_m: Optional[float] = None,
     ) -> tuple[float, Dict[str, Any]]:
         """Compute heave command.
 
@@ -106,6 +135,10 @@ class DepthHoldController:
             "active": False,
             "reason": "manual",
         }
+        has_target_cmd = self._apply_target_command(target_m) if enabled else False
+        if has_target_cmd and self._z_target is not None:
+            status["target_m"] = float(self._z_target)
+            status["target_source"] = "command"
 
         # If not enabled, pass through manual and reset state.
         if not enabled:
@@ -155,7 +188,8 @@ class DepthHoldController:
 
         # Engage logic: on rising edge, capture target and zero integrator.
         if not self._last_enabled:
-            self._z_target = z_f
+            if not has_target_cmd:
+                self._z_target = z_f
             self._i_state = 0.0
             self._active = True
         self._last_enabled = True
@@ -168,10 +202,24 @@ class DepthHoldController:
         # Walk target with manual stick (optional), or sticky-manual override.
         integrate_ok = True
         if abs(manual_heave) > float(self.cfg.walk_deadband):
-            if self.cfg.walk_target:
+            if has_target_cmd:
+                status.update(
+                    {
+                        "active": False,
+                        "reason": "manual_override",
+                        "depth_m": z,
+                        "depth_f_m": z_f,
+                        "target_m": float(self._z_target),
+                        "target_source": "command",
+                    }
+                )
+                self._i_state = 0.0
+                return manual_heave, status
+            elif self.cfg.walk_target:
                 # manual_heave > 0 means "UP" => target depth should DECREASE
                 self._z_target += (-manual_heave) * float(self.cfg.walk_rate_mps) * dt
                 integrate_ok = False  # avoid wind-up while pilot is actively commanding
+                status["target_source"] = "walk"
             else:
                 # "Sticky" mode: pilot is directly commanding heave. Keep the target
                 # glued to the current depth so releasing the stick captures it.
@@ -181,10 +229,7 @@ class DepthHoldController:
                 return manual_heave, status
 
         # Clamp target if desired.
-        if self.cfg.target_min_m is not None:
-            self._z_target = max(float(self.cfg.target_min_m), float(self._z_target))
-        if self.cfg.target_max_m is not None:
-            self._z_target = min(float(self.cfg.target_max_m), float(self._z_target))
+        self._z_target = self._clamp_target(float(self._z_target))
 
         z_t = float(self._z_target)
 
@@ -228,6 +273,7 @@ class DepthHoldController:
                 "depth_m": z,
                 "depth_f_m": z_f,
                 "target_m": z_t,
+                "target_source": "command" if has_target_cmd else status.get("target_source", "capture"),
                 "error_m": e,
                 "dz_mps": dz,
                 "u_raw": u_raw2,

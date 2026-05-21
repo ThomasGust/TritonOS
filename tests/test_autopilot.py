@@ -122,6 +122,60 @@ def test_autopilot_holds_yaw_without_forcing_roll_pitch():
     assert cmd["pitch"] == pytest.approx(0.0)
 
 
+def test_autopilot_accepts_independent_manual_targets_for_all_axes():
+    autopilot = AutopilotController(_config())
+
+    cmd, status = autopilot.step(
+        modes={
+            "autopilot": {
+                "depth": True,
+                "roll": "hold",
+                "pitch": "hold",
+                "yaw": "hold",
+                "targets": {
+                    "depth_m": 1.5,
+                    "roll_deg": 5.0,
+                    "pitch_deg": -3.0,
+                    "yaw_deg": 90.0,
+                },
+            }
+        },
+        cmd=_cmd(),
+        depth_m=1.0,
+        depth_age_s=0.0,
+        attitude=_attitude(roll_deg=10.0, pitch_deg=0.0, yaw_deg=100.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    assert status["depth_hold"]["target_m"] == pytest.approx(1.5)
+    assert status["depth_hold"]["target_source"] == "command"
+    assert status["attitude"]["axes"]["roll"]["target_deg"] == pytest.approx(5.0)
+    assert status["attitude"]["axes"]["pitch"]["target_deg"] == pytest.approx(-3.0)
+    assert status["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(90.0)
+    assert cmd["heave"] == pytest.approx(-0.25)
+    assert cmd["roll"] == pytest.approx(-0.05)
+    assert cmd["pitch"] == pytest.approx(-0.03)
+    assert cmd["yaw"] == pytest.approx(-0.10)
+
+
+def test_explicit_attitude_target_fails_open_to_manual_input():
+    autopilot = AutopilotController(_config())
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold", "targets": {"yaw_deg": 90.0}}},
+        cmd=_cmd(yaw=0.25),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=100.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    assert status["attitude"]["axes"]["yaw"]["reason"] == "manual_override"
+    assert cmd["yaw"] == pytest.approx(0.25)
+
+
 def test_autopilot_fails_open_to_manual_when_attitude_stale():
     autopilot = AutopilotController(_config())
 

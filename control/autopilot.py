@@ -106,10 +106,14 @@ class AttitudeAxisController:
         ready: bool,
         stale: bool,
         dt: float,
+        target_deg: Optional[float] = None,
     ) -> Tuple[float, Dict[str, Any]]:
         dt = float(dt) if dt and dt > 0.0 else 0.02
         manual_cmd = float(manual_cmd)
         mode = _mode(mode, self.cfg.default_mode)
+        target_cmd = _finite_float(target_deg)
+        if target_cmd is not None:
+            target_cmd = _wrap_deg(target_cmd)
         status: Dict[str, Any] = {
             "mode": mode,
             "enabled_cmd": mode != "off",
@@ -117,6 +121,8 @@ class AttitudeAxisController:
             "reason": "manual",
             "manual_cmd": manual_cmd,
         }
+        if target_cmd is not None:
+            status["target_cmd_deg"] = float(target_cmd)
 
         if mode == "off":
             self.reset()
@@ -158,10 +164,28 @@ class AttitudeAxisController:
                 )
                 return manual_cmd, status
         elif mode == "hold":
-            if (not self._last_enabled) or self._target_deg is None:
+            if target_cmd is not None:
+                if self._target_deg is None or abs(_wrap_deg(float(target_cmd) - float(self._target_deg))) > 1e-9:
+                    self._target_deg = float(target_cmd)
+                    self._i_state = 0.0
+            elif (not self._last_enabled) or self._target_deg is None:
                 self._target_deg = angle
                 self._i_state = 0.0
             if manual_active:
+                if target_cmd is not None:
+                    self._i_state = 0.0
+                    self._last_enabled = True
+                    status.update(
+                        {
+                            "active": False,
+                            "reason": "manual_override",
+                            "angle_deg": angle,
+                            "target_deg": float(self._target_deg),
+                            "target_source": "command",
+                            "rate_dps": rate_dps,
+                        }
+                    )
+                    return manual_cmd, status
                 self._target_deg = _wrap_deg(float(self._target_deg) + manual_cmd * float(self.cfg.walk_rate_dps) * dt)
         elif mode == "damp":
             u_damp = float(self.cfg.sign) * (-float(self.cfg.kd) * rate_dps)
@@ -213,6 +237,7 @@ class AttitudeAxisController:
                 "reason": "hold" if mode != "level" else "level",
                 "angle_deg": angle,
                 "target_deg": target,
+                "target_source": "command" if target_cmd is not None else ("level" if mode == "level" else "capture"),
                 "error_deg": error_deg,
                 "rate_dps": rate_dps,
                 "u_raw": u_raw,
@@ -254,8 +279,11 @@ class AutopilotController:
         modes = dict(modes or {})
         ap_modes = modes.get("autopilot") if isinstance(modes.get("autopilot"), dict) else {}
         ap_modes = dict(ap_modes or {})
+        targets = ap_modes.get("targets") if isinstance(ap_modes.get("targets"), dict) else {}
+        targets = dict(targets or {})
 
         depth_enabled = bool(ap_modes.get("depth", modes.get("depth_hold", modes.get("depth_hold_enabled", False))))
+        depth_target = self._target_value(targets, ap_modes, modes, "depth_m", ("depth_target_m", "target_depth_m"))
         depth_status: Dict[str, Any] = {"enabled_cmd": depth_enabled, "active": False, "reason": "disabled"}
         if self.cfg.depth_enable:
             heave_out, depth_status = self.depth_hold.step(
@@ -264,10 +292,11 @@ class AutopilotController:
                 depth_m=depth_m,
                 depth_age_s=depth_age_s,
                 dt=dt,
+                target_m=depth_target,
             )
             out["heave"] = float(heave_out)
 
-        attitude_status = self._step_attitude(ap_modes, modes, out, attitude, attitude_age_s, dt)
+        attitude_status = self._step_attitude(ap_modes, modes, targets, out, attitude, attitude_age_s, dt)
         status = {
             "enabled_cmd": bool(depth_status.get("enabled_cmd")) or bool(attitude_status.get("enabled_cmd")),
             "active": bool(depth_status.get("active")) or bool(attitude_status.get("active")),
@@ -291,10 +320,28 @@ class AutopilotController:
             return "hold"
         return _mode(self.axes[axis].cfg.default_mode, "off")
 
+    @staticmethod
+    def _target_value(
+        targets: Dict[str, Any],
+        ap_modes: Dict[str, Any],
+        modes: Dict[str, Any],
+        target_key: str,
+        fallback_keys: Tuple[str, ...],
+    ) -> Optional[float]:
+        if target_key in targets:
+            return _finite_float(targets.get(target_key))
+        for key in fallback_keys:
+            if key in ap_modes:
+                return _finite_float(ap_modes.get(key))
+            if key in modes:
+                return _finite_float(modes.get(key))
+        return None
+
     def _step_attitude(
         self,
         ap_modes: Dict[str, Any],
         modes: Dict[str, Any],
+        targets: Dict[str, Any],
         out: Dict[str, float],
         attitude: Dict[str, Any],
         attitude_age_s: Optional[float],
@@ -315,6 +362,13 @@ class AutopilotController:
             any_enabled = any_enabled or mode != "off"
             angle = _finite_float((attitude or {}).get(f"{axis}_deg"))
             ready = yaw_ready if axis == "yaw" else roll_pitch_ready
+            target = self._target_value(
+                targets,
+                ap_modes,
+                modes,
+                f"{axis}_deg",
+                (f"{axis}_target_deg", f"target_{axis}_deg"),
+            )
             u, st = self.axes[axis].step(
                 mode=mode,
                 manual_cmd=float(out.get(axis, 0.0) or 0.0),
@@ -322,6 +376,7 @@ class AutopilotController:
                 ready=ready,
                 stale=stale,
                 dt=dt,
+                target_deg=target,
             )
             out[axis] = float(u)
             any_active = any_active or bool(st.get("active"))

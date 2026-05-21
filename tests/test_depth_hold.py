@@ -1,4 +1,5 @@
 import rov_config as cfg
+import pytest
 
 from control.depth_hold import DepthHoldConfig, DepthHoldController
 
@@ -51,3 +52,34 @@ def test_depth_hold_small_error_overcomes_output_deadband_quickly():
     # A small sustained depth error should now break through the low-end command
     # deadbands quickly enough to be visible on the vertical thrusters.
     assert max(outputs) > _effective_low_end_command_threshold()
+
+
+def test_depth_hold_accepts_explicit_target_and_manual_override():
+    controller = DepthHoldController(
+        DepthHoldConfig(kp=0.5, ki=0.0, kd=0.0, out_limit=0.5, depth_lpf_tau_s=0.0)
+    )
+
+    u, status = controller.step(
+        enabled=True,
+        manual_heave=0.0,
+        depth_m=1.0,
+        depth_age_s=0.0,
+        dt=0.02,
+        target_m=1.5,
+    )
+    assert status["active"] is True
+    assert status["target_m"] == 1.5
+    assert status["target_source"] == "command"
+    assert u == pytest.approx(-0.25)
+
+    u, status = controller.step(
+        enabled=True,
+        manual_heave=0.3,
+        depth_m=1.0,
+        depth_age_s=0.0,
+        dt=0.02,
+        target_m=1.5,
+    )
+    assert status["active"] is False
+    assert status["reason"] == "manual_override"
+    assert u == pytest.approx(0.3)
