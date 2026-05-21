@@ -643,10 +643,11 @@ ATTITUDE_ACCEL_MAX_WEIGHT = 0.90
 ATTITUDE_ACCEL_NORM_GATE = 0.18
 ATTITUDE_CALIBRATION_MAX_TILT_STD_DEG = 1.25
 ATTITUDE_CALIBRATION_MAX_GYRO_RMS_DPS = 3.0
-# Navigator mount/body-frame convention on this ROV: physical roll appears on
-# sensor X and physical pitch appears on sensor Y, so sensor Y is the vehicle
-# roll-axis reference used to derive the perpendicular pitch axis.
-ATTITUDE_VEHICLE_ROLL_AXIS = "y"
+# Navigator mount/body-frame convention on this ROV: at rest gravity is mostly
+# on sensor -Y, so the usable horizontal body axes are sensor X and Z. Sensor Z
+# is the vehicle forward/roll axis, which makes bow pitch appear as pitch and
+# side roll appear as roll.
+ATTITUDE_VEHICLE_ROLL_AXIS = "z"
 ATTITUDE_ROLL_SIGN = 1.0
 ATTITUDE_PITCH_SIGN = 1.0
 ATTITUDE_YAW_MAG_SOURCE = "auto"  # auto prefers MMC5983 when available/clean

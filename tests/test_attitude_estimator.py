@@ -48,6 +48,35 @@ def _config(**kwargs):
     return RollPitchConfig(**kwargs)
 
 
+def _norm_vec(v):
+    mag = math.sqrt(sum(part * part for part in v))
+    return tuple(part / mag for part in v)
+
+
+def _dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _cross(a, b):
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _scale(v, s):
+    return tuple(part * s for part in v)
+
+
+def _add(a, b):
+    return tuple(x + y for x, y in zip(a, b))
+
+
+def _project_axis(axis, normal):
+    return _norm_vec(tuple(a - normal[i] * _dot(axis, normal) for i, a in enumerate(axis)))
+
+
 def test_roll_pitch_estimator_default_uses_standard_vehicle_axes():
     est = RollPitchEstimator(RollPitchConfig(calibration_samples=5, accel_correction=1.0))
     for i in range(5):
@@ -85,8 +114,10 @@ def test_roll_pitch_estimator_can_swap_vehicle_roll_axis_to_sensor_y():
     out = est.update(_imu(5.05, sensor_x_tilt))
 
     assert out is not None
+    assert out["vehicle_roll_axis"] == "y"
     assert out["roll_deg"] == pytest.approx(12.0, abs=0.15)
     assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
+    assert out["attitude_axes"]["roll"]["y"] == pytest.approx(1.0)
 
     sensor_y_tilt = (0.0, math.sin(theta) * 9.80665, math.cos(theta) * 9.80665)
     out = est.update(_imu(5.10, sensor_y_tilt))
@@ -94,6 +125,41 @@ def test_roll_pitch_estimator_can_swap_vehicle_roll_axis_to_sensor_y():
     assert out is not None
     assert out["roll_deg"] == pytest.approx(0.0, abs=0.15)
     assert out["pitch_deg"] == pytest.approx(12.0, abs=0.15)
+
+
+def test_roll_pitch_estimator_uses_sensor_z_forward_for_current_navigator_mount():
+    est = RollPitchEstimator(
+        RollPitchConfig(
+            calibration_samples=5,
+            accel_correction=1.0,
+            vehicle_roll_axis="z",
+        )
+    )
+    rest = (3.379, -9.315, -0.232)
+    rest_unit = _norm_vec(rest)
+    g_norm = math.sqrt(sum(part * part for part in rest))
+    roll_axis = _project_axis((0.0, 0.0, 1.0), rest_unit)
+    pitch_axis = _norm_vec(_cross(rest_unit, roll_axis))
+
+    for i in range(5):
+        assert est.update(_imu(float(i), rest)) is None
+
+    theta = math.radians(12.0)
+    pitch_accel = _scale(_add(_scale(rest_unit, math.cos(theta)), _scale(roll_axis, math.sin(theta))), g_norm)
+    out = est.update(_imu(5.05, pitch_accel))
+
+    assert out is not None
+    assert out["vehicle_roll_axis"] == "z"
+    assert out["roll_deg"] == pytest.approx(0.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(12.0, abs=0.15)
+    assert out["attitude_axes"]["roll"]["z"] == pytest.approx(roll_axis[2])
+
+    roll_accel = _scale(_add(_scale(rest_unit, math.cos(theta)), _scale(pitch_axis, -math.sin(theta))), g_norm)
+    out = est.update(_imu(5.10, roll_accel))
+
+    assert out is not None
+    assert out["roll_deg"] == pytest.approx(12.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
 
 
 def test_roll_pitch_estimator_zeros_current_rest_pose():

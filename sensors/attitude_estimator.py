@@ -258,6 +258,9 @@ class RollPitchEstimator:
                 "yaw_reference_samples": dict(self._reference_mag_samples),
                 "latest_mag_sources": sorted(self._latest_mag.keys()),
                 "last_output": dict(self._last_output) if self._last_output else None,
+                "vehicle_roll_axis": str(self.config.vehicle_roll_axis),
+                "roll_sign": float(self.config.roll_sign),
+                "pitch_sign": float(self.config.pitch_sign),
             }
 
     def update_mag(self, mag_msg: dict[str, Any]) -> None:
@@ -371,6 +374,13 @@ class RollPitchEstimator:
                 "tilt_deg": tilt_deg,
                 "roll_pitch_ready": True,
                 "attitude_ready": True,
+                "vehicle_roll_axis": str(self.config.vehicle_roll_axis),
+                "roll_sign": float(self.config.roll_sign),
+                "pitch_sign": float(self.config.pitch_sign),
+                "attitude_axes": {
+                    "roll": {"x": self._roll_axis[0], "y": self._roll_axis[1], "z": self._roll_axis[2]},
+                    "pitch": {"x": self._pitch_axis[0], "y": self._pitch_axis[1], "z": self._pitch_axis[2]},
+                },
                 "accel_roll_deg": accel_roll_deg,
                 "accel_pitch_deg": accel_pitch_deg,
                 "accel_tilt_deg": accel_tilt_deg,
