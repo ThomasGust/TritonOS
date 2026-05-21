@@ -23,9 +23,9 @@ from sensors.navigator import (
 def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
     """Best-effort low-latency / QoS hints for telemetry sockets."""
     try:
-        snd_hwm = int(os.environ.get("TRITON_SENSOR_SNDHWM", "200"))
+        snd_hwm = int(os.environ.get("TRITON_SENSOR_SNDHWM", "50"))
     except Exception:
-        snd_hwm = 200
+        snd_hwm = 50
     for opt, val in [
         (getattr(zmq, "LINGER", None), 0),
         (getattr(zmq, "SNDHWM", None), max(1, snd_hwm)),

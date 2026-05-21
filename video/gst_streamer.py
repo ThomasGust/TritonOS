@@ -331,13 +331,18 @@ class GstStream:
             raise ValueError("video_format must be 'mjpeg', 'raw', or 'h264'")
 
         if cfg.transport == "udp":
+            parts.append("queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream")
             # udpsink supports bind-address to select source interface.
             # Note: This is best-effort; if the address is not present on the
             # system, GStreamer will error and the stream will fail to start.
+            sync_prop = f"sync={'true' if cfg.sync else 'false'}"
             if cfg.bind_address:
-                parts.append(f"udpsink host={cfg.host} port={cfg.port} bind-address={cfg.bind_address}")
+                parts.append(
+                    f"udpsink host={cfg.host} port={cfg.port} bind-address={cfg.bind_address} "
+                    f"{sync_prop} async=false"
+                )
             else:
-                parts.append(f"udpsink host={cfg.host} port={cfg.port}")
+                parts.append(f"udpsink host={cfg.host} port={cfg.port} {sync_prop} async=false")
         else:
             parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
 
