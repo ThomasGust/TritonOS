@@ -74,3 +74,26 @@ For an offline-ish repair when the Pi already has dependencies installed:
 ```bash
 sudo bash bin/install_configure.sh --skip-os-packages --skip-python-deps --no-navigator-overlay
 ```
+
+## Tether Internet Gateway
+
+The ROV can route updates through the pilot computer instead of joining Wi-Fi.
+The expected tether addresses are pilot `192.168.1.1/24` and ROV `eth0`
+`192.168.1.4/24`.
+
+First configure the Windows side from the TritonPilot checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup_tether_nat.ps1 -TuneAdapter -ResetAdapter
+```
+
+Then test and enable the Pi route:
+
+```bash
+sudo bash bin/configure_tether_gateway.sh --probe
+sudo bash bin/configure_tether_gateway.sh --persistent
+```
+
+The Pi script refuses to install the default route unless the pilot gateway
+responds on Ethernet first, which prevents a broken tether link from stealing
+the working Wi-Fi default route.
