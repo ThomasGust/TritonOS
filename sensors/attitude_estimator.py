@@ -98,6 +98,28 @@ def _project_axis(axis: Vec3, normal: Vec3) -> Optional[Vec3]:
     return _normalize(_sub(axis, _scale(normal, _dot(axis, normal))))
 
 
+def _axis_from_name(name: str) -> Optional[Vec3]:
+    text = str(name or "").strip().lower()
+    sign = 1.0
+    if text.startswith("+"):
+        text = text[1:]
+    elif text.startswith("-"):
+        sign = -1.0
+        text = text[1:]
+    axes = {
+        "x": (1.0, 0.0, 0.0),
+        "sensor_x": (1.0, 0.0, 0.0),
+        "y": (0.0, 1.0, 0.0),
+        "sensor_y": (0.0, 1.0, 0.0),
+        "z": (0.0, 0.0, 1.0),
+        "sensor_z": (0.0, 0.0, 1.0),
+    }
+    axis = axes.get(text)
+    if axis is None:
+        return None
+    return _scale(axis, sign)
+
+
 def _angle_between_unit(a: Vec3, b: Vec3) -> float:
     dot = _clamp(_dot(a, b), -1.0, 1.0)
     return math.acos(dot)
@@ -160,6 +182,9 @@ class RollPitchConfig:
     accel_norm_gate: float = 0.18
     calibration_max_tilt_std_deg: float = 1.25
     calibration_max_gyro_rms_dps: float = 3.0
+    vehicle_roll_axis: str = "y"
+    roll_sign: float = 1.0
+    pitch_sign: float = 1.0
     yaw_mag_source: str = "auto"
     yaw_tau_s: float = 0.45
     yaw_min_weight: float = 0.02
@@ -445,11 +470,16 @@ class RollPitchEstimator:
         self._calibration_tilt_std_deg = tilt_std
         self._calibration_gyro_rms_dps = gyro_rms_dps
 
-        roll_axis = _project_axis((1.0, 0.0, 0.0), ref)
+        roll_axis = None
+        configured_roll_axis = _axis_from_name(str(self.config.vehicle_roll_axis))
+        if configured_roll_axis is not None:
+            roll_axis = _project_axis(configured_roll_axis, ref)
         if roll_axis is None:
-            roll_axis = _project_axis((0.0, 0.0, 1.0), ref)
+            roll_axis = _project_axis((1.0, 0.0, 0.0), ref)
         if roll_axis is None:
             roll_axis = _project_axis((0.0, 1.0, 0.0), ref)
+        if roll_axis is None:
+            roll_axis = _project_axis((0.0, 0.0, 1.0), ref)
         if roll_axis is None:
             roll_axis = (1.0, 0.0, 0.0)
         pitch_axis = _normalize(_cross(ref, roll_axis)) or (0.0, 1.0, 0.0)
@@ -636,8 +666,8 @@ class RollPitchEstimator:
         gx = _dot(gravity, self._roll_axis)
         gy = _dot(gravity, self._pitch_axis)
         gz = _clamp(_dot(gravity, self._reference_accel), -1.0, 1.0)
-        roll = math.atan2(-gy, gz)
-        pitch = math.atan2(gx, math.sqrt(max(0.0, gy * gy + gz * gz)))
+        roll = math.atan2(-gy, gz) * float(self.config.roll_sign)
+        pitch = math.atan2(gx, math.sqrt(max(0.0, gy * gy + gz * gz))) * float(self.config.pitch_sign)
         tilt = math.atan2(math.sqrt(max(0.0, gx * gx + gy * gy)), gz)
         return (
             math.degrees(roll),
