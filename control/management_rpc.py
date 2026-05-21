@@ -69,6 +69,13 @@ class ManagementRpcService:
             "control_loop_available": False,
             "armed": False,
             "updated_ts": None,
+            "autopilot": {
+                "available": False,
+                "sensor_available": False,
+                "status": {},
+                "status_age_s": None,
+                "attitude_sensor": {},
+            },
             "depth_hold": {
                 "available": False,
                 "sensor_available": False,

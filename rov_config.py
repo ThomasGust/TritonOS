@@ -120,6 +120,52 @@ DEPTH_HOLD_TARGET_MIN_M = None
 DEPTH_HOLD_TARGET_MAX_M = None
 
 # ---------------------------------------------------------------------------
+# 2c.5) autopilot coordination
+# ---------------------------------------------------------------------------
+# The autopilot owns the combined depth/attitude hold path. Depth hold still
+# uses the DEPTH_HOLD_* gains above and the legacy PilotFrame.modes["depth_hold"]
+# command, but it now runs through the same coordinator as attitude hold so the
+# vertical-thruster commands are composed before final mixing.
+AUTOPILOT_ENABLE = True
+AUTOPILOT_ATTITUDE_ENABLE = True
+AUTOPILOT_ATTITUDE_STALE_S = 0.50
+
+# First attitude-hold mode to tune: roll/pitch level with yaw free.
+# Keep these deliberately conservative while bench/water testing.
+AUTOPILOT_ROLL_MODE_DEFAULT = "off"
+AUTOPILOT_ROLL_KP = 0.012
+AUTOPILOT_ROLL_KI = 0.0
+AUTOPILOT_ROLL_KD = 0.002
+AUTOPILOT_ROLL_ERROR_DEADBAND_DEG = 0.5
+AUTOPILOT_ROLL_I_LIMIT = 0.10
+AUTOPILOT_ROLL_OUT_LIMIT = 0.16
+AUTOPILOT_ROLL_SIGN = 1.0
+AUTOPILOT_ROLL_MANUAL_DEADBAND = 0.08
+AUTOPILOT_ROLL_WALK_RATE_DPS = 35.0
+
+AUTOPILOT_PITCH_MODE_DEFAULT = "off"
+AUTOPILOT_PITCH_KP = 0.012
+AUTOPILOT_PITCH_KI = 0.0
+AUTOPILOT_PITCH_KD = 0.002
+AUTOPILOT_PITCH_ERROR_DEADBAND_DEG = 0.5
+AUTOPILOT_PITCH_I_LIMIT = 0.10
+AUTOPILOT_PITCH_OUT_LIMIT = 0.16
+AUTOPILOT_PITCH_SIGN = 1.0
+AUTOPILOT_PITCH_MANUAL_DEADBAND = 0.08
+AUTOPILOT_PITCH_WALK_RATE_DPS = 35.0
+
+AUTOPILOT_YAW_MODE_DEFAULT = "off"
+AUTOPILOT_YAW_KP = 0.006
+AUTOPILOT_YAW_KI = 0.0
+AUTOPILOT_YAW_KD = 0.0015
+AUTOPILOT_YAW_ERROR_DEADBAND_DEG = 1.0
+AUTOPILOT_YAW_I_LIMIT = 0.08
+AUTOPILOT_YAW_OUT_LIMIT = 0.12
+AUTOPILOT_YAW_SIGN = 1.0
+AUTOPILOT_YAW_MANUAL_DEADBAND = 0.08
+AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
+
+# ---------------------------------------------------------------------------
 # 2d) arming safety
 # ---------------------------------------------------------------------------
 # If True, the ROV will refuse to ARM unless sticks are centered and triggers

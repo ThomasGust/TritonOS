@@ -24,7 +24,7 @@ def _normalize_local_endpoint(ep: str) -> str:
 class DepthSensorTap:
     """Non-blocking subscriber that keeps the latest external_depth sample."""
 
-    def __init__(self, endpoint: str, *, conflate: bool = True, rcv_hwm: int = 10):
+    def __init__(self, endpoint: str, *, conflate: bool = False, rcv_hwm: int = 50):
         self.endpoint = _normalize_local_endpoint(endpoint)
 
         ctx = zmq.Context.instance()
@@ -103,3 +103,70 @@ class DepthSensorTap:
         if now is None:
             now = time.time()
         return float(now) - float(self.last_rx_ts)
+
+
+class AutopilotSensorTap(DepthSensorTap):
+    """Non-blocking subscriber that keeps latest depth and attitude samples."""
+
+    def __init__(self, endpoint: str, *, conflate: bool = True, rcv_hwm: int = 10):
+        super().__init__(endpoint, conflate=conflate, rcv_hwm=rcv_hwm)
+        self.last_attitude: Dict[str, Any] = {}
+        self.last_attitude_ts: Optional[float] = None
+        self.last_attitude_rx_ts: Optional[float] = None
+        self.last_attitude_source: Optional[str] = None
+
+    def poll(self, *, max_msgs: int = 50) -> None:
+        """Drain available messages without blocking."""
+        n = 0
+        while n < max_msgs:
+            n += 1
+            try:
+                raw = self.sock.recv_string(flags=zmq.NOBLOCK)
+            except zmq.Again:
+                return
+            except Exception:
+                return
+
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+
+            typ = (msg or {}).get("type")
+            if typ == "external_depth":
+                self._record_depth_msg(msg)
+            elif typ == "attitude":
+                self._record_attitude_msg(msg)
+
+    def _record_depth_msg(self, msg: Dict[str, Any]) -> None:
+        self.last_rx_ts = time.time()
+        self.last_raw = dict(msg)
+
+        if (msg or {}).get("error"):
+            return
+        if "depth_m" not in (msg or {}):
+            return
+
+        try:
+            self.last_depth_m = float(msg.get("depth_m"))
+            self.last_ts = time.time()
+            self.last_sensor_name = str(msg.get("sensor", "depth"))
+        except Exception:
+            return
+
+    def _record_attitude_msg(self, msg: Dict[str, Any]) -> None:
+        self.last_attitude_rx_ts = time.time()
+        self.last_attitude = dict(msg or {})
+        try:
+            self.last_attitude_ts = float(msg.get("ts"))
+        except Exception:
+            self.last_attitude_ts = None
+        self.last_attitude_source = str(msg.get("source", "attitude"))
+
+    def attitude_age_s(self, now: Optional[float] = None) -> Optional[float]:
+        """Age since last attitude message was received locally."""
+        if self.last_attitude_rx_ts is None:
+            return None
+        if now is None:
+            now = time.time()
+        return float(now) - float(self.last_attitude_rx_ts)

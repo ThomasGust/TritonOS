@@ -15,8 +15,8 @@ import rov_config as cfg
 from motion.channel_map import ChannelMap
 
 from control.mixer import EightThrusterMixer, SimpleGroupMixer, global_limit
-from control.depth_hold import DepthHoldController, DepthHoldConfig
-from control.sensor_tap import DepthSensorTap
+from control.autopilot import AutopilotController, autopilot_config_from_module
+from control.sensor_tap import AutopilotSensorTap
 
 
 @dataclass
@@ -382,43 +382,36 @@ class ControlService:
         # Track & log lights toggles (edge-based)
         self._last_lights_event: Optional[str] = None
 
-        # --- depth hold ----------------------------------------------------
-        self._depth_hold: Optional[DepthHoldController] = None
-        self._depth_tap: Optional[DepthSensorTap] = None
+        # --- autopilot -----------------------------------------------------
+        self._autopilot: Optional[AutopilotController] = None
+        self._autopilot_tap: Optional[AutopilotSensorTap] = None
+        # Back-compat aliases used by management/status code and older tests.
+        self._depth_hold = None
+        self._depth_tap: Optional[AutopilotSensorTap] = None
         self._hold_status_lock = threading.Lock()
+        self._last_autopilot_status: Dict[str, Any] = {}
+        self._last_autopilot_status_ts: Optional[float] = None
         self._last_depth_status: Dict[str, Any] = {}
         self._last_depth_status_ts: Optional[float] = None
 
-        if bool(getattr(cfg, "DEPTH_HOLD_ENABLE", True)):
+        if bool(getattr(cfg, "AUTOPILOT_ENABLE", True)):
             try:
                 # Subscribe locally to the sensor PUB stream.
-                self._depth_tap = DepthSensorTap(getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001"))
+                self._autopilot_tap = AutopilotSensorTap(getattr(cfg, "SENSOR_PUB_ENDPOINT", "tcp://0.0.0.0:6001"))
+                self._depth_tap = self._autopilot_tap
             except Exception as e:
                 if self.debug:
-                    print("[rov/control] depth hold disabled (sensor tap init failed):", e)
+                    print("[rov/control] autopilot sensor tap disabled:", e)
+                self._autopilot_tap = None
                 self._depth_tap = None
 
             try:
-                dh_cfg = DepthHoldConfig(
-                    sensor_stale_s=float(getattr(cfg, "DEPTH_HOLD_SENSOR_STALE_S", 0.6)),
-                    depth_lpf_tau_s=float(getattr(cfg, "DEPTH_HOLD_LPF_TAU_S", 0.50)),
-                    kp=float(getattr(cfg, "DEPTH_HOLD_KP", 0.30)),
-                    ki=float(getattr(cfg, "DEPTH_HOLD_KI", 0.05)),
-                    kd=float(getattr(cfg, "DEPTH_HOLD_KD", 0.00)),
-                    error_deadband_m=float(getattr(cfg, "DEPTH_HOLD_ERROR_DEADBAND_M", 0.03)),
-                    i_limit=float(getattr(cfg, "DEPTH_HOLD_I_LIMIT", 0.25)),
-                    out_limit=float(getattr(cfg, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
-                    sign=float(getattr(cfg, "DEPTH_HOLD_SIGN", 1.0)),
-                    walk_target=bool(getattr(cfg, "DEPTH_HOLD_WALK_TARGET", True)),
-                    walk_deadband=float(getattr(cfg, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
-                    walk_rate_mps=float(getattr(cfg, "DEPTH_HOLD_WALK_RATE_MPS", 0.60)),
-                    target_min_m=getattr(cfg, "DEPTH_HOLD_TARGET_MIN_M", None),
-                    target_max_m=getattr(cfg, "DEPTH_HOLD_TARGET_MAX_M", None),
-                )
-                self._depth_hold = DepthHoldController(dh_cfg)
+                self._autopilot = AutopilotController(autopilot_config_from_module(cfg))
+                self._depth_hold = self._autopilot.depth_hold
             except Exception as e:
                 if self.debug:
-                    print("[rov/control] depth hold disabled (config/init failed):", e)
+                    print("[rov/control] autopilot disabled (config/init failed):", e)
+                self._autopilot = None
                 self._depth_hold = None
 
     def _set_depth_status(self, status: Dict[str, Any]) -> None:
@@ -426,12 +419,23 @@ class ControlService:
             self._last_depth_status = dict(status or {})
             self._last_depth_status_ts = time.time()
 
+    def _set_autopilot_status(self, status: Dict[str, Any]) -> None:
+        now = time.time()
+        with self._hold_status_lock:
+            self._last_autopilot_status = copy.deepcopy(dict(status or {}))
+            self._last_autopilot_status_ts = now
+            depth_status = dict((status or {}).get("depth_hold") or {})
+            self._last_depth_status = depth_status
+            self._last_depth_status_ts = now
+
     def get_hold_status_snapshot(self) -> Dict[str, Any]:
         """Return a JSON-friendly snapshot of live hold state for topside/debugging."""
         now = time.time()
         with self._hold_status_lock:
             depth_status = copy.deepcopy(self._last_depth_status)
             depth_status_ts = self._last_depth_status_ts
+            autopilot_status = copy.deepcopy(self._last_autopilot_status)
+            autopilot_status_ts = self._last_autopilot_status_ts
 
         depth_target_m: Optional[float] = None
         if self._depth_hold is not None and self._depth_hold.target_depth_m is not None:
@@ -453,9 +457,30 @@ class ControlService:
                 "raw": copy.deepcopy(self._depth_tap.last_raw),
             }
 
+        attitude_sensor: Dict[str, Any] = {
+            "available": False,
+            "sample_age_s": None,
+            "source": None,
+            "raw": {},
+        }
+        if self._autopilot_tap is not None:
+            attitude_sensor = {
+                "available": bool(self._autopilot_tap.last_attitude),
+                "sample_age_s": self._autopilot_tap.attitude_age_s(now),
+                "source": self._autopilot_tap.last_attitude_source,
+                "raw": copy.deepcopy(self._autopilot_tap.last_attitude),
+            }
+
         return {
             "armed": bool(self.state.is_armed()),
             "updated_ts": now,
+            "autopilot": {
+                "available": self._autopilot is not None,
+                "sensor_available": self._autopilot_tap is not None,
+                "status": autopilot_status,
+                "status_age_s": (None if autopilot_status_ts is None else float(now - autopilot_status_ts)),
+                "attitude_sensor": attitude_sensor,
+            },
             "depth_hold": {
                 "available": self._depth_hold is not None,
                 "sensor_available": self._depth_tap is not None,
@@ -669,6 +694,12 @@ class ControlService:
                     self._disarm_with_gripper_park()
                     arming_event = f"DEADMAN ({self.deadman_button}) released -> DISARMED"
 
+            if self._autopilot_tap is not None:
+                try:
+                    self._autopilot_tap.poll()
+                except Exception:
+                    pass
+
             if fresh_pilot is None or not self.state.is_armed():
                 payload: Dict[Any, float] = {}
                 lights_val: Optional[float] = self._compute_lights(fresh_pilot)
@@ -697,30 +728,34 @@ class ControlService:
                 else:
                     cmd6 = build_6dof(fresh_pilot, self.gains)
 
-                    # Depth hold: modify heave command in-place before mixing.
-                    if self._depth_tap is not None:
-                        try:
-                            self._depth_tap.poll()
-                        except Exception:
-                            pass
-                    if self._depth_hold is not None:
+                    # Autopilot: modify owned DOFs in-place before mixing.
+                    if self._autopilot is not None:
                         modes = fresh_pilot.modes or {}
-                        enabled_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
                         depth_m = self._depth_tap.last_depth_m if self._depth_tap is not None else None
                         depth_age = self._depth_tap.age_s(now) if self._depth_tap is not None else None
+                        attitude = self._autopilot_tap.last_attitude if self._autopilot_tap is not None else {}
+                        attitude_age = self._autopilot_tap.attitude_age_s(now) if self._autopilot_tap is not None else None
                         try:
-                            heave_out, st = self._depth_hold.step(
-                                enabled=enabled_cmd,
-                                manual_heave=float(cmd6.get("heave", 0.0)),
+                            cmd6, st = self._autopilot.step(
+                                modes=modes,
+                                cmd=cmd6,
                                 depth_m=depth_m,
                                 depth_age_s=depth_age,
+                                attitude=attitude,
+                                attitude_age_s=attitude_age,
                                 dt=self.period,
                             )
-                            cmd6["heave"] = float(heave_out)
-                            self._set_depth_status(st)
+                            self._set_autopilot_status(st)
                         except Exception as e:
                             # Fail open to manual heave if anything goes wrong.
-                            self._set_depth_status({"enabled_cmd": enabled_cmd, "active": False, "reason": f"err:{e}"})
+                            self._set_autopilot_status(
+                                {
+                                    "enabled_cmd": False,
+                                    "active": False,
+                                    "depth_hold": {"enabled_cmd": False, "active": False, "reason": f"err:{e}"},
+                                    "attitude": {"enabled_cmd": False, "active": False, "reason": f"err:{e}"},
+                                }
+                            )
 
                     raw_thr = self.mixer.mix(cmd6)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
@@ -728,12 +763,20 @@ class ControlService:
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
                 dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
-                dh_cmd = False
+                autopilot_vertical_cmd = False
                 try:
                     modes = fresh_pilot.modes or {}
-                    dh_cmd = bool(modes.get("depth_hold", modes.get("depth_hold_enabled", False)))
+                    ap_modes = modes.get("autopilot") if isinstance(modes.get("autopilot"), dict) else {}
+                    ap_modes = dict(ap_modes or {})
+                    depth_cmd = bool(ap_modes.get("depth", modes.get("depth_hold", modes.get("depth_hold_enabled", False))))
+                    rp_level = bool(ap_modes.get("roll_pitch_level", modes.get("roll_pitch_level", False)))
+                    roll_mode = str(ap_modes.get("roll", modes.get("attitude_roll", ""))).strip().lower()
+                    pitch_mode = str(ap_modes.get("pitch", modes.get("attitude_pitch", ""))).strip().lower()
+                    roll_cmd = rp_level or roll_mode not in ("", "off", "free", "manual", "none", "false", "0")
+                    pitch_cmd = rp_level or pitch_mode not in ("", "off", "free", "manual", "none", "false", "0")
+                    autopilot_vertical_cmd = bool(depth_cmd or roll_cmd or pitch_cmd)
                 except Exception:
-                    dh_cmd = False
+                    autopilot_vertical_cmd = False
 
                 for k, v in list(thr.items()):
                     if isinstance(k, str) and k.strip().lower() == "lights":
@@ -742,7 +785,7 @@ class ControlService:
                     db = base_db
                     # When depth hold is enabled, allow smaller vertical
                     # corrections so the controller can make fine trim.
-                    if dh_cmd and isinstance(k, str) and k.strip().upper().startswith("V_"):
+                    if autopilot_vertical_cmd and isinstance(k, str) and k.strip().upper().startswith("V_"):
                         db = dh_db
 
                     if abs(float(v)) < float(db):
@@ -782,11 +825,19 @@ class ControlService:
                     else:
                         msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% (k={self.gains.power_scale:.2f})"
                         try:
-                            st = self._last_depth_status or {}
+                            ap = self._last_autopilot_status or {}
+                            st = dict(ap.get("depth_hold") or self._last_depth_status or {})
+                            att = dict(ap.get("attitude") or {})
                             if bool(st.get("enabled_cmd", False)):
                                 msg += f" | depth_hold={'ON' if st.get('active') else 'OFF'}"
                                 if st.get("active") and ("target_m" in st):
                                     msg += f" z={float(st.get('depth_f_m', 0.0)):.2f}m->t={float(st.get('target_m', 0.0)):.2f}m"
+                            if bool(att.get("enabled_cmd", False)):
+                                axes = dict(att.get("axes") or {})
+                                active_axes = [name for name, axis_st in axes.items() if bool((axis_st or {}).get("active"))]
+                                msg += f" | attitude={'ON' if active_axes else 'WAIT'}"
+                                if active_axes:
+                                    msg += f" axes={','.join(active_axes)}"
                         except Exception:
                             pass
                     if arming_event:
@@ -989,6 +1040,8 @@ class ControlService:
             time.sleep(float(settle_s))
 
     def _arm_with_gripper_park(self) -> None:
+        if self._autopilot is not None:
+            self._autopilot.reset()
         self.state.set_armed(True)
         hold_s = float(getattr(cfg, "ARM_HW_INIT_HOLD_S", 0.0) or 0.0)
         self._armed_since = time.time() + hold_s
@@ -997,6 +1050,8 @@ class ControlService:
         self._send_gripper_park_pose(settle_s=0.0)
 
     def _disarm_with_gripper_park(self) -> None:
+        if self._autopilot is not None:
+            self._autopilot.reset()
         # Send the park command while the PWM sink is still armed, then give the
         # servos a short window to move before PWM is disabled.
         self._send_gripper_park_pose(settle_s=self._gripper_park_settle_s)
