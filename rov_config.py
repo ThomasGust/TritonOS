@@ -130,6 +130,8 @@ AUTOPILOT_ENABLE = True
 AUTOPILOT_ATTITUDE_ENABLE = True
 AUTOPILOT_ATTITUDE_STALE_S = 0.50
 AUTOPILOT_MIX_DEADBAND = 0.02
+AUTOPILOT_STATUS_ENABLE = True
+AUTOPILOT_STATUS_RATE_HZ = 20.0
 
 # First attitude-hold modes to tune: roll/pitch level and yaw hold.
 # Keep these deliberately conservative while bench/water testing.

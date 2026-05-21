@@ -200,6 +200,35 @@ def _has_nonzero(values: Mapping[Any, Any], eps: float = 1e-6) -> bool:
     return False
 
 
+def _float_map(values: Mapping[Any, Any] | None) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    if not isinstance(values, Mapping):
+        return out
+    for key, value in values.items():
+        try:
+            v = float(value)
+        except Exception:
+            continue
+        if math.isfinite(v):
+            out[str(key)] = v
+    return out
+
+
+def _pilot_summary(pilot: Optional[PilotFrame], age_s: Optional[float], fresh: bool) -> Dict[str, Any]:
+    if pilot is None:
+        return {
+            "available": False,
+            "fresh": False,
+            "age_s": None if age_s is None else float(age_s),
+        }
+    out = pilot.to_dict()
+    out.pop("type", None)
+    out["available"] = True
+    out["fresh"] = bool(fresh)
+    out["age_s"] = None if age_s is None else float(age_s)
+    return out
+
+
 
 class ControlService:
     """
@@ -393,6 +422,8 @@ class ControlService:
         self._last_autopilot_status_ts: Optional[float] = None
         self._last_depth_status: Dict[str, Any] = {}
         self._last_depth_status_ts: Optional[float] = None
+        self._last_control_status: Dict[str, Any] = {}
+        self._last_control_status_ts: Optional[float] = None
 
         if bool(getattr(cfg, "AUTOPILOT_ENABLE", True)):
             try:
@@ -428,6 +459,14 @@ class ControlService:
             self._last_depth_status = depth_status
             self._last_depth_status_ts = now
 
+    def _set_control_status(self, status: Dict[str, Any]) -> None:
+        now = time.time()
+        payload = copy.deepcopy(dict(status or {}))
+        payload.setdefault("updated_ts", now)
+        with self._hold_status_lock:
+            self._last_control_status = payload
+            self._last_control_status_ts = now
+
     def get_hold_status_snapshot(self) -> Dict[str, Any]:
         """Return a JSON-friendly snapshot of live hold state for topside/debugging."""
         now = time.time()
@@ -436,6 +475,8 @@ class ControlService:
             depth_status_ts = self._last_depth_status_ts
             autopilot_status = copy.deepcopy(self._last_autopilot_status)
             autopilot_status_ts = self._last_autopilot_status_ts
+            control_status = copy.deepcopy(self._last_control_status)
+            control_status_ts = self._last_control_status_ts
 
         depth_target_m: Optional[float] = None
         if self._depth_hold is not None and self._depth_hold.target_depth_m is not None:
@@ -474,6 +515,10 @@ class ControlService:
         return {
             "armed": bool(self.state.is_armed()),
             "updated_ts": now,
+            "control": {
+                "status": control_status,
+                "status_age_s": (None if control_status_ts is None else float(now - control_status_ts)),
+            },
             "autopilot": {
                 "available": self._autopilot is not None,
                 "sensor_available": self._autopilot_tap is not None,
@@ -707,6 +752,35 @@ class ControlService:
                     payload["lights"] = float(lights_val)
                 self._send_to_hw(payload)
 
+                if fresh_pilot is None:
+                    control_reason = "no_pilot" if pilot is None else "stale_pilot"
+                else:
+                    control_reason = "disarmed"
+                self._set_control_status(
+                    {
+                        "updated_ts": now,
+                        "armed": bool(self.state.is_armed()),
+                        "sink_armed": bool(self._sink_armed),
+                        "dry_run": bool(self.dry_run),
+                        "mix_mode": str(self._mix_mode),
+                        "reason": control_reason,
+                        "pilot": _pilot_summary(pilot, fresh_age, fresh_pilot is not None),
+                        "arming_event": arming_event,
+                        "lights_event": lights_event,
+                        "cmd_manual": {},
+                        "cmd_final": {},
+                        "thrusters_raw": {},
+                        "thrusters_limited": {},
+                        "thrusters_final": {},
+                        "payload": _float_map(payload),
+                        "gain": {
+                            "base_power_scale": float(self._base_power_scale),
+                            "pilot_max_gain": float(self._last_pilot_max_gain),
+                            "effective_power_scale": float(self.gains.power_scale),
+                        },
+                    }
+                )
+
                 if self.debug and (now - self._last_log) > self.log_every_s:
                     reason = "no frames" if pilot is None else ("stale" if fresh_pilot is None else "DISARMED")
                     msg = f"[rov/control] NEUTRAL ({reason}, age={fresh_age:.3f}s armed={self.state.is_armed()})"
@@ -722,11 +796,15 @@ class ControlService:
 
                 if self._mix_mode == 'simple_groups':
                     cmd2 = build_2axis(fresh_pilot, self.gains)
+                    cmd_manual: Dict[str, float] = dict(cmd2)
+                    cmd_final: Dict[str, float] = dict(cmd2)
                     raw_thr = self.mixer.mix(cmd2['surge'], cmd2['heave'])
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
+                    thr_limited = dict(thr)
                     thr = self._channels_to_named(thr)
                 else:
                     cmd6 = build_6dof(fresh_pilot, self.gains)
+                    cmd_manual = dict(cmd6)
 
                     # Autopilot: modify owned DOFs in-place before mixing.
                     if self._autopilot is not None:
@@ -757,8 +835,10 @@ class ControlService:
                                 }
                             )
 
+                    cmd_final = dict(cmd6)
                     raw_thr = self.mixer.mix(cmd6)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
+                    thr_limited = dict(thr)
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
@@ -798,6 +878,7 @@ class ControlService:
 
                     if abs(float(v)) < float(db):
                         thr[k] = 0.0
+                thr_after_deadband = dict(thr)
 
                 # Smooth ramp-in right after arming so even if a joystick axis is
                 # slightly off-center you don't get a violent jump.
@@ -814,6 +895,7 @@ class ControlService:
                         if isinstance(k, str) and k.strip().lower() == "lights":
                             continue
                         thr[k] = float(thr[k]) * float(ramp)
+                thr_final = dict(thr)
                 payload: Dict[Any, float] = dict(thr)
                 lights_val = self._compute_lights(fresh_pilot)
                 if lights_val is not None:
@@ -826,6 +908,38 @@ class ControlService:
                     payload[self._gripper_left_key] = float(gripper_left)
                     payload[self._gripper_right_key] = float(gripper_right)
                 self._send_to_hw(payload)
+                self._set_control_status(
+                    {
+                        "updated_ts": now,
+                        "armed": bool(self.state.is_armed()),
+                        "sink_armed": bool(self._sink_armed),
+                        "dry_run": bool(self.dry_run),
+                        "mix_mode": str(self._mix_mode),
+                        "reason": "armed_apply",
+                        "pilot": _pilot_summary(pilot, fresh_age, True),
+                        "arming_event": arming_event,
+                        "lights_event": lights_event,
+                        "cmd_manual": _float_map(cmd_manual),
+                        "cmd_final": _float_map(cmd_final),
+                        "thrusters_raw": _float_map(raw_thr),
+                        "thrusters_limited": _float_map(thr_limited),
+                        "thrusters_after_deadband": _float_map(thr_after_deadband),
+                        "thrusters_final": _float_map(thr_final),
+                        "payload": _float_map(payload),
+                        "ramp": float(ramp),
+                        "deadband": {
+                            "base": float(base_db),
+                            "autopilot": float(ap_db),
+                            "autopilot_vertical_cmd": bool(autopilot_vertical_cmd),
+                            "autopilot_horizontal_cmd": bool(autopilot_horizontal_cmd),
+                        },
+                        "gain": {
+                            "base_power_scale": float(self._base_power_scale),
+                            "pilot_max_gain": float(self._last_pilot_max_gain),
+                            "effective_power_scale": float(self.gains.power_scale),
+                        },
+                    }
+                )
 
                 if self.debug and (now - self._last_log) > self.log_every_s:
                     if self._mix_mode == "simple_groups":

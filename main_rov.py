@@ -183,6 +183,23 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     except Exception as e:
         if getattr(cfg, "DEBUG", False):
             print("[rov/main] heartbeat disabled:", e)
+
+    # Autopilot/control black-box telemetry. This records the controller's
+    # internal setpoints, errors, output commands, and final mixed payloads.
+    if ctrl is not None and bool(getattr(cfg, "AUTOPILOT_STATUS_ENABLE", True)):
+        try:
+            from sensors.autopilot_status import AutopilotStatusSensor
+
+            sensor_list.append(
+                AutopilotStatusSensor(
+                    ctrl,
+                    rate_hz=float(getattr(cfg, "AUTOPILOT_STATUS_RATE_HZ", 20.0)),
+                )
+            )
+        except Exception as e:
+            if getattr(cfg, "DEBUG", False):
+                print("[rov/main] autopilot status telemetry disabled:", e)
+
     # External depth sensor (Blue Robotics MS5837: Bar30 / Bar02)
     use_external = bool(getattr(cfg, "USE_EXTERNAL_DEPTH", False))
     use_bar02 = bool(getattr(cfg, "USE_BAR02", False))
