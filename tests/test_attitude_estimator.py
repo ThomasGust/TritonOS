@@ -48,7 +48,7 @@ def _config(**kwargs):
     return RollPitchConfig(**kwargs)
 
 
-def test_roll_pitch_estimator_default_matches_rov_swapped_axes():
+def test_roll_pitch_estimator_default_uses_standard_vehicle_axes():
     est = RollPitchEstimator(RollPitchConfig(calibration_samples=5, accel_correction=1.0))
     for i in range(5):
         assert est.update(_imu(float(i), (0.0, 0.0, 9.80665))) is None
@@ -58,15 +58,15 @@ def test_roll_pitch_estimator_default_matches_rov_swapped_axes():
     out = est.update(_imu(5.05, sensor_x_tilt))
 
     assert out is not None
-    assert out["roll_deg"] == pytest.approx(12.0, abs=0.15)
-    assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
+    assert out["roll_deg"] == pytest.approx(0.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(12.0, abs=0.15)
 
     sensor_y_tilt = (0.0, math.sin(theta) * 9.80665, math.cos(theta) * 9.80665)
     out = est.update(_imu(5.10, sensor_y_tilt))
 
     assert out is not None
-    assert out["roll_deg"] == pytest.approx(0.0, abs=0.15)
-    assert out["pitch_deg"] == pytest.approx(12.0, abs=0.15)
+    assert out["roll_deg"] == pytest.approx(-12.0, abs=0.15)
+    assert out["pitch_deg"] == pytest.approx(0.0, abs=0.15)
 
 
 def test_roll_pitch_estimator_zeros_current_rest_pose():

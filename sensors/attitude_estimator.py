@@ -182,7 +182,7 @@ class RollPitchConfig:
     accel_norm_gate: float = 0.18
     calibration_max_tilt_std_deg: float = 1.25
     calibration_max_gyro_rms_dps: float = 3.0
-    vehicle_roll_axis: str = "y"
+    vehicle_roll_axis: str = "x"
     roll_sign: float = 1.0
     pitch_sign: float = 1.0
     yaw_mag_source: str = "auto"
