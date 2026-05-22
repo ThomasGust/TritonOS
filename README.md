@@ -1,99 +1,136 @@
 # TritonOS
 
-TritonOS is the onboard runtime for the ROV. It starts the pilot/control loop,
-hardware output sink, sensor publisher, video RPC service, and management RPC
-service used by the topside TritonPilot app.
+TritonOS is the onboard runtime for Triton's ROV. It runs on the vehicle
+computer, listens for pilot commands from TritonPilot, drives the vehicle's PWM
+outputs, publishes sensor telemetry, manages camera streams, and exposes a
+small management RPC surface for configuration and calibration tasks.
 
-Current stability software is intentionally limited to depth hold. Raw IMU
-telemetry publishes accelerometer and gyroscope samples at the IMU rate, while
-raw magnetometers publish separately so AK09915 and optional MMC5983 samples
-can be compared without slowing down accel/gyro telemetry.
+TritonOS is intentionally separate from mission analysis code. During
+competition, mission-specific detection and scoring workflows should run from
+the TritonAnalysis repository on a separate computer. TritonOS should stay
+focused on safe vehicle operation, telemetry, and hardware control.
 
-## Raw Sensor Stream
+## What Runs On The ROV
 
-The ROV publishes sensor telemetry on `rov_config.SENSOR_PUB_ENDPOINT`, usually
-`tcp://0.0.0.0:6001`. IMU messages include raw accel/gyro only. Raw
-magnetometer messages use `type: "mag"` and include the primary AK09915 vector
-plus `mag_sources` for all detected raw magnetometers.
+`main_rov.py` starts the onboard services:
 
-For isolated stream testing on the ROV:
+- Pilot receiver and control loop on `tcp://0.0.0.0:6000`
+- Sensor telemetry publisher on `tcp://0.0.0.0:6001`
+- Video stream RPC server on `tcp://0.0.0.0:5555`
+- Management RPC server on `tcp://0.0.0.0:5556`
+- Optional network diagnostics server on port `7700`
+
+The most important runtime flow is:
+
+```text
+TritonPilot controller input
+        |
+        v
+PilotFrame JSON over ZeroMQ
+        |
+        v
+PilotReceiver -> ControlService -> Mixer/Autopilot -> ThrustWriter
+        |
+        v
+Navigator/PCA9685 PWM outputs
+```
+
+Sensor and video flows are separate so telemetry, control, and camera problems
+can be diagnosed independently.
+
+## Repository Layout
+
+```text
+main_rov.py          ROV service supervisor and normal entry point
+rov_config.py        Operator-tunable runtime configuration
+control/             Pilot intake, arming, control loop, hold controllers, RPC
+motion/              PWM backends, thruster writer, channel mapping
+sensors/             Hardware drivers, telemetry wrappers, derived processors
+video/               GStreamer stream manager and video RPC server
+schema/              Shared pilot-control wire schema
+utils/               Shared config, Navigator import, reference, ZMQ helpers
+tools/               Operator diagnostics and bench/field utilities
+bin/                 Install, update, tether, and debug shell scripts
+tests/               Hardware-free unit tests
+docs/                Setup, networking, architecture, and subsystem docs
+```
+
+## Start Here
+
+- [Documentation Index](docs/README.md)
+- [Setup Guide](docs/SETUP.md)
+- [Network Guide](docs/NETWORKING.md)
+- [Operations Guide](docs/OPERATIONS.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Subsystem Reference](docs/SUBSYSTEMS.md)
+- [Configuration Guide](docs/CONFIGURATION.md)
+- [Testing And Troubleshooting](docs/TESTING_AND_TROUBLESHOOTING.md)
+
+## Development Quick Start
+
+From a development machine:
 
 ```bash
-python tools/sensor_stream_pub_test.py --fake
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest
 ```
 
-Then connect from the TritonPilot checkout with:
+The test suite is designed to run without physical ROV hardware. Hardware-only
+checks live in `tools/` and should be run deliberately on the vehicle.
+
+## ROV Install And Update
+
+Initial provisioning on the Raspberry Pi:
 
 ```bash
-python tools/sensor_stream_sub_test.py --endpoint tcp://<rov-ip>:6001
+sudo bash bin/install_configure.sh --project-dir /home/TritonOS
 ```
 
-## Test
+Normal code update on the Pi:
 
 ```bash
-pytest
+sudo bash bin/update_code.sh --dir /home/TritonOS
 ```
 
-The pytest configuration uses a repo-local `.pytest-tmp` directory and skips
-tests marked `hardware` by default so the suite can run on a development
-machine without touching physical ROV devices.
-
-## ROV Setup And Updates
-
-For normal code updates on the Pi, use:
+Check the service:
 
 ```bash
-sudo bash bin/update_code.sh
+sudo systemctl status tritonos-rov.service
+sudo journalctl -u tritonos-rov.service -f
 ```
 
-That path avoids `apt-get update` and full repository checks by default so it
-stays fast on the bench network. Use `--with-apt` only when you actually want
-the script to refresh/install base OS tools, and `--fsck` only when you suspect
-repository corruption.
+See [Setup Guide](docs/SETUP.md) for the full install path, expected hardware
+dependencies, and recovery options.
 
-Initial provisioning remains:
+## Network Defaults
+
+The normal tethered layout is:
+
+- Pilot computer: `192.168.1.1`
+- ROV Ethernet: `192.168.1.4`
+- Pilot commands: ROV port `6000`
+- Sensor stream: ROV port `6001`
+- Video RPC: ROV port `5555`
+- Management RPC: ROV port `5556`
+- Network diagnostics: ROV port `7700`
+
+See [Network Guide](docs/NETWORKING.md) for tether setup, internet sharing,
+route configuration, video routing, and troubleshooting.
+
+## Safety Notes
+
+TritonOS starts disarmed. The control loop only commands non-neutral thruster
+outputs after an arm command, fresh pilot input, and configured arming checks.
+Hardware scripts in `tools/` can bypass pieces of the normal control stack, so
+use them with props removed or the vehicle secured.
+
+Before any water test, run:
 
 ```bash
-sudo bash bin/install_configure.sh
+python -m tools.rov_preflight
+python -m tools.print_channel_map
 ```
 
-Both scripts force apt to IPv4 with short network timeouts, which avoids long
-IPv6 stalls on networks where the Pi has no IPv6 route.
-
-If the repo is private and the update fails at Git fetch/pull, the updater will
-try to copy an existing root GitHub credential into the `triton` user's
-credential store. If no credential exists, set a fresh read-only token once:
-
-```bash
-export TRITON_GITHUB_TOKEN='...'
-sudo -E bash bin/update_code.sh
-```
-
-For an offline-ish repair when the Pi already has dependencies installed:
-
-```bash
-sudo bash bin/install_configure.sh --skip-os-packages --skip-python-deps --no-navigator-overlay
-```
-
-## Tether Internet Gateway
-
-The ROV can route updates through the pilot computer instead of joining Wi-Fi.
-The expected tether addresses are pilot `192.168.1.1/24` and ROV `eth0`
-`192.168.1.4/24`.
-
-First configure the Windows side from the TritonPilot checkout:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup_tether_nat.ps1 -TuneAdapter -ResetAdapter
-```
-
-Then test and enable the Pi route:
-
-```bash
-sudo bash bin/configure_tether_gateway.sh --probe
-sudo bash bin/configure_tether_gateway.sh --persistent
-```
-
-The Pi script refuses to install the default route unless the pilot gateway
-responds on Ethernet first, which prevents a broken tether link from stealing
-the working Wi-Fi default route.
+Then use the operations checklist in [Operations Guide](docs/OPERATIONS.md).

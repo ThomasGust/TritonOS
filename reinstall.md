@@ -1,10 +1,21 @@
-Run this stuff:
-ssh-keygen -R tritonpi.local
+# Reinstall Notes
 
-scp bin/install_configure.sh triton@tritonpi.local:/tmp/install_configure.sh
+Use the maintained recovery instructions in [docs/SETUP.md](docs/SETUP.md).
 
-ssh triton@tritonpi.local "chmod +x /tmp/install_configure.sh && sudo /tmp/install_configure.sh"
+Common repair paths:
 
-If the Pi has been through a few failed Python installs already, force a clean venv rebuild:
+```bash
+cd /home/TritonOS
+sudo bash bin/install_configure.sh --project-dir /home/TritonOS --recreate-venv
+```
 
-ssh triton@tritonpi.local "chmod +x /tmp/install_configure.sh && sudo /tmp/install_configure.sh --recreate-venv"
+If the checkout is unusable, preserve it before recloning so calibration files
+can be recovered:
+
+```bash
+cd /home
+sudo mv TritonOS TritonOS.broken.$(date +%Y%m%d-%H%M%S)
+sudo git clone https://github.com/ThomasGust/TritonOS.git /home/TritonOS
+cd /home/TritonOS
+sudo bash bin/install_configure.sh --project-dir /home/TritonOS
+```

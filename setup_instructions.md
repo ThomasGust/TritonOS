@@ -1,9 +1,12 @@
-The Pi should already be flashed with the code and configured the way it needs to be. If you ever find the code is broken or not accepting updates, delete the existing project folder on the ROV and run through the steps in reinstall.md in order to get the software working again.
+# Setup Instructions
 
-This file will deal with the network setup instructions for windows (haven't been able to test this for a mac device yet). First of all, you will need to clone the pilot control repository.
+The maintained setup and networking documentation now lives under `docs/`:
 
-The other things you need to download in order for things to work right are PuTTY which allows cleaner ssh into a terminal on the pi should anything need to be debugged outside the pilot software and dhcpsrv to handle the addressing.
+- [Setup Guide](docs/SETUP.md)
+- [Network Guide](docs/NETWORKING.md)
+- [Operations Guide](docs/OPERATIONS.md)
+- [Testing And Troubleshooting](docs/TESTING_AND_TROUBLESHOOTING.md)
 
-Download from dhcpserver.de and putty.org.
-
-I am not done writing everything out fully, but for the most part you should be able to follow the instructions at (THIS LINK)[https://www.youtube.com/watch?v=oM2zVD9rL8I] to set up ethernet communication between a desktop and the pi. For now, just use Griffin's computer or call/text me if you have pressing questions.
+Start with `docs/SETUP.md` for ROV installation or recovery. Start with
+`docs/NETWORKING.md` for tether addressing, Windows internet sharing, and Pi
+gateway setup.
