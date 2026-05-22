@@ -141,12 +141,12 @@ def build_6dof(pilot: PilotFrame, gains: ControlGains) -> Dict[str, float]:
     dpx, dpy = pilot.dpad
 
     if pitch_axis is None or str(pitch_axis).strip().lower() in ("dpad", "dpad_y", "hat", "hat_y"):
-        pitch = float(dpy) * gains.pitch
+        pitch = float(dpy) * pitch_inv * gains.pitch
     else:
         pitch = dz(a(str(pitch_axis)), dzv) * pitch_inv * gains.pitch
 
     if roll_axis is None or str(roll_axis).strip().lower() in ("dpad", "dpad_x", "hat", "hat_x"):
-        roll = float(dpx) * gains.roll
+        roll = float(dpx) * roll_inv * gains.roll
     else:
         roll = dz(a(str(roll_axis)), dzv) * roll_inv * gains.roll
 

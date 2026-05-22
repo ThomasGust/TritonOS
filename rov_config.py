@@ -94,21 +94,20 @@ THRUSTER_GEOMETRY = {
 #   - Set AXIS_YAW = "none" to disable yaw if you don't want turning.
 #   - AXIS_PITCH/AXIS_ROLL override D-pad pitch/roll when set.
 AXIS_SURGE = "ly"
+AXIS_HEAVE = "ry"
+AXIS_SWAY  = "rx"
 AXIS_YAW   = "lx"
 
 # Put pitch/roll somewhere “secondary” for now:
 AXIS_PITCH = "dpad_y"   # or "none" to fully disable pitch
 AXIS_ROLL  = "dpad_x"   # optional; leaving it unset also defaults to dpad
-AXIS_HEAVE = "ry"
-AXIS_SWAY  = "rx"
-AXIS_YAW   = "lx"
-AXIS_ROLL  = "dpad_x"
 
 # Invert scalars (+1.0 or -1.0)
 AXIS_SURGE_INVERT = 1.0
 AXIS_SWAY_INVERT  = 1.0
 AXIS_HEAVE_INVERT = 1.0
 AXIS_PITCH_INVERT = 1.0
+AXIS_ROLL_INVERT  = -1.0
 AXIS_YAW_INVERT   = 1.0
 
 AXIS_DEADZONE = 0.10  # 10% stick deadzone
