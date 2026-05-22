@@ -41,7 +41,42 @@ PILOT_TTL = 0.5  # seconds before we consider pilot stale
 # Control mixing mode:
 #   - "simple_groups": bring-up mode (surge drives all horizontals, heave drives all verticals)
 #   - "six_dof": full mixer (surge/sway/yaw on horizontals; heave/pitch/roll on verticals)
+#   - "geometric": physical-geometry least-squares mixer; set back to "six_dof" if testing is poor
 CONTROL_MIX_MODE = "six_dof"
+
+# Geometric mixer model.
+# Coordinates are vehicle-relative, measured from the approximate frame center:
+#   +x forward, +y right, +z down.
+#
+# Positions below are derived from motoref.md:
+#   frame 20.5 in long, 16.5 in wide, 11 in tall.
+#   front/back and left/right values use the listed insets from frame walls.
+#   height is listed as distance down from the top of frame, then converted to
+#   a centered z coordinate.
+#
+# The horizontal motors were described as "60 deg to bias surge". We interpret
+# that as 60 deg from the lateral/sway axis, i.e. 30 deg off the forward axis.
+# If the physical convention is the opposite, change this to 60.0 and retest.
+GEOMETRIC_MIXER_HORIZONTAL_ANGLE_DEG_FROM_FORWARD = 30.0
+GEOMETRIC_MIXER_REGULARIZATION = 0.015
+GEOMETRIC_MIXER_AXIS_WEIGHTS = {
+    "surge": 1.0,
+    "sway": 1.0,
+    "heave": 1.0,
+    "roll": 1.0,
+    "pitch": 1.0,
+    "yaw": 1.0,
+}
+THRUSTER_GEOMETRY = {
+    "H_FL": {"position_m": (0.2032, -0.12065, -0.0381), "direction": "auto", "scale": 1.0},
+    "H_FR": {"position_m": (0.2032, 0.12065, -0.0381), "direction": "auto", "scale": 1.0},
+    "H_RL": {"position_m": (-0.2032, -0.12065, -0.0381), "direction": "auto", "scale": 1.0},
+    "H_RR": {"position_m": (-0.2032, 0.12065, -0.0381), "direction": "auto", "scale": 1.0},
+    "V_FL": {"position_m": (0.08255, -0.1524, -0.1397), "direction": "auto", "scale": 1.0},
+    "V_FR": {"position_m": (0.08255, 0.1524, -0.1397), "direction": "auto", "scale": 1.0},
+    "V_RL": {"position_m": (-0.1016, -0.1524, -0.1397), "direction": "auto", "scale": 1.0},
+    "V_RR": {"position_m": (-0.1016, 0.1524, -0.1397), "direction": "auto", "scale": 1.0},
+}
 
 # Controller axis mapping (PilotFrame.axes fields).
 # Desired mapping:

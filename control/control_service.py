@@ -26,7 +26,7 @@ from control.pilot_receiver import PilotReceiver
 import rov_config as cfg
 from motion.channel_map import ChannelMap
 
-from control.mixer import EightThrusterMixer, SimpleGroupMixer, global_limit
+from control.mixer import EightThrusterMixer, SimpleGroupMixer, geometric_mixer_from_config, global_limit
 from control.autopilot import AutopilotController, autopilot_config_from_module
 from control.sensor_tap import AutopilotSensorTap
 
@@ -309,6 +309,8 @@ class ControlService:
                 self._chanmap.horizontal_thrusters,
                 self._chanmap.vertical_thrusters,
             )
+        elif self._mix_mode == 'geometric':
+            self.mixer = geometric_mixer_from_config(cfg)
         else:
             self.mixer = EightThrusterMixer()
 
@@ -825,8 +827,10 @@ class ControlService:
                     cmd_manual: Dict[str, float] = dict(cmd2)
                     cmd_final: Dict[str, float] = dict(cmd2)
                     raw_thr = self.mixer.mix(cmd2['surge'], cmd2['heave'])
+                    mixer_diag_raw: Dict[str, Any] = {}
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
                     thr_limited = dict(thr)
+                    mixer_diag_limited: Dict[str, Any] = {}
                     thr = self._channels_to_named(thr)
                 else:
                     cmd6 = build_6dof(fresh_pilot, self.gains)
@@ -863,8 +867,10 @@ class ControlService:
 
                     cmd_final = dict(cmd6)
                     raw_thr = self.mixer.mix(cmd6)
+                    mixer_diag_raw = self._mixer_diagnostics(cmd6, raw_thr)
                     thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
                     thr_limited = dict(thr)
+                    mixer_diag_limited = self._mixer_diagnostics(cmd6, thr_limited)
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
@@ -958,6 +964,11 @@ class ControlService:
                             "autopilot": float(ap_db),
                             "autopilot_vertical_cmd": bool(autopilot_vertical_cmd),
                             "autopilot_horizontal_cmd": bool(autopilot_horizontal_cmd),
+                        },
+                        "mixer": {
+                            "mode": str(self._mix_mode),
+                            "raw": mixer_diag_raw,
+                            "limited": mixer_diag_limited,
                         },
                         "gain": {
                             "base_power_scale": float(self._base_power_scale),
@@ -1063,6 +1074,15 @@ class ControlService:
             else:
                 out[k] = float(v)
         return out
+
+    def _mixer_diagnostics(self, cmd: Mapping[str, float], thr: Mapping[str, float]) -> Dict[str, Any]:
+        diag_fn = getattr(self.mixer, "diagnostics", None)
+        if not callable(diag_fn):
+            return {}
+        try:
+            return dict(diag_fn(cmd, thr))
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def _compute_wrist_rotate(self, pilot: Optional[PilotFrame]) -> float:
         """Return normalized wrist rotation command in [-1..1].
