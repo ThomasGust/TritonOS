@@ -2,10 +2,14 @@ import json
 import socket
 import time
 
+import pytest
 import zmq
 
 from control.pilot_receiver import PilotReceiver
 from schema.pilot_common import PilotFrame, PilotAxes, PilotButtons
+
+
+pytestmark = pytest.mark.network
 
 
 def _free_port() -> int:

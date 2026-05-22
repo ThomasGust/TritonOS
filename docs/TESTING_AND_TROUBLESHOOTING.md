@@ -4,7 +4,7 @@ This guide gives a recommended debug order for TritonOS. The main idea is to
 test one layer at a time: code logic, service startup, network, hardware
 interfaces, then full integrated control.
 
-## Unit Tests
+## Quick Trust Check
 
 Run from the repository root:
 
@@ -12,8 +12,41 @@ Run from the repository root:
 python -m pytest
 ```
 
-The suite is designed to run on a development machine without ROV hardware.
-Tests cover:
+If the test tooling is not installed, run `python -m pip install -r requirements-dev.txt`.
+
+The default suite is designed to run on a development machine without ROV
+hardware or active network services. Tests marked `network`, `hardware`, `slow`,
+or `groundtruth` are skipped unless explicitly requested.
+
+The helper script exposes the standard tiers:
+
+```bash
+python tools/trust_check.py quick
+python tools/trust_check.py network
+python tools/trust_check.py extended
+python tools/trust_check.py hardware
+python tools/trust_check.py full
+```
+
+Equivalent direct pytest commands:
+
+| Goal | Command |
+| --- | --- |
+| Fast software-only check | `python -m pytest` |
+| Local socket/ZMQ tests | `python -m pytest --run-network -m network` |
+| All non-hardware optional tiers | `python -m pytest --run-extended` |
+| Physical ROV/hardware tests | `python -m pytest --run-hardware -m hardware` |
+| Everything | `python -m pytest --run-all-trust` |
+| Coverage report, if `pytest-cov` is installed | `python tools/trust_check.py coverage` |
+
+Environment variables work for CI or shell profiles:
+
+- `TRITON_RUN_NETWORK=1`
+- `TRITON_RUN_GROUNDTRUTH=1`
+- `TRITON_RUN_SLOW=1`
+- `TRITON_RUN_HARDWARE=1`
+
+The software-only tests cover:
 
 - Pilot schema and receiver behavior.
 - Control service safety and payload generation.
@@ -22,6 +55,19 @@ Tests cover:
 - Management RPC behavior.
 - Vehicle reference storage.
 - Preflight report logic.
+
+## Test Marker Policy
+
+Use the default suite for deterministic tests that can run on any developer
+machine. Mark new tests when they leave that boundary:
+
+- `network`: opens sockets, uses ZMQ over TCP, or depends on active networking.
+- `hardware`: touches physical ROV hardware or live system services.
+- `slow`: intentionally takes long enough that it should not block quick checks.
+- `groundtruth`: depends on optional saved media or datasets outside the normal
+  repository fixtures.
+- `integration`: crosses module/service boundaries but remains deterministic and
+  hardware-free.
 
 Pytest artifacts are repo-local and ignored by Git:
 
