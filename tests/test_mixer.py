@@ -32,6 +32,17 @@ def test_geometric_mixer_pure_yaw_has_minimal_translation():
     assert achieved["heave"] == pytest.approx(0.0, abs=0.05)
 
 
+def test_geometric_mixer_unit_axes_use_full_thruster_authority():
+    mix = geometric_mixer_from_config(cfg)
+    for axis in ("surge", "sway", "heave", "roll", "pitch", "yaw"):
+        cmd = {"surge": 0.0, "sway": 0.0, "heave": 0.0, "yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+        cmd[axis] = 1.0
+        thr = mix.mix(cmd)
+        assert max(abs(v) for v in thr.values()) == pytest.approx(1.0, abs=0.03)
+        achieved = mix.allocated_wrench(thr)
+        assert achieved[axis] == pytest.approx(1.0, abs=0.08)
+
+
 def test_geometric_mixer_can_blend_depth_and_nonlevel_attitude_targets():
     mix = geometric_mixer_from_config(cfg)
     cmd = {"surge": 0.0, "sway": 0.0, "heave": 0.35, "yaw": 0.25, "pitch": -0.20, "roll": 0.15}

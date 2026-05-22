@@ -59,6 +59,11 @@ CONTROL_MIX_MODE = "geometric"
 # If the physical convention is the opposite, change this to 60.0 and retest.
 GEOMETRIC_MIXER_HORIZONTAL_ANGLE_DEG_FROM_FORWARD = 30.0
 GEOMETRIC_MIXER_REGULARIZATION = 0.015
+GEOMETRIC_MIXER_AUTO_SCALE_UNIT_AXES = True
+GEOMETRIC_MIXER_AXIS_COMMAND_SCALES = {
+    # Leave empty for automatic scaling. Add per-axis overrides here if a pool
+    # test shows one axis should intentionally be softer or stronger.
+}
 GEOMETRIC_MIXER_AXIS_WEIGHTS = {
     "surge": 1.0,
     "sway": 1.0,

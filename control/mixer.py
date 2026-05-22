@@ -93,6 +93,8 @@ class GeometricThrusterMixer:
         thrusters: Sequence[ThrusterGeometry],
         *,
         axis_weights: Mapping[str, float] | None = None,
+        axis_command_scales: Mapping[str, float] | None = None,
+        auto_scale_unit_axes: bool = True,
         regularization: float = 0.015,
     ):
         self.thrusters = [t for t in thrusters]
@@ -104,6 +106,18 @@ class GeometricThrusterMixer:
         self._matrix_raw = self._build_matrix(self.thrusters)
         self._row_scales = self._compute_row_scales(self._matrix_raw)
         self._matrix = self._matrix_raw / self._row_scales[:, None]
+        if auto_scale_unit_axes:
+            self._command_scales = self._compute_command_scales()
+        else:
+            self._command_scales = np.ones(len(self.AXES), dtype=float)
+        for axis, scale in dict(axis_command_scales or {}).items():
+            if axis in self.AXES:
+                try:
+                    scale_f = float(scale)
+                except Exception:
+                    continue
+                if math.isfinite(scale_f) and scale_f > 0.0:
+                    self._command_scales[self.AXES.index(axis)] = scale_f
         self._last_diag: Dict[str, Any] = {}
 
     @classmethod
@@ -148,11 +162,10 @@ class GeometricThrusterMixer:
         scales[scales <= 1e-9] = 1.0
         return scales
 
-    def mix(self, cmd: Dict[str, float]) -> Dict[str, float]:
-        desired = np.array([float((cmd or {}).get(axis, 0.0) or 0.0) for axis in self.AXES], dtype=float)
+    def _solve_internal(self, desired_internal: np.ndarray) -> np.ndarray:
         weights = np.array([max(0.0, float(self.axis_weights.get(axis, 1.0))) for axis in self.AXES], dtype=float)
         weighted_matrix = self._matrix * weights[:, None]
-        weighted_desired = desired * weights
+        weighted_desired = desired_internal * weights
 
         if self.regularization > 0.0:
             damp = math.sqrt(self.regularization) * np.eye(len(self.names), dtype=float)
@@ -163,13 +176,29 @@ class GeometricThrusterMixer:
             rhs = weighted_desired
 
         solution, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        return solution
+
+    def _compute_command_scales(self) -> np.ndarray:
+        scales = np.ones(len(self.AXES), dtype=float)
+        for i, _axis in enumerate(self.AXES):
+            desired = np.zeros(len(self.AXES), dtype=float)
+            desired[i] = 1.0
+            solution = self._solve_internal(desired)
+            peak = float(np.max(np.abs(solution))) if solution.size else 0.0
+            if math.isfinite(peak) and peak > 1e-6:
+                scales[i] = 1.0 / peak
+        return scales
+
+    def mix(self, cmd: Dict[str, float]) -> Dict[str, float]:
+        desired_cmd = np.array([float((cmd or {}).get(axis, 0.0) or 0.0) for axis in self.AXES], dtype=float)
+        solution = self._solve_internal(desired_cmd * self._command_scales)
         out = {name: float(solution[i]) for i, name in enumerate(self.names)}
         self._last_diag = self.diagnostics(cmd, out)
         return out
 
     def allocated_wrench(self, thr: Mapping[str, float]) -> Dict[str, float]:
         vec = np.array([float((thr or {}).get(name, 0.0) or 0.0) for name in self.names], dtype=float)
-        achieved = self._matrix @ vec
+        achieved = (self._matrix @ vec) / self._command_scales
         return {axis: float(achieved[i]) for i, axis in enumerate(self.AXES)}
 
     def diagnostics(self, cmd: Mapping[str, float], thr: Mapping[str, float]) -> Dict[str, Any]:
@@ -184,6 +213,7 @@ class GeometricThrusterMixer:
             "residual": residual,
             "regularization": float(self.regularization),
             "axis_weights": dict(self.axis_weights),
+            "command_scales": {axis: float(self._command_scales[i]) for i, axis in enumerate(self.AXES)},
         }
 
     @property
@@ -241,8 +271,16 @@ def geometric_mixer_from_config(cfg_mod: Any) -> GeometricThrusterMixer:
         )
 
     weights = getattr(cfg_mod, "GEOMETRIC_MIXER_AXIS_WEIGHTS", {}) or {}
+    command_scales = getattr(cfg_mod, "GEOMETRIC_MIXER_AXIS_COMMAND_SCALES", {}) or {}
+    auto_scale = bool(getattr(cfg_mod, "GEOMETRIC_MIXER_AUTO_SCALE_UNIT_AXES", True))
     regularization = float(getattr(cfg_mod, "GEOMETRIC_MIXER_REGULARIZATION", 0.015))
-    return GeometricThrusterMixer(thrusters, axis_weights=weights, regularization=regularization)
+    return GeometricThrusterMixer(
+        thrusters,
+        axis_weights=weights,
+        axis_command_scales=command_scales,
+        auto_scale_unit_axes=auto_scale,
+        regularization=regularization,
+    )
 
 
 def global_limit(thr: Mapping[Hashable, float], max_abs: float = 1.0) -> Dict[Hashable, float]:
