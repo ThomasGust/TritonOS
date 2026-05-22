@@ -37,6 +37,10 @@ def _vec_from_msg(value: Any) -> Optional[Vec3]:
     return (x, y, z)
 
 
+def _vec_to_msg(value: Vec3) -> dict[str, float]:
+    return {"x": float(value[0]), "y": float(value[1]), "z": float(value[2])}
+
+
 def _add(a: Vec3, b: Vec3) -> Vec3:
     return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
 
@@ -222,7 +226,7 @@ class RollPitchEstimator:
 
     def __init__(self, config: RollPitchConfig | None = None):
         self.config = config or RollPitchConfig()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.reset()
 
     def reset(self) -> None:
@@ -251,6 +255,9 @@ class RollPitchEstimator:
             self._last_yaw_mag_correction: tuple[str, float] | None = None
             self._last_ts: Optional[float] = None
             self._last_output: Optional[dict[str, Any]] = None
+            self._latest_accel_unit: Optional[Vec3] = None
+            self._latest_accel_norm: Optional[float] = None
+            self._latest_gyro_raw: Optional[Vec3] = None
 
     def status(self) -> dict[str, Any]:
         """Return calibration and latest-estimate diagnostics."""
@@ -276,6 +283,121 @@ class RollPitchEstimator:
                 "roll_sign": float(self.config.roll_sign),
                 "pitch_sign": float(self.config.pitch_sign),
             }
+
+    def reference_snapshot(self) -> Optional[dict[str, Any]]:
+        """Return the current rest reference in a persistable JSON shape."""
+
+        with self._lock:
+            if self._reference_accel is None:
+                return None
+            return {
+                "schema": 1,
+                "reference_accel": _vec_to_msg(self._reference_accel),
+                "reference_norm": self._reference_norm,
+                "gyro_bias": _vec_to_msg(self._gyro_bias),
+                "reference_mag": {src: _vec_to_msg(vec) for src, vec in self._reference_mag.items()},
+                "reference_mag_norm": {src: float(v) for src, v in self._reference_mag_norm.items()},
+                "reference_mag_samples": {src: int(v) for src, v in self._reference_mag_samples.items()},
+                "calibration_tilt_std_deg": self._calibration_tilt_std_deg,
+                "calibration_gyro_rms_dps": self._calibration_gyro_rms_dps,
+                "vehicle_roll_axis": str(self.config.vehicle_roll_axis),
+                "roll_sign": float(self.config.roll_sign),
+                "pitch_sign": float(self.config.pitch_sign),
+            }
+
+    def load_reference_snapshot(self, data: dict[str, Any] | None) -> bool:
+        """Load a persisted rest reference and skip startup recalibration."""
+
+        if not isinstance(data, dict):
+            return False
+        ref = _vec_from_msg(data.get("reference_accel"))
+        ref = _normalize(ref) if ref is not None else None
+        if ref is None:
+            return False
+        gyro_bias = _vec_from_msg(data.get("gyro_bias")) or (0.0, 0.0, 0.0)
+        try:
+            reference_norm = float(data.get("reference_norm"))
+        except Exception:
+            reference_norm = 9.80665
+        if not math.isfinite(reference_norm) or reference_norm <= 0.0:
+            reference_norm = 9.80665
+
+        reference_mag: dict[str, Vec3] = {}
+        reference_mag_norm: dict[str, float] = {}
+        reference_mag_samples: dict[str, int] = {}
+        raw_mag = data.get("reference_mag") if isinstance(data.get("reference_mag"), dict) else {}
+        raw_mag_norm = data.get("reference_mag_norm") if isinstance(data.get("reference_mag_norm"), dict) else {}
+        raw_mag_samples = data.get("reference_mag_samples") if isinstance(data.get("reference_mag_samples"), dict) else {}
+        for source, value in raw_mag.items():
+            vec = _vec_from_msg(value)
+            vec = _normalize(vec) if vec is not None else None
+            if vec is None:
+                continue
+            key = str(source)
+            reference_mag[key] = vec
+            try:
+                norm = float(raw_mag_norm.get(source))
+            except Exception:
+                norm = 0.0
+            reference_mag_norm[key] = norm if math.isfinite(norm) and norm > 0.0 else 0.0
+            try:
+                reference_mag_samples[key] = max(1, int(raw_mag_samples.get(source, 1)))
+            except Exception:
+                reference_mag_samples[key] = 1
+
+        with self._lock:
+            self._apply_reference_locked(
+                reference_accel=ref,
+                reference_norm=reference_norm,
+                gyro_bias=gyro_bias,
+                reference_mag=reference_mag,
+                reference_mag_norm=reference_mag_norm,
+                reference_mag_samples=reference_mag_samples,
+                calibration_tilt_std_deg=_as_float(data.get("calibration_tilt_std_deg")),
+                calibration_gyro_rms_dps=_as_float(data.get("calibration_gyro_rms_dps")),
+                sensor_ts=None,
+            )
+        return True
+
+    def capture_current_reference(self) -> dict[str, Any]:
+        """Make the currently observed still pose the new persisted rest pose."""
+
+        with self._lock:
+            ref = self._gravity_est or self._latest_accel_unit or self._reference_accel
+            ref = _normalize(ref) if ref is not None else None
+            if ref is None:
+                raise RuntimeError("attitude estimator has no current gravity sample to capture")
+            reference_norm = self._latest_accel_norm or self._reference_norm or 9.80665
+            gyro_bias = self._gyro_bias
+            if self._reference_accel is None and self._latest_gyro_raw is not None:
+                gyro_bias = self._latest_gyro_raw
+
+            reference_mag: dict[str, Vec3] = {}
+            reference_mag_norm: dict[str, float] = {}
+            reference_mag_samples: dict[str, int] = {}
+            for source, (_ts, mag, mag_norm) in self._latest_mag.items():
+                horizontal = self._level_mag_for_reference(mag, ref)
+                if horizontal is None:
+                    continue
+                reference_mag[source] = horizontal
+                reference_mag_norm[source] = float(mag_norm)
+                reference_mag_samples[source] = 1
+
+            self._apply_reference_locked(
+                reference_accel=ref,
+                reference_norm=reference_norm,
+                gyro_bias=gyro_bias,
+                reference_mag=reference_mag,
+                reference_mag_norm=reference_mag_norm,
+                reference_mag_samples=reference_mag_samples,
+                calibration_tilt_std_deg=0.0,
+                calibration_gyro_rms_dps=0.0,
+                sensor_ts=None,
+            )
+            snapshot = self.reference_snapshot()
+            if snapshot is None:
+                raise RuntimeError("captured attitude reference could not be serialized")
+            return snapshot
 
     def update_mag(self, mag_msg: dict[str, Any]) -> None:
         """Update the latest magnetometer samples used for relative yaw."""
@@ -326,6 +448,9 @@ class RollPitchEstimator:
             recv_time_s = time.time()
 
         with self._lock:
+            self._latest_accel_unit = accel_unit
+            self._latest_accel_norm = accel_norm
+            self._latest_gyro_raw = gyro
             if self._reference_accel is None:
                 self._cal_accel_units.append(accel_unit)
                 self._cal_accel_raw.append(accel)
@@ -499,12 +624,20 @@ class RollPitchEstimator:
             return False
 
         raw_mean = _mean_vec(self._cal_accel_raw)
-        self._reference_accel = ref
-        self._reference_norm = _norm(raw_mean)
-        self._gyro_bias = gyro_mean
-        self._calibration_tilt_std_deg = tilt_std
-        self._calibration_gyro_rms_dps = gyro_rms_dps
+        self._apply_reference_locked(
+            reference_accel=ref,
+            reference_norm=_norm(raw_mean),
+            gyro_bias=gyro_mean,
+            reference_mag={},
+            reference_mag_norm={},
+            reference_mag_samples={},
+            calibration_tilt_std_deg=tilt_std,
+            calibration_gyro_rms_dps=gyro_rms_dps,
+            sensor_ts=sensor_ts,
+        )
+        return True
 
+    def _reference_axes(self, ref: Vec3) -> tuple[Vec3, Vec3]:
         roll_axis = None
         configured_roll_axis = _axis_from_name(str(self.config.vehicle_roll_axis))
         if configured_roll_axis is not None:
@@ -518,13 +651,43 @@ class RollPitchEstimator:
         if roll_axis is None:
             roll_axis = (1.0, 0.0, 0.0)
         pitch_axis = _normalize(_cross(ref, roll_axis)) or (0.0, 1.0, 0.0)
+        return roll_axis, pitch_axis
 
-        self._roll_axis = roll_axis
-        self._pitch_axis = pitch_axis
+    def _apply_reference_locked(
+        self,
+        *,
+        reference_accel: Vec3,
+        reference_norm: float,
+        gyro_bias: Vec3,
+        reference_mag: dict[str, Vec3],
+        reference_mag_norm: dict[str, float],
+        reference_mag_samples: dict[str, int],
+        calibration_tilt_std_deg: float | None,
+        calibration_gyro_rms_dps: float | None,
+        sensor_ts: float | None,
+    ) -> None:
+        ref = _normalize(reference_accel)
+        if ref is None:
+            raise ValueError("reference_accel must be non-zero")
+        self._reference_accel = ref
+        self._reference_norm = float(reference_norm)
+        self._gyro_bias = gyro_bias
+        self._calibration_tilt_std_deg = calibration_tilt_std_deg
+        self._calibration_gyro_rms_dps = calibration_gyro_rms_dps
+        self._roll_axis, self._pitch_axis = self._reference_axes(ref)
         self._gravity_est = ref
+        self._reference_mag = dict(reference_mag or {})
+        self._reference_mag_norm = dict(reference_mag_norm or {})
+        self._reference_mag_samples = dict(reference_mag_samples or {})
+        self._yaw_est_rad = None
+        self._last_yaw_mag_correction = None
         self._last_ts = sensor_ts
+        self._last_output = None
         self._seed_yaw_references_locked()
-        return True
+        self._cal_accel_units.clear()
+        self._cal_accel_raw.clear()
+        self._cal_gyro.clear()
+        self._cal_mag_samples.clear()
 
     def _record_cal_mag_sample_locked(self, source: str, mag: Vec3) -> None:
         cap = max(1, int(self.config.yaw_reference_samples))
@@ -575,11 +738,25 @@ class RollPitchEstimator:
     def _level_mag(self, mag: Vec3, gravity: Vec3) -> Optional[Vec3]:
         if self._reference_accel is None:
             return None
+        return self._level_mag_for_reference(mag, self._reference_accel, gravity=gravity)
+
+    def _level_mag_for_reference(
+        self,
+        mag: Vec3,
+        reference_accel: Vec3,
+        *,
+        gravity: Vec3 | None = None,
+    ) -> Optional[Vec3]:
+        reference = _normalize(reference_accel)
+        if reference is None:
+            return None
+        if gravity is None:
+            gravity = reference
         gravity_unit = _normalize(gravity)
         if gravity_unit is None:
             return None
-        leveled = _rotate_between_unit(mag, gravity_unit, self._reference_accel)
-        horizontal = _sub(leveled, _scale(self._reference_accel, _dot(leveled, self._reference_accel)))
+        leveled = _rotate_between_unit(mag, gravity_unit, reference)
+        horizontal = _sub(leveled, _scale(reference, _dot(leveled, reference)))
         if _norm(horizontal) <= float(self.config.yaw_min_horizontal_norm):
             return None
         return _normalize(horizontal)

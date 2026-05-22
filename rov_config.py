@@ -687,6 +687,7 @@ MMC5983_SPI_DEVICES = ((0, 0), (0, 1), (1, 0), (1, 1))
 # It is diagnostic-only for now; future attitude hold should consume this onboard
 # estimate directly instead of sending raw IMU data to topside first.
 ATTITUDE_ESTIMATOR_ENABLE = True
+ATTITUDE_REFERENCE_PATH = "calibration/attitude_reference.json"
 ATTITUDE_CALIBRATION_SAMPLES = 30
 ATTITUDE_MAX_DT_S = 0.25
 ATTITUDE_ACCEL_TAU_S = 0.16

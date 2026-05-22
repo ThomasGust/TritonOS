@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from control.management_rpc import ManagementRpcService
+from utils.vehicle_reference import load_attitude_reference, load_surface_pressure_reference_mbar
 
 
 def _scratch_dir() -> Path:
@@ -51,6 +52,8 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
         assert resp["data"]["runtime"]["control_loop_available"] is True
         assert resp["data"]["runtime"]["depth_hold"]["target_m"] == 1.2
         assert "get_hold_status" in resp["data"]["commands"]
+        assert "capture_attitude_reference" in resp["data"]["commands"]
+        assert "capture_local_rest" in resp["data"]["commands"]
         assert "update_code" in resp["data"]["commands"]
         assert "restart_service" in resp["data"]["commands"]
 
@@ -64,6 +67,82 @@ def test_management_rpc_get_state_and_set_surface_reference(monkeypatch):
         )
         assert resp2["ok"] is True
         assert depth_path.exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_management_rpc_capture_local_rest_saves_attitude_and_depth(monkeypatch):
+    root = _scratch_dir()
+    try:
+        depth_path = root / "depth_reference.json"
+        attitude_path = root / "attitude_reference.json"
+
+        cfg_stub = SimpleNamespace(
+            __file__="sample_rov_config.py",
+            EXTERNAL_DEPTH_REFERENCE_PATH=str(depth_path),
+            ATTITUDE_REFERENCE_PATH=str(attitude_path),
+            EXTERNAL_DEPTH_SENSOR_TO_TOP_M=0.15,
+        )
+
+        class _DepthStub:
+            def __init__(self):
+                self.pressures = [1010.0, 1012.0, 1014.0]
+                self.applied = []
+
+            def read(self):
+                pressure = self.pressures.pop(0)
+                return {
+                    "pressure_mbar": pressure,
+                    "depth_m": 0.0,
+                    "depth_sensor_m": 0.15,
+                }
+
+            def set_surface_pressure_mbar(self, pressure_mbar):
+                self.applied.append(float(pressure_mbar))
+
+        class _AttitudeStub:
+            def __init__(self):
+                self.capture_count = 0
+
+            def status(self):
+                return {
+                    "calibration_state": "calibrated",
+                    "yaw_sources": ["mmc5983"],
+                }
+
+            def capture_current_reference(self):
+                self.capture_count += 1
+                return {
+                    "schema": 1,
+                    "reference_accel": {"x": 0.0, "y": 0.0, "z": 1.0},
+                    "reference_norm": 9.80665,
+                    "gyro_bias": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "reference_mag": {"mmc5983": {"x": 1.0, "y": 0.0, "z": 0.0}},
+                    "reference_mag_norm": {"mmc5983": 42.0},
+                    "reference_mag_samples": {"mmc5983": 1},
+                }
+
+        depth = _DepthStub()
+        attitude = _AttitudeStub()
+        svc = ManagementRpcService(
+            bind_endpoint="tcp://127.0.0.1:0",
+            depth_sensor=depth,
+            attitude_estimator=attitude,
+        )
+        monkeypatch.setattr(svc, "_config_module", lambda: cfg_stub)
+
+        resp = svc._handle_request(
+            {"cmd": "capture_local_rest", "args": {"samples": 3, "delay_s": 0.0, "include_depth": True}}
+        )
+
+        assert resp["ok"] is True
+        assert resp["data"]["errors"] == {}
+        assert resp["data"]["restart_required"] is False
+        assert attitude.capture_count == 1
+        assert load_attitude_reference(attitude_path)["reference_mag_norm"]["mmc5983"] == 42.0
+        assert load_surface_pressure_reference_mbar(depth_path) == 1012.0
+        assert depth.applied == [1012.0]
+        assert resp["data"]["depth"]["applied_live"] is True
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

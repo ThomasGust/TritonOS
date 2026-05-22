@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 
 
 DEFAULT_DEPTH_REFERENCE_PATH = "calibration/depth_reference.json"
+DEFAULT_ATTITUDE_REFERENCE_PATH = "calibration/attitude_reference.json"
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -59,6 +60,32 @@ def save_surface_pressure_reference(path: str | Path, surface_pressure_mbar: flo
     }
     if meta:
         payload["meta"] = dict(meta)
+    path_obj = resolve_path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path_obj.with_suffix(path_obj.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path_obj)
+
+
+def load_attitude_reference(path: str | Path) -> Optional[Dict[str, Any]]:
+    """Read the stored attitude/rest reference JSON object."""
+
+    return load_optional_json(path)
+
+
+def save_attitude_reference(path: str | Path, reference: Dict[str, Any], *, meta: Optional[Dict[str, Any]] = None) -> None:
+    """Atomically write an attitude/rest reference JSON file."""
+
+    if not isinstance(reference, dict) or not reference:
+        raise ValueError("attitude reference must be a non-empty object")
+    payload: Dict[str, Any] = dict(reference)
+    payload["created_ts"] = time.time()
+    if meta:
+        existing_meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        merged_meta = dict(existing_meta)
+        merged_meta.update(dict(meta))
+        payload["meta"] = merged_meta
+
     path_obj = resolve_path(path)
     path_obj.parent.mkdir(parents=True, exist_ok=True)
     tmp = path_obj.with_suffix(path_obj.suffix + ".tmp")

@@ -29,10 +29,13 @@ from utils.config_store import (
     update_config_values,
 )
 from utils.vehicle_reference import (
+    DEFAULT_ATTITUDE_REFERENCE_PATH,
     DEFAULT_DEPTH_REFERENCE_PATH,
     capture_surface_pressure_reference,
+    load_attitude_reference,
     load_surface_pressure_reference_mbar,
     resolve_path,
+    save_attitude_reference,
     save_surface_pressure_reference,
 )
 
@@ -46,11 +49,13 @@ class ManagementRpcService:
         debug: bool = False,
         depth_sensor: Any | None = None,
         control_service: Any | None = None,
+        attitude_estimator: Any | None = None,
     ):
         self.bind_endpoint = str(bind_endpoint)
         self.debug = bool(debug)
         self._depth_sensor = depth_sensor
         self._control_service = control_service
+        self._attitude_estimator = attitude_estimator
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -81,12 +86,25 @@ class ManagementRpcService:
 
     def _reference_state(self, cfg_mod: Any) -> Dict[str, Any]:
         depth_path = str(getattr(cfg_mod, "EXTERNAL_DEPTH_REFERENCE_PATH", DEFAULT_DEPTH_REFERENCE_PATH))
+        attitude_path = str(getattr(cfg_mod, "ATTITUDE_REFERENCE_PATH", DEFAULT_ATTITUDE_REFERENCE_PATH))
         pressure = load_surface_pressure_reference_mbar(depth_path)
+        attitude_ref = load_attitude_reference(attitude_path)
+        attitude_status = {}
+        if self._attitude_estimator is not None and hasattr(self._attitude_estimator, "status"):
+            try:
+                attitude_status = dict(self._attitude_estimator.status())
+            except Exception:
+                attitude_status = {}
         return {
             "depth_reference_path": depth_path,
             "depth_reference_exists": resolve_path(depth_path).exists(),
             "surface_pressure_mbar": pressure,
             "depth_sensor_to_top_m": float(getattr(cfg_mod, "EXTERNAL_DEPTH_SENSOR_TO_TOP_M", 0.0)),
+            "attitude_reference_path": attitude_path,
+            "attitude_reference_exists": resolve_path(attitude_path).exists(),
+            "attitude_reference_loaded": bool(attitude_ref),
+            "attitude_calibration_state": attitude_status.get("calibration_state"),
+            "attitude_yaw_sources": attitude_status.get("yaw_sources", []),
         }
 
     def _runtime_state(self) -> Dict[str, Any]:
@@ -125,6 +143,31 @@ class ManagementRpcService:
             os._exit(0)
 
         threading.Thread(target=_restart, daemon=True).start()
+
+    def _apply_surface_pressure_live(self, pressure_mbar: float) -> bool:
+        if self._depth_sensor is None or not hasattr(self._depth_sensor, "set_surface_pressure_mbar"):
+            return False
+        self._depth_sensor.set_surface_pressure_mbar(float(pressure_mbar))
+        return True
+
+    def _capture_attitude_reference(self, cfg_mod: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+        if self._attitude_estimator is None or not hasattr(self._attitude_estimator, "capture_current_reference"):
+            return {"ok": False, "error": "attitude estimator is not available"}
+        attitude_path = str(args.get("path") or getattr(cfg_mod, "ATTITUDE_REFERENCE_PATH", DEFAULT_ATTITUDE_REFERENCE_PATH))
+        reference = self._attitude_estimator.capture_current_reference()
+        save_attitude_reference(
+            attitude_path,
+            reference,
+            meta={"source": "rpc_capture", "set_ts": time.time()},
+        )
+        return {
+            "ok": True,
+            "data": {
+                "attitude_reference_path": attitude_path,
+                "attitude_reference": reference,
+                "restart_required": False,
+            },
+        }
 
     def _run_update_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
         repo_root = self._repo_root()
@@ -198,6 +241,8 @@ class ManagementRpcService:
                         "set_config",
                         "set_surface_reference",
                         "capture_surface_reference",
+                        "capture_attitude_reference",
+                        "capture_local_rest",
                         "update_code",
                         "restart_service",
                     ],
@@ -249,12 +294,14 @@ class ManagementRpcService:
                 pressure_mbar,
                 meta={"source": "rpc", "set_ts": time.time()},
             )
+            applied_live = self._apply_surface_pressure_live(pressure_mbar)
             return {
                 "ok": True,
                 "data": {
                     "surface_pressure_mbar": pressure_mbar,
                     "path": depth_path,
-                    "restart_required": True,
+                    "applied_live": applied_live,
+                    "restart_required": not applied_live,
                 },
             }
 
@@ -278,14 +325,65 @@ class ManagementRpcService:
                     "sensor_to_top_m": float(getattr(cfg_mod, "EXTERNAL_DEPTH_SENSOR_TO_TOP_M", 0.0)),
                 },
             )
+            applied_live = self._apply_surface_pressure_live(pressure_mbar)
             return {
                 "ok": True,
                 "data": {
                     "surface_pressure_mbar": pressure_mbar,
                     "path": depth_path,
-                    "restart_required": True,
+                    "applied_live": applied_live,
+                    "restart_required": not applied_live,
                 },
             }
+
+        if cmd == "capture_attitude_reference":
+            return self._capture_attitude_reference(cfg_mod, args)
+
+        if cmd == "capture_local_rest":
+            out: Dict[str, Any] = {}
+            errors: Dict[str, str] = {}
+            attitude_resp = self._capture_attitude_reference(cfg_mod, args)
+            if attitude_resp.get("ok"):
+                out["attitude"] = dict(attitude_resp.get("data") or {})
+            else:
+                errors["attitude"] = str(attitude_resp.get("error") or "attitude capture failed")
+
+            if bool(args.get("include_depth", True)):
+                try:
+                    samples = int(args.get("samples", 20))
+                    delay_s = float(args.get("delay_s", 0.02))
+                    depth_path = str(args.get("depth_path") or getattr(cfg_mod, "EXTERNAL_DEPTH_REFERENCE_PATH", DEFAULT_DEPTH_REFERENCE_PATH))
+                    pressure_mbar = capture_surface_pressure_reference(
+                        cfg_mod,
+                        samples=samples,
+                        delay_s=delay_s,
+                        sensor=self._depth_sensor,
+                    )
+                    save_surface_pressure_reference(
+                        depth_path,
+                        pressure_mbar,
+                        meta={
+                            "source": "rpc_local_rest",
+                            "samples": samples,
+                            "delay_s": delay_s,
+                            "sensor_to_top_m": float(getattr(cfg_mod, "EXTERNAL_DEPTH_SENSOR_TO_TOP_M", 0.0)),
+                        },
+                    )
+                    applied_live = self._apply_surface_pressure_live(pressure_mbar)
+                    out["depth"] = {
+                        "surface_pressure_mbar": pressure_mbar,
+                        "path": depth_path,
+                        "applied_live": applied_live,
+                        "restart_required": not applied_live,
+                    }
+                except Exception as exc:
+                    errors["depth"] = str(exc)
+
+            if not out:
+                return {"ok": False, "error": "; ".join(f"{k}: {v}" for k, v in errors.items()) or "local rest capture failed"}
+            out["errors"] = errors
+            out["restart_required"] = any(bool((v or {}).get("restart_required")) for v in out.values() if isinstance(v, dict))
+            return {"ok": True, "data": out}
 
         return {"ok": False, "error": f"unknown cmd '{cmd}'"}
 

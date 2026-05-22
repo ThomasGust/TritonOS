@@ -435,6 +435,35 @@ def test_roll_pitch_estimator_averages_yaw_reference_samples():
     assert out["yaw_reference_mag_samples"] == 5
 
 
+def test_roll_pitch_estimator_loads_persisted_rest_reference_without_recalibrating():
+    original = RollPitchEstimator(
+        _config(
+            calibration_samples=5,
+            accel_correction=1.0,
+            yaw_mag_smooth_tau_s=0.0,
+            yaw_reference_samples=5,
+        )
+    )
+    original.update_mag(_mag(0.0, (1.0, 0.0, 0.0), source="mmc5983"))
+    for i in range(5):
+        assert original.update(_imu(float(i), (0.0, 0.0, 9.80665))) is None
+    snapshot = original.reference_snapshot()
+    assert snapshot is not None
+    assert snapshot["reference_mag"]["mmc5983"]["x"] == pytest.approx(1.0)
+
+    restored = RollPitchEstimator(_config(calibration_samples=30, accel_correction=1.0))
+    assert restored.load_reference_snapshot(snapshot) is True
+    restored.update_mag(_mag(10.0, (1.0, 0.0, 0.0), source="mmc5983"))
+    out = restored.update(_imu(10.0, (0.0, 0.0, 9.80665)))
+
+    assert out is not None
+    assert out["calibration_state"] == "calibrated"
+    assert out["roll_deg"] == pytest.approx(0.0, abs=0.01)
+    assert out["pitch_deg"] == pytest.approx(0.0, abs=0.01)
+    assert out["yaw_deg"] == pytest.approx(0.0, abs=0.01)
+    assert out["yaw_source"] == "mmc5983"
+
+
 def test_roll_pitch_estimator_smooths_short_mag_spikes():
     est = RollPitchEstimator(
         _config(

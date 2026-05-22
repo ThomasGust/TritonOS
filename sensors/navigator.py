@@ -17,6 +17,7 @@ in the environment.
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -529,6 +530,19 @@ class MS5837Sensor(BaseSensor):
         # Otherwise calibrate surface reference pressure at startup.
         if self._p0_mbar is None:
             self._calibrate_surface_pressure()
+
+    def set_surface_pressure_mbar(self, surface_pressure_mbar: float) -> None:
+        """Apply a new surface-pressure reference immediately."""
+
+        p0 = float(surface_pressure_mbar)
+        if not math.isfinite(p0) or p0 <= 0.0:
+            raise ValueError("surface pressure must be a positive finite mbar value")
+        with self._read_lock:
+            self._p0_mbar = float(p0)
+
+    @property
+    def surface_pressure_mbar(self) -> float | None:
+        return None if self._p0_mbar is None else float(self._p0_mbar)
 
     def _calibrate_surface_pressure(self):
         if self._surface_cal_samples <= 0:

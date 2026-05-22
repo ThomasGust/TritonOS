@@ -23,7 +23,12 @@ import sys
 import traceback
 
 import rov_config as cfg
-from utils.vehicle_reference import DEFAULT_DEPTH_REFERENCE_PATH, load_surface_pressure_reference_mbar
+from utils.vehicle_reference import (
+    DEFAULT_ATTITUDE_REFERENCE_PATH,
+    DEFAULT_DEPTH_REFERENCE_PATH,
+    load_attitude_reference,
+    load_surface_pressure_reference_mbar,
+)
 
 
 DEFAULT_PILOT_SUB_ENDPOINT = "tcp://0.0.0.0:6000"
@@ -62,7 +67,7 @@ def start_video_service():
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
 
-def start_management_service(*, depth_sensor=None, control_service=None):
+def start_management_service(*, depth_sensor=None, control_service=None, attitude_estimator=None):
     """Start the management RPC server when enabled in `rov_config`.
 
     The management service exposes safe runtime operations to topside tools:
@@ -85,6 +90,7 @@ def start_management_service(*, depth_sensor=None, control_service=None):
         debug=bool(getattr(cfg, "DEBUG", False)),
         depth_sensor=depth_sensor,
         control_service=control_service,
+        attitude_estimator=attitude_estimator,
     )
     svc.start()
     print(f"[rov/main] management RPC started on {bind}")
@@ -287,6 +293,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
             print("[rov/main] network stats sensor disabled:", e)
 
     derived_processors = []
+    attitude_estimator = None
     if bool(getattr(cfg, "ATTITUDE_ESTIMATOR_ENABLE", True)):
         try:
             from sensors.attitude_estimator import AttitudeEstimatorProcessor, RollPitchConfig, RollPitchEstimator
@@ -319,7 +326,13 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
                 stationary_accel_error_max_deg=float(getattr(cfg, "ATTITUDE_STATIONARY_ACCEL_ERROR_MAX_DEG", 1.5)),
                 stationary_accel_norm_error_max=float(getattr(cfg, "ATTITUDE_STATIONARY_ACCEL_NORM_ERROR_MAX", 0.05)),
             )
-            derived_processors.append(AttitudeEstimatorProcessor(RollPitchEstimator(attitude_cfg)))
+            attitude_estimator = RollPitchEstimator(attitude_cfg)
+            attitude_reference_path = str(
+                getattr(cfg, "ATTITUDE_REFERENCE_PATH", DEFAULT_ATTITUDE_REFERENCE_PATH)
+            )
+            if attitude_estimator.load_reference_snapshot(load_attitude_reference(attitude_reference_path)):
+                print(f"[rov/main] onboard attitude estimator loaded rest reference from {attitude_reference_path}")
+            derived_processors.append(AttitudeEstimatorProcessor(attitude_estimator))
         except Exception as e:
             print("[rov/main] onboard attitude estimator disabled:", e)
 
@@ -331,7 +344,7 @@ def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
     )
     srv.start()
     print(f"[rov/main] sensor PUB started on {getattr(cfg, 'SENSOR_PUB_ENDPOINT', DEFAULT_SENSOR_PUB_ENDPOINT)}")
-    return srv, depth_sensor
+    return srv, depth_sensor, attitude_estimator
 
 
 # --- 3) control / pilot ----------------------------------------------
@@ -585,8 +598,12 @@ def main():
     # start each service in turn
     start_video_service()
     ctrl, pilot_rx, state = start_control_service()
-    _, depth_sensor = start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
-    start_management_service(depth_sensor=depth_sensor, control_service=ctrl)
+    _, depth_sensor, attitude_estimator = start_sensor_service(ctrl=ctrl, pilot_rx=pilot_rx, state=state)
+    start_management_service(
+        depth_sensor=depth_sensor,
+        control_service=ctrl,
+        attitude_estimator=attitude_estimator,
+    )
 
     print("[rov/main] all services started.")
     try:
