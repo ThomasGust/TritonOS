@@ -30,12 +30,16 @@ def _s16(lo: int, hi: int) -> int:
 
 @dataclass
 class BMP280Reading:
+    """Compensated BMP280 temperature and pressure sample."""
+
     ts: float
     temperature_c: float
     pressure_pa: float
 
 
 class BMP280:
+    """Minimal BMP280 reader with Bosch compensation math."""
+
     def __init__(self, bus: int, addr: int = BMP280_ADDR_DEFAULT):
         self.bus_no = int(bus)
         self.addr = int(addr)
@@ -68,6 +72,8 @@ class BMP280:
         time.sleep(0.05)
 
     def read(self) -> BMP280Reading:
+        """Read and compensate the latest temperature/pressure sample."""
+
         # Raw data: pressure [19:0] then temp [19:0]
         with SMBus(self.bus_no) as b:
             data = b.read_i2c_block_data(self.addr, 0xF7, 6)

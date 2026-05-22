@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Capture and persist ROV surface-pressure reference values."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +14,8 @@ from utils.vehicle_reference import (
 
 
 def main() -> int:
+    """Capture current depth-sensor surface pressure and save it to disk."""
+
     ap = argparse.ArgumentParser(
         description="Capture and save TritonOS surface-pressure references."
     )

@@ -9,6 +9,8 @@ from motion import NavigatorPWM
 
 
 def main() -> None:
+    """Run the legacy single-channel ESC pulse sequence."""
+
     pwm = NavigatorPWM(freq_hz=50.0)
     channel = 1
 

@@ -1,4 +1,11 @@
-# rov/control/sensor_tap.py
+"""Local telemetry taps used by hold controllers.
+
+The control loop receives raw pilot frames directly, but depth and attitude hold
+also need fresh sensor telemetry. These lightweight subscribers connect to the
+ROV's own sensor PUB endpoint over localhost, drain messages without blocking,
+and retain only the latest valid samples plus receive-time freshness metadata.
+"""
+
 from __future__ import annotations
 
 import json

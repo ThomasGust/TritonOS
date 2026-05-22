@@ -89,6 +89,8 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 class PowerSenseSensor(BaseSensor):
+    """Convert raw Navigator ADC readings into battery voltage/current telemetry."""
+
     def __init__(
         self,
         board,
@@ -245,6 +247,8 @@ class PowerSenseSensor(BaseSensor):
 
     # ---- public API -----------------------------------------------------
     def read(self) -> Dict[str, Any]:
+        """Read ADC samples and publish filtered voltage/current telemetry."""
+
         out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,

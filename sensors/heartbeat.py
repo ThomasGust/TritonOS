@@ -1,3 +1,5 @@
+"""Heartbeat telemetry sensor for ROV service liveness and coarse state."""
+
 # rov/sensors/heartbeat.py
 from __future__ import annotations
 
@@ -19,6 +21,8 @@ class HeartbeatSensor(BaseSensor):
         self._state_fn = state_fn
 
     def read(self) -> Dict[str, Any]:
+        """Return a heartbeat message plus optional state fields."""
+
         data: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": "heartbeat",

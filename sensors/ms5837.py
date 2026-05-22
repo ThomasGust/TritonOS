@@ -1,3 +1,11 @@
+"""Blue Robotics MS5837 pressure/depth sensor driver.
+
+This module is kept close to the common Blue Robotics Python driver API while
+adding the model auto-detection heuristic needed for Bar02 vs Bar30 hardware.
+Higher-level TritonOS code wraps this class with surface-reference handling and
+sensor-stream normalization.
+"""
+
 try:
     import smbus2 as smbus
 except Exception:
@@ -44,6 +52,7 @@ UNITS_Kelvin     = 3
 
     
 class MS5837(object):
+    """Low-level MS5837 driver for pressure, temperature, depth, and altitude."""
     
     # Registers
     _MS5837_ADDR             = 0x76  
@@ -73,6 +82,8 @@ class MS5837(object):
         self._D2 = 0
         
     def init(self):
+        """Reset the sensor, read calibration PROM, verify CRC, and detect model."""
+
         if self._bus is None:
             "No bus!"
             return False
@@ -117,6 +128,8 @@ class MS5837(object):
             self._model = MODEL_UNKNOWN
         
     def read(self, oversampling=OSR_8192):
+        """Perform one pressure/temperature conversion cycle."""
+
         if self._bus is None:
             print("No bus!")
             return False
@@ -152,16 +165,22 @@ class MS5837(object):
         return True
     
     def setFluidDensity(self, denisty):
+        """Set fluid density used by ``depth()`` conversion."""
+
         self._fluidDensity = denisty
         
     # Pressure in requested units
     # mbar * conversion
     def pressure(self, conversion=UNITS_mbar):
+        """Return the latest pressure in the requested unit conversion."""
+
         return self._pressure * conversion
         
     # Temperature in requested units
     # default degrees C
     def temperature(self, conversion=UNITS_Centigrade):
+        """Return the latest temperature in Celsius, Fahrenheit, or Kelvin."""
+
         degC = self._temperature / 100.0
         if conversion == UNITS_Farenheit:
             return (9.0/5.0)*degC + 32
@@ -171,10 +190,14 @@ class MS5837(object):
         
     # Depth relative to MSL pressure in given fluid density
     def depth(self):
+        """Return depth relative to mean sea-level pressure using fluid density."""
+
         return (self.pressure(UNITS_Pa)-101300)/(self._fluidDensity*9.80665)
     
     # Altitude relative to MSL pressure
     def altitude(self):
+        """Return pressure-derived altitude in meters using the standard air model."""
+
         return (1-pow((self.pressure()/1013.25),.190284))*145366.45*.3048        
     
     # Cribbed from datasheet
@@ -254,9 +277,13 @@ class MS5837(object):
         return n_rem ^ 0x00
     
 class MS5837_30BA(MS5837):
+    """MS5837 configured explicitly for the 30 bar / Bar30 pressure range."""
+
     def __init__(self, bus=1):
         MS5837.__init__(self, MODEL_30BA, bus)
         
 class MS5837_02BA(MS5837):
+    """MS5837 configured explicitly for the 2 bar / Bar02 pressure range."""
+
     def __init__(self, bus=1):
         MS5837.__init__(self, MODEL_02BA, bus)

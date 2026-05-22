@@ -263,6 +263,8 @@ def build_structured_modes(parsed_formats: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def streamconfig_from_dict(d: dict) -> StreamConfig:
+    """Build a ``StreamConfig`` from a JSON/RPC argument dictionary."""
+
     return StreamConfig(
         name=d["name"],
         device=d.get("device", "/dev/v4l/by-path/*video-index0"),
@@ -325,10 +327,14 @@ def _enforce_tether_for_video(scfg: StreamConfig) -> StreamConfig:
 # ---------------------------------------------------------------------------
 
 def has_v4l2ctl() -> bool:
+    """Return True when the system has the v4l2 probing CLI installed."""
+
     return which("v4l2-ctl") is not None
 
 
 def run_v4l2_all(dev_path: str) -> str | None:
+    """Return ``v4l2-ctl --all`` output for a device, or None on failure."""
+
     if not has_v4l2ctl():
         return None
     try:
@@ -342,6 +348,8 @@ def run_v4l2_all(dev_path: str) -> str | None:
 
 
 def run_v4l2_formats_ext(dev_path: str) -> str | None:
+    """Return extended V4L2 format output for a device, or None on failure."""
+
     if not has_v4l2ctl():
         return None
     try:
@@ -471,6 +479,8 @@ def parse_v4l2_formats_ext(text: str) -> list[dict]:
 
 
 def device_label_from_sys(dev_path: str) -> str | None:
+    """Read the Linux sysfs camera label for a ``/dev/video*`` node."""
+
     try:
         real = os.path.realpath(dev_path)
         base = os.path.basename(real)
@@ -484,6 +494,8 @@ def device_label_from_sys(dev_path: str) -> str | None:
 
 
 def classify_formats(parsed_formats: list[dict]) -> dict:
+    """Summarize parsed V4L2 formats into coarse capability booleans."""
+
     fmts = { (f.get("pixelformat") or "").upper() for f in parsed_formats }
 
     raw_candidates = {"YUYV", "YUY2", "UYVY", "NV12", "BGR3", "RGB3", "RGBP"}
@@ -499,6 +511,8 @@ def classify_formats(parsed_formats: list[dict]) -> dict:
     }
 
 def probe_v4l2_device(dev_path: str) -> dict:
+    """Collect existence, labels, raw caps, parsed formats, and GUI modes."""
+
     info = {
         "device": dev_path,
         "exists": os.path.exists(dev_path),
@@ -533,6 +547,8 @@ def probe_v4l2_device(dev_path: str) -> dict:
 
 
 def list_video_devices() -> list[dict]:
+    """Probe available camera devices, preferring stable by-path symlinks."""
+
     # Prefer stable, per-port symlinks (one per physical camera).
     by_path = sorted(glob.glob("/dev/v4l/by-path/*video-index0"))
     if by_path:
@@ -548,6 +564,8 @@ def list_video_devices() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def start_video_rpc():
+    """Run the blocking ZeroMQ REP loop that manages camera streams."""
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--bind", default="tcp://0.0.0.0:5555")
     args = ap.parse_args()

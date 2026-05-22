@@ -43,6 +43,8 @@ def run_i2cdetect(bus_num: int) -> str | None:
         return e.output or str(e)
 
 def main() -> int:
+    """Scan a bus, initialize an MS5837 Bar02, and print readings."""
+
     ap = argparse.ArgumentParser(description="Bar02 (MS5837-02BA) I2C test")
     ap.add_argument("--bus", type=int, default=1, help="I2C bus number (default: 1)")
     ap.add_argument("--interval", type=float, default=0.5, help="Seconds between prints (default: 0.5)")

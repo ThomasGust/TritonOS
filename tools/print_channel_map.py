@@ -17,6 +17,8 @@ from motion.channel_map import ChannelMap
 
 
 def main() -> None:
+    """Load ``rov_config`` and print the validated physical channel map."""
+
     cm = ChannelMap.from_config(cfg)
 
     print("=== TritonOS channel map (physical) ===")

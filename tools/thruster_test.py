@@ -26,6 +26,8 @@ from motion.pwm import ThrustConfig, ThrustWriter
 
 
 def main() -> None:
+    """Run a sequential configured-thruster test with safe shutdown."""
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--thruster", default="", help="Name to test (e.g. H_FL). Empty = all")
     ap.add_argument("--power", type=float, default=0.15, help="Normalized power (0..1)")

@@ -37,6 +37,8 @@ nav = import_navigator_module()
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse channel, PWM, ramp, and safety timing options."""
+
     ap = argparse.ArgumentParser(description="Spin multiple Navigator PWM channels simultaneously.")
     ap.add_argument(
         "--channels",
@@ -62,6 +64,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def us_to_count(pulse_us: float, freq_hz: float) -> int:
+    """Convert a pulse width in microseconds to a PCA9685 count."""
+
     period_us = 1_000_000.0 / float(freq_hz)
     value = round(4095.0 * (float(pulse_us) / period_us))
     return max(0, min(4095, int(value)))
@@ -74,6 +78,8 @@ def throttle_to_us(
     min_us: int,
     max_us: int,
 ) -> int:
+    """Map normalized throttle [-1, 1] into a bounded ESC pulse width."""
+
     t = max(-1.0, min(1.0, float(throttle)))
     pulse = float(neutral_us) + float(span_us) * t
     pulse = max(float(min_us), min(float(max_us), pulse))
@@ -81,10 +87,14 @@ def throttle_to_us(
 
 
 def set_pwm_us(ch: int, pulse_us: float, freq_hz: float) -> None:
+    """Write one Navigator PWM channel using a microsecond pulse value."""
+
     nav.set_pwm_channel_value(int(ch), us_to_count(pulse_us, freq_hz))
 
 
 def unique_ints(xs: List[int]) -> List[int]:
+    """Return integer values in first-seen order without duplicates."""
+
     out: List[int] = []
     for x in xs:
         if x not in out:
@@ -93,6 +103,8 @@ def unique_ints(xs: List[int]) -> List[int]:
 
 
 def main() -> None:
+    """Run the all-motors bring-up sequence and always disable outputs."""
+
     args = parse_args()
 
     # Resolve channels

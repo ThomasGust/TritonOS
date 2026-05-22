@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional
 
 
 def which(cmd: str) -> Optional[str]:
+    """Return the resolved path for a command, if it is on PATH."""
+
     return shutil.which(cmd)
 
 
@@ -58,10 +60,14 @@ def run_cmd(cmd: List[str], timeout_s: float = 4.0) -> Dict[str, Any]:
 
 
 def list_dev_glob(pattern: str) -> List[str]:
+    """Return sorted ``/dev`` paths matching a glob pattern."""
+
     return sorted([str(p) for p in Path("/dev").glob(pattern)])
 
 
 def collect_video_info(timeout_s: float = 4.0) -> Dict[str, Any]:
+    """Collect camera device and V4L2 capability information."""
+
     info: Dict[str, Any] = {"devices": [], "v4l2ctl": None}
     by_path = Path("/dev/v4l/by-path")
     if by_path.exists():
@@ -90,6 +96,8 @@ def collect_video_info(timeout_s: float = 4.0) -> Dict[str, Any]:
 
 
 def collect_gstreamer_info(timeout_s: float = 4.0) -> Dict[str, Any]:
+    """Collect GStreamer binary/plugin availability details."""
+
     info: Dict[str, Any] = {"gst_launch": which("gst-launch-1.0"), "gst_inspect": which("gst-inspect-1.0")}
     if info["gst_launch"]:
         info["gst_launch_version"] = run_cmd(["gst-launch-1.0", "--version"], timeout_s=timeout_s)
@@ -102,6 +110,8 @@ def collect_gstreamer_info(timeout_s: float = 4.0) -> Dict[str, Any]:
 
 
 def collect_bus_info(timeout_s: float = 3.0) -> Dict[str, Any]:
+    """Collect visible I2C, GPIO, SPI, and optional i2cdetect details."""
+
     info: Dict[str, Any] = {
         "i2c_devices": list_dev_glob("i2c-*"),
         "gpiochips": list_dev_glob("gpiochip*"),
@@ -159,6 +169,8 @@ def collect_navigator_smoke() -> Dict[str, Any]:
 
 
 def collect_config_info() -> Dict[str, Any]:
+    """Validate key TritonOS config values without starting services."""
+
     info: Dict[str, Any] = {"ok": False, "error": None}
     try:
         import rov_config as cfg  # type: ignore
@@ -189,6 +201,8 @@ def collect_config_info() -> Dict[str, Any]:
 
 
 def collect(min_cameras: int, include_navigator: bool) -> Dict[str, Any]:
+    """Build the full preflight report and simple readiness verdict."""
+
     report: Dict[str, Any] = {
         "host": platform.node(),
         "platform": platform.platform(),
@@ -269,6 +283,8 @@ def _print_report_human(report: Dict[str, Any]) -> None:
 
 
 def main() -> int:
+    """Run preflight checks and emit either human text or JSON."""
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-cameras", type=int, default=1, help="Minimum number of /dev/v4l/by-path/*video-index0 devices expected")
     ap.add_argument("--json", action="store_true", help="Print JSON instead of human report")

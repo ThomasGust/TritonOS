@@ -162,6 +162,8 @@ class OEController:
             return 1 if enabled else 0
 
     def set_enabled(self, enabled: bool) -> None:
+        """Drive the OE line to enable or disable PWM outputs."""
+
         if self._backend is None:
             return
         kind, lib = self._backend
@@ -173,6 +175,8 @@ class OEController:
             self._line.set_value(level)
 
     def close(self) -> None:
+        """Disable outputs and release GPIO resources."""
+
         if self._backend is None:
             return
         kind, lib = self._backend
@@ -198,6 +202,8 @@ class OEController:
 
 @dataclass
 class PCA9685:
+    """Direct-I2C PCA9685 helper for simple ESC pulse tests."""
+
     bus_num: int
     address: int
     freq_hz: float = 50.0
@@ -207,18 +213,26 @@ class PCA9685:
         self.bus = SMBus(self.bus_num)
 
     def close(self):
+        """Close the I2C bus handle."""
+
         try:
             self.bus.close()
         except Exception:
             pass
 
     def read8(self, reg: int) -> int:
+        """Read one PCA9685 register."""
+
         return self.bus.read_byte_data(self.address, reg)
 
     def write8(self, reg: int, val: int) -> None:
+        """Write one PCA9685 register."""
+
         self.bus.write_byte_data(self.address, reg, val & 0xFF)
 
     def set_pwm_freq(self, freq_hz: float) -> None:
+        """Configure PCA9685 PWM frequency using the prescale register."""
+
         # prescale = round(osc / (4096*freq) - 1)
         prescaleval = (self.osc_hz / (4096.0 * float(freq_hz))) - 1.0
         prescale = int(round(prescaleval))
@@ -240,6 +254,8 @@ class PCA9685:
         self.freq_hz = float(freq_hz)
 
     def init(self) -> None:
+        """Initialize output mode and PWM frequency."""
+
         # Basic init: OUTDRV totem pole, auto-increment enabled via set_pwm_freq
         self.write8(MODE2, OUTDRV)
         # MODE1 reset-ish (but don't hard reset all bits; set_pwm_freq will manage)
@@ -248,6 +264,8 @@ class PCA9685:
         self.set_pwm_freq(self.freq_hz)
 
     def set_pwm_counts(self, channel: int, on: int, off: int) -> None:
+        """Write raw ON/OFF counts for one zero-based channel."""
+
         if not (0 <= channel <= 15):
             raise ValueError("Channel must be 0..15")
         reg = LED0_ON_L + 4 * channel
@@ -256,25 +274,35 @@ class PCA9685:
         self.bus.write_i2c_block_data(self.address, reg, data)
 
     def set_all_pwm_counts(self, on: int, off: int) -> None:
+        """Write raw ON/OFF counts to every PCA9685 channel."""
+
         data = [on & 0xFF, (on >> 8) & 0xFF, off & 0xFF, (off >> 8) & 0xFF]
         self.bus.write_i2c_block_data(self.address, ALL_LED_ON_L, data)
 
     def us_to_counts(self, pulse_us: float) -> int:
+        """Convert pulse width in microseconds to a PCA9685 count."""
+
         period_us = 1_000_000.0 / self.freq_hz
         counts = int(round((pulse_us / period_us) * 4096.0))
         # clamp to valid 12-bit
         return max(0, min(4095, counts))
 
     def set_pulse_us(self, channel: int, pulse_us: float) -> None:
+        """Set a zero-based PCA9685 channel by pulse width."""
+
         off = self.us_to_counts(pulse_us)
         self.set_pwm_counts(channel, 0, off)
 
     def set_all_pulse_us(self, pulse_us: float) -> None:
+        """Set every PCA9685 channel to the same pulse width."""
+
         off = self.us_to_counts(pulse_us)
         self.set_all_pwm_counts(0, off)
 
 
 def parse_int_list(s: str) -> List[int]:
+    """Parse comma-separated integer channel values."""
+
     out = []
     for part in s.split(","):
         part = part.strip()
@@ -285,6 +313,8 @@ def parse_int_list(s: str) -> List[int]:
 
 
 def parse_float_list(s: str) -> List[float]:
+    """Parse comma-separated pulse widths in microseconds."""
+
     out = []
     for part in s.split(","):
         part = part.strip()
@@ -295,6 +325,8 @@ def parse_float_list(s: str) -> List[float]:
 
 
 def main() -> int:
+    """Run the basic PCA9685/ESC sequence with safe shutdown handling."""
+
     ap = argparse.ArgumentParser(description="Direct PCA9685 PWM test for Navigator + Basic ESCs")
     ap.add_argument("--bus", type=int, default=4, help="Preferred I2C bus number (default: 4)")
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x40, help="Preferred I2C address (default: 0x40)")

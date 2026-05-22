@@ -59,12 +59,18 @@ except Exception:
         _next_t: float = 0.0
 
         def should_poll(self, now: float) -> bool:
+            """Return True when this fake-compatible sensor should be polled."""
+
             return now >= self._next_t
 
         def mark_polled(self, now: float):
+            """Advance the next fake-compatible poll deadline."""
+
             self._next_t = now + 1.0 / self.rate_hz
 
         def read(self) -> Dict[str, Any]:
+            """Placeholder read method implemented by concrete sensors."""
+
             raise NotImplementedError
 
 
@@ -76,6 +82,8 @@ class FakeIMUSensor(BaseSensor):
         self._t0 = time.time()
 
     def read(self) -> Dict[str, Any]:
+        """Return one synthetic IMU message."""
+
         t = time.time() - self._t0
         ax = 0.10 * math.sin(2 * math.pi * 0.7 * t)
         ay = 0.10 * math.sin(2 * math.pi * 0.5 * t + 1.0)
@@ -100,6 +108,8 @@ class FakeMagSensor(BaseSensor):
         self._t0 = time.time()
 
     def read(self) -> Dict[str, Any]:
+        """Return one synthetic magnetometer message."""
+
         t = time.time() - self._t0
         mx = 42.0 + 0.3 * math.sin(2 * math.pi * 0.08 * t)
         my = 18.0 + 0.2 * math.sin(2 * math.pi * 0.05 * t + 0.7)
@@ -129,6 +139,8 @@ class FakeEnvSensor(BaseSensor):
         self._t0 = time.time()
 
     def read(self) -> Dict[str, Any]:
+        """Return one synthetic environment message."""
+
         t = time.time() - self._t0
         temp_c = 22.0 + 0.5 * math.sin(2 * math.pi * 0.02 * t)
         pressure_kpa = 101.3 + 0.8 * math.sin(2 * math.pi * 0.01 * t + 0.5)
@@ -149,6 +161,8 @@ class FakeBar30Sensor(BaseSensor):
         self._t0 = time.time()
 
     def read(self) -> Dict[str, Any]:
+        """Return one synthetic external-depth message."""
+
         t = time.time() - self._t0
         depth_m = 1.0 + 0.3 * math.sin(2 * math.pi * 0.05 * t)
         temp_c = 18.0 + 0.2 * math.sin(2 * math.pi * 0.02 * t)
@@ -255,6 +269,8 @@ def _build_sensors(args) -> Tuple[List[BaseSensor], bool, Optional[str]]:
 
 
 def main() -> int:
+    """Publish real or synthetic sensor telemetry for end-to-end stream tests."""
+
     default_bind = "tcp://0.0.0.0:6001"
     if cfg is not None:
         default_bind = getattr(cfg, "SENSOR_PUB_ENDPOINT", default_bind)

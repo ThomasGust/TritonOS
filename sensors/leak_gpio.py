@@ -18,6 +18,8 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class LeakGPIO:
+    """Reader for a single active-high or active-low GPIO leak line."""
+
     chip: str = "/dev/gpiochip0"
     line: int = 0
     invert: bool = False
@@ -30,10 +32,14 @@ class LeakGPIO:
         self._line.request(consumer="triton_leak", type=gpiod.LINE_REQ_DIR_IN)
 
     def read(self) -> bool:
+        """Return the leak line state after applying optional inversion."""
+
         v = bool(self._line.get_value())
         return (not v) if self.invert else v
 
     def close(self) -> None:
+        """Release GPIO resources."""
+
         try:
             self._line.release()
         except Exception:

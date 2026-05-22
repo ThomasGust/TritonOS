@@ -247,13 +247,19 @@ class NavigatorPWM:
 
     @property
     def lib_base(self) -> int:
+        """Return the channel-number base expected by the active Navigator binding."""
+
         return int(self._lib_base)
 
     @property
     def pwm_enum(self) -> Optional[Any]:
+        """Return the binding's ``PwmChannel`` enum when available."""
+
         return self._PwmChannel
 
     def enable(self, state: bool) -> None:
+        """Enable or disable Navigator PWM outputs."""
+
         state = bool(state)
         try:
             self._nav.set_pwm_enable(state)
@@ -263,13 +269,19 @@ class NavigatorPWM:
 
     # Backwards-compat helpers (some of our tools used arm/disarm naming).
     def arm(self) -> None:
+        """Back-compat alias for enabling PWM outputs."""
+
         self.enable(True)
 
     def disarm(self) -> None:
+        """Back-compat alias for disabling PWM outputs."""
+
         self.enable(False)
 
     @property
     def enabled(self) -> bool:
+        """Return the wrapper's last known PWM-enable state."""
+
         return bool(self._enabled)
 
     def set_counts(self, channels: List[ChannelSpec], counts: List[int]) -> None:
@@ -283,6 +295,8 @@ class NavigatorPWM:
             self._nav.set_pwm_channel_value(ch, int(v))
 
     def set_servo_us(self, channel: ChannelSpec, pulse_us: float) -> int:
+        """Write one channel by pulse width and return the computed count."""
+
         count = us_to_count(pulse_us, self.freq_hz)
         self._nav.set_pwm_channel_value(channel, int(count))
         return count
@@ -434,11 +448,15 @@ class DirectPCA9685PWM:
 
     @property
     def lib_base(self) -> int:
+        """Return the physical channel-number base used by the direct backend."""
+
         # We address physical channels 1..16 directly.
         return 1
 
     @property
     def pwm_enum(self) -> Optional[Any]:
+        """Return None because the direct backend uses integer channels."""
+
         return None
 
     def _read8(self, reg: int) -> int:
@@ -463,21 +481,31 @@ class DirectPCA9685PWM:
         self.freq_hz = float(freq_hz)
 
     def enable(self, state: bool) -> None:
+        """Toggle the OE GPIO when configured and record the enable state."""
+
         if self._oe is not None:
             self._oe.set_enabled(bool(state))
         self._enabled = bool(state)
 
     def arm(self) -> None:
+        """Back-compat alias for enabling direct PWM outputs."""
+
         self.enable(True)
 
     def disarm(self) -> None:
+        """Back-compat alias for disabling direct PWM outputs."""
+
         self.enable(False)
 
     @property
     def enabled(self) -> bool:
+        """Return the direct backend's last known enable state."""
+
         return bool(self._enabled)
 
     def set_counts(self, channels: List[ChannelSpec], counts: List[int]) -> None:
+        """Write raw PCA9685 counts to physical channels 1..16."""
+
         if len(channels) != len(counts):
             raise ValueError("channels and counts must have same length")
         for ch, count in zip(channels, counts):
@@ -489,6 +517,8 @@ class DirectPCA9685PWM:
             self._bus.write_i2c_block_data(self._addr, reg, data)
 
     def set_servo_us(self, channel: ChannelSpec, pulse_us: float) -> int:
+        """Write one direct channel by pulse width and return the count."""
+
         count = us_to_count(pulse_us, self.freq_hz)
         self.set_counts([channel], [count])
         return count
@@ -499,6 +529,13 @@ TrimSpec = Union[int, Mapping[str, int]]
 
 @dataclass(frozen=True)
 class ThrustConfig:
+    """PWM/ESC behavior settings for `ThrustWriter`.
+
+    Values in this dataclass define how normalized mixer output becomes a pulse
+    width, how the PWM backend is selected, and what safety behavior is used
+    during arm/disarm transitions.
+    """
+
     backend: str = "auto"
     freq_hz: float = 50.0
     neutral_us: int = 1500

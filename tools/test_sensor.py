@@ -1,3 +1,5 @@
+"""Manual Navigator sensor smoke test for local hardware bring-up."""
+
 from utils.navigator_import import import_navigator_module
 
 navigator = import_navigator_module()

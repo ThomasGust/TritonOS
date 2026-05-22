@@ -1,3 +1,12 @@
+"""Read and safely edit top-level values in `rov_config.py`.
+
+The management RPC uses this module to expose a constrained configuration
+surface to topside tooling. Only uppercase top-level assignments are considered
+editable, and updates are rendered as Python literals while preserving the rest
+of the file. This keeps competition-day tweaks simple without introducing a
+second config format.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -12,6 +21,8 @@ DEFAULT_CONFIG_PATH = "rov_config.py"
 
 
 def resolve_config_path(path: str | Path = DEFAULT_CONFIG_PATH) -> Path:
+    """Resolve a config path supplied by RPC or tests."""
+
     return Path(path).expanduser()
 
 
@@ -35,6 +46,8 @@ def _serialize_value(value: Any) -> Any:
 
 
 def load_runtime_config_snapshot() -> Dict[str, Any]:
+    """Return JSON-friendly values for editable `rov_config` constants."""
+
     cfg = importlib.import_module("rov_config")
     snapshot: Dict[str, Any] = {}
     for name in dir(cfg):
@@ -48,6 +61,8 @@ def load_runtime_config_snapshot() -> Dict[str, Any]:
 
 
 def reload_runtime_config_module() -> Any:
+    """Reload and return the active `rov_config` module."""
+
     if "rov_config" in sys.modules:
         return importlib.reload(sys.modules["rov_config"])
     return importlib.import_module("rov_config")
@@ -77,6 +92,13 @@ def _to_python_literal(value: Any) -> str:
 
 
 def update_config_values(updates: Dict[str, Any], *, path: str | Path = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
+    """Rewrite selected uppercase assignments in a config file.
+
+    Unknown keys are rejected rather than appended. That behavior is important:
+    the caller should only be able to change variables that already exist in the
+    checked-in config and therefore have surrounding documentation.
+    """
+
     if not updates:
         return {}
 

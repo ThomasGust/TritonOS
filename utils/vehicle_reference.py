@@ -1,3 +1,11 @@
+"""Depth-reference persistence and capture helpers.
+
+External pressure sensors need a surface-pressure reference before their depth
+values are meaningful. This module owns the small JSON file used to store that
+reference and provides helpers for capturing a fresh value through the active
+depth-sensor configuration.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,10 +19,14 @@ DEFAULT_DEPTH_REFERENCE_PATH = "calibration/depth_reference.json"
 
 
 def resolve_path(path: str | Path) -> Path:
+    """Resolve a user/config path without assuming it already exists."""
+
     return Path(path).expanduser()
 
 
 def load_optional_json(path: str | Path) -> Optional[Dict[str, Any]]:
+    """Load a JSON object if present, returning `None` for missing/bad files."""
+
     p = resolve_path(path)
     if not p.exists():
         return None
@@ -26,6 +38,8 @@ def load_optional_json(path: str | Path) -> Optional[Dict[str, Any]]:
 
 
 def load_surface_pressure_reference_mbar(path: str | Path) -> Optional[float]:
+    """Read the stored surface-pressure reference in millibar."""
+
     data = load_optional_json(path)
     if not data:
         return None
@@ -37,6 +51,8 @@ def load_surface_pressure_reference_mbar(path: str | Path) -> Optional[float]:
 
 
 def save_surface_pressure_reference(path: str | Path, surface_pressure_mbar: float, *, meta: Optional[Dict[str, Any]] = None) -> None:
+    """Atomically write a surface-pressure reference JSON file."""
+
     payload: Dict[str, Any] = {
         "surface_pressure_mbar": float(surface_pressure_mbar),
         "created_ts": time.time(),
@@ -51,6 +67,8 @@ def save_surface_pressure_reference(path: str | Path, surface_pressure_mbar: flo
 
 
 def build_depth_sensor_from_config(cfg: Any) -> Any:
+    """Instantiate the configured external depth sensor wrapper."""
+
     from sensors.navigator import Bar02Sensor, Bar30Sensor, ExternalDepthSensor
 
     use_external = bool(getattr(cfg, "USE_EXTERNAL_DEPTH", False))
@@ -104,6 +122,8 @@ def build_depth_sensor_from_config(cfg: Any) -> Any:
 
 
 def capture_surface_pressure_reference(cfg: Any, *, samples: int, delay_s: float, sensor: Any | None = None) -> float:
+    """Average one or more pressure readings for use as the surface reference."""
+
     sensor = sensor if sensor is not None else build_depth_sensor_from_config(cfg)
     pressures = []
     for _ in range(max(1, int(samples))):

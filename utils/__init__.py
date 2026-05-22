@@ -1,1 +1,1 @@
-# utils package
+"""Shared TritonOS utility helpers."""

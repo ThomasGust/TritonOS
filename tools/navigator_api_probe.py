@@ -41,6 +41,8 @@ def _probe_nav(try_init: bool) -> Dict[str, Any]:
 
 
 def main() -> None:
+    """Print or serialize Navigator binding capabilities."""
+
     ap = argparse.ArgumentParser(description="Inspect the installed bluerobotics_navigator PWM API.")
     ap.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     ap.add_argument("--try-init", action="store_true", help="Also call nav.init() as a smoke test.")

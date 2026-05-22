@@ -21,6 +21,8 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class Vec3:
+    """Magnetometer vector in microtesla."""
+
     x: float
     y: float
     z: float
@@ -32,6 +34,8 @@ def _twos16(v: int) -> int:
 
 
 class AK09915:
+    """Small AK09915 driver that auto-detects the I2C address."""
+
     # Address depends on CAD pins; try a small set.
     CANDIDATE_ADDRS = (0x0C, 0x0D, 0x0E, 0x0F)
 
@@ -68,6 +72,8 @@ class AK09915:
         self.set_mode(mode)
 
     def close(self) -> None:
+        """Close the underlying I2C bus handle."""
+
         try:
             self.bus.close()
         except Exception:
@@ -85,11 +91,15 @@ class AK09915:
         raise RuntimeError(f"AK09915 not found on I2C bus {self.bus_no} at {self.CANDIDATE_ADDRS}")
 
     def reset(self) -> None:
+        """Issue the AK09915 software-reset command."""
+
         # Software reset: CNTL3.SRST = 1
         self.bus.write_byte_data(self.addr, self.REG_CNTL3, 0x01)
         time.sleep(0.01)
 
     def set_mode(self, mode: int) -> None:
+        """Switch the magnetometer into a requested measurement mode."""
+
         # Power-down first, then requested mode
         self.bus.write_byte_data(self.addr, self.REG_CNTL2, self.MODE_POWER_DOWN)
         time.sleep(0.002)

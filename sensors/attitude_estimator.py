@@ -1,3 +1,11 @@
+"""Onboard relative attitude estimator for raw IMU and magnetometer telemetry.
+
+The estimator calibrates against the vehicle's startup/rest pose and publishes
+roll, pitch, and relative yaw as derived sensor messages. It is intentionally
+diagnostic rather than navigation-grade: the goal is stable operator feedback
+and hold-controller input without requiring a fully mapped IMU mounting matrix.
+"""
+
 from __future__ import annotations
 
 import math
@@ -171,6 +179,8 @@ def _rotate_between_unit(v: Vec3, src: Vec3, dst: Vec3) -> Vec3:
 
 @dataclass(frozen=True)
 class RollPitchConfig:
+    """Tuning parameters for startup calibration and IMU/mag fusion."""
+
     calibration_samples: int = 30
     max_dt_s: float = 0.25
     accel_correction: float | None = None
@@ -216,6 +226,8 @@ class RollPitchEstimator:
         self.reset()
 
     def reset(self) -> None:
+        """Clear calibration, filtered attitude, yaw, and last-output state."""
+
         with self._lock:
             self._cal_accel_units: list[Vec3] = []
             self._cal_accel_raw: list[Vec3] = []
@@ -241,6 +253,8 @@ class RollPitchEstimator:
             self._last_output: Optional[dict[str, Any]] = None
 
     def status(self) -> dict[str, Any]:
+        """Return calibration and latest-estimate diagnostics."""
+
         with self._lock:
             return {
                 "calibration_state": "calibrated" if self._reference_accel is not None else "calibrating",
@@ -295,6 +309,8 @@ class RollPitchEstimator:
             self._seed_yaw_references_locked()
 
     def update(self, imu_msg: dict[str, Any], *, recv_time_s: float | None = None) -> Optional[dict[str, Any]]:
+        """Consume one IMU message and return a derived attitude message if ready."""
+
         accel = _vec_from_msg((imu_msg or {}).get("accel"))
         gyro = _vec_from_msg((imu_msg or {}).get("gyro"))
         if accel is None or gyro is None:
@@ -738,6 +754,8 @@ class AttitudeEstimatorProcessor:
         self.estimator = estimator or RollPitchEstimator()
 
     def process(self, msg: dict[str, Any]) -> list[dict[str, Any]]:
+        """Process one raw sensor-stream message and emit derived telemetry."""
+
         typ = str((msg or {}).get("type", ""))
         if typ == "mag":
             self.estimator.update_mag(dict(msg or {}))

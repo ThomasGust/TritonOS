@@ -30,12 +30,16 @@ ALL = ["H_FL","H_FR","H_RL","H_RR","V_FL","V_FR","V_RL","V_RR"]
 
 
 def one_thr(name: str, val: float) -> Dict[str, float]:
+    """Build a one-thruster command while holding all others neutral."""
+
     d = {k: 0.0 for k in ALL}
     d[name] = float(val)
     return d
 
 
 def main() -> None:
+    """Run direct thruster/channel test modes from command-line arguments."""
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--thr", choices=ALL, help="Thruster name (uses thruster map).")
     ap.add_argument("--channel", type=int, help="Raw PWM channel 0-15 (bypasses map).")

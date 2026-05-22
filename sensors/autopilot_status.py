@@ -1,3 +1,5 @@
+"""Telemetry adapter for exposing control-loop hold state as sensor data."""
+
 from __future__ import annotations
 
 import time
@@ -19,6 +21,8 @@ class AutopilotStatusSensor(BaseSensor):
         self._control_service = control_service
 
     def read(self) -> Dict[str, Any]:
+        """Return the latest hold/control status snapshot as telemetry."""
+
         now = time.time()
         data: Dict[str, Any] = {
             "ts": now,

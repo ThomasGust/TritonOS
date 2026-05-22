@@ -1,3 +1,5 @@
+"""Minimal MMC5983 magnetometer driver with I2C and SPI backends."""
+
 # sensors/mmc5983.py
 from __future__ import annotations
 
@@ -38,12 +40,16 @@ G_TO_uT = 100.0  # 1 gauss = 100 microtesla
 
 @dataclass
 class MagReading:
+    """Single MMC5983 magnetic field sample in microtesla."""
+
     x_uT: float
     y_uT: float
     z_uT: float
     ts: float
 
     def as_dict(self) -> dict:
+        """Return the sample using the sensor-stream magnetometer shape."""
+
         return {"x": self.x_uT, "y": self.y_uT, "z": self.z_uT, "ts": self.ts}
 
 
@@ -118,6 +124,8 @@ class MMC5983:
         spi_devices: Sequence[Tuple[int, int]] = ((0, 0), (0, 1), (1, 0), (1, 1)),
         use_set_reset: bool = True,
     ) -> Optional["MMC5983"]:
+        """Try configured I2C buses, then SPI devices, returning the first match."""
+
         # Try I2C first (cheap), then SPI.
         for bus in i2c_buses:
             try:
@@ -175,6 +183,8 @@ class MMC5983:
         return gx * G_TO_uT, gy * G_TO_uT, gz * G_TO_uT
 
     def read_uT(self) -> MagReading:
+        """Read one magnetic field sample in microtesla."""
+
         now = time.time()
         if not self.use_set_reset:
             x, y, z = self._read_raw_18b()

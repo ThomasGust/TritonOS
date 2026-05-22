@@ -35,6 +35,8 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class Vec3:
+    """Simple 3-axis vector used to normalize different hardware APIs."""
+
     x: float
     y: float
     z: float
@@ -167,12 +169,16 @@ class NavigatorBoard:
 
     # ---- IMU ----
     def read_accel(self) -> Vec3:
+        """Read accelerometer values from the active backend."""
+
         if self._use_bindings:
             a = self._nav.read_accel()  # type: ignore[union-attr]
             return _as_vec3(a)
         return _as_vec3(self._imu.read_accel())  # type: ignore[union-attr]
 
     def read_gyro(self) -> Vec3:
+        """Read gyroscope values from the active backend."""
+
         if self._use_bindings:
             g = self._nav.read_gyro()  # type: ignore[union-attr]
             return _as_vec3(g)
@@ -190,24 +196,32 @@ class NavigatorBoard:
         return (_as_vec3(a), _as_vec3(g))
 
     def read_temp(self) -> float:
+        """Read IMU temperature from the active backend."""
+
         if self._use_bindings:
             return float(self._nav.read_temp())  # type: ignore[union-attr]
         return float(self._imu.read_temp_c())  # type: ignore[union-attr]
 
     # ---- magnetometers ----
     def read_mag_ak09915(self) -> Vec3:
+        """Read the primary AK09915 magnetometer."""
+
         if self._use_bindings:
             m = self._nav.read_mag()  # type: ignore[union-attr]
             return _as_vec3(m)
         return _as_vec3(self._ak.read_uT())  # type: ignore[union-attr]
 
     def read_mag_mmc5983(self):
+        """Read optional MMC5983 magnetometer data, if present."""
+
         if self._mmc5983 is None:
             return None
         r = self._mmc5983.read_uT()
         return {"x": r.x_uT, "y": r.y_uT, "z": r.z_uT, "ts": r.ts}
 
     def read_mags(self) -> Dict[str, Any]:
+        """Return all available magnetometer sources in a stable dictionary."""
+
         ak = self.read_mag_ak09915()
         return {
             "ak09915": {"x": ak.x, "y": ak.y, "z": ak.z, "ts": time.time()},
@@ -216,6 +230,8 @@ class NavigatorBoard:
 
     # Back-compat: existing code expects read_mag() -> AK09915
     def read_mag(self) -> Vec3:
+        """Back-compat alias returning the AK09915 magnetometer vector."""
+
         return self.read_mag_ak09915()
 
     # ---- other Navigator features ----
@@ -256,12 +272,16 @@ class NavigatorBoard:
 
 
 class IMUSensor(BaseSensor):
+    """Polled sensor wrapper that emits combined accelerometer/gyro telemetry."""
+
     def __init__(self, board: NavigatorBoard, rate_hz: float = 20.0, include_mag: bool = False):
         super().__init__("imu", rate_hz)
         self.board = board
         self.include_mag = bool(include_mag)
 
     def read(self) -> Dict[str, Any]:
+        """Return one IMU telemetry message."""
+
         a, g = self.board.read_imu()
         out: Dict[str, Any] = {
             "ts": time.time(),
@@ -284,11 +304,15 @@ class IMUSensor(BaseSensor):
 
 
 class MagSensor(BaseSensor):
+    """Polled sensor wrapper that emits normalized magnetometer telemetry."""
+
     def __init__(self, board: NavigatorBoard, rate_hz: float = 5.0):
         super().__init__("mag", rate_hz)
         self.board = board
 
     def read(self) -> Dict[str, Any]:
+        """Return one magnetometer telemetry message."""
+
         mags = self.board.read_mags()
         ak = mags.get("ak09915") or {"x": 0.0, "y": 0.0, "z": 0.0}
         return {
@@ -302,11 +326,15 @@ class MagSensor(BaseSensor):
 
 
 class EnvSensor(BaseSensor):
+    """Polled sensor wrapper for Navigator temperature and barometric pressure."""
+
     def __init__(self, board: NavigatorBoard, rate_hz: float = 2.0):
         super().__init__("env", rate_hz)
         self.board = board
 
     def read(self) -> Dict[str, Any]:
+        """Return one environment telemetry message."""
+
         out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,
@@ -324,11 +352,15 @@ class EnvSensor(BaseSensor):
 
 
 class LeakSensor(BaseSensor):
+    """Polled sensor wrapper for the configured leak detector input."""
+
     def __init__(self, board: NavigatorBoard, rate_hz: float = 2.0):
         super().__init__("leak", rate_hz)
         self.board = board
 
     def read(self) -> Dict[str, Any]:
+        """Return one leak-state telemetry message."""
+
         out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,
@@ -342,11 +374,15 @@ class LeakSensor(BaseSensor):
 
 
 class ADCSensor(BaseSensor):
+    """Polled sensor wrapper for raw Navigator ADC channel voltages."""
+
     def __init__(self, board: NavigatorBoard, rate_hz: float = 5.0):
         super().__init__("adc", rate_hz)
         self.board = board
 
     def read(self) -> Dict[str, Any]:
+        """Return one raw ADC telemetry message."""
+
         out: Dict[str, Any] = {
             "ts": time.time(),
             "sensor": self.name,
@@ -519,6 +555,8 @@ class MS5837Sensor(BaseSensor):
         return dp_pa / (self._fluid_density * 9.80665)
 
     def read(self) -> Dict[str, Any]:
+        """Read the pressure sensor and publish normalized depth telemetry."""
+
         with self._read_lock:
             try:
                 ok = bool(self.sensor.read(self._osr))  # type: ignore[union-attr]

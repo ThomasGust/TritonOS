@@ -1,3 +1,5 @@
+"""Import helpers for Blue Robotics Navigator binding layout differences."""
+
 from __future__ import annotations
 
 import importlib
@@ -25,6 +27,8 @@ def import_navigator_module() -> ModuleType:
 
 
 def navigator_api_summary(nav: Any) -> str:
+    """Return a compact human-readable summary of a Navigator module."""
+
     pwm_symbols = sorted(x for x in dir(nav) if "pwm" in x.lower())
 
     versions: List[str] = []
@@ -48,6 +52,8 @@ def navigator_api_summary(nav: Any) -> str:
 
 
 def navigator_api_info(nav: Any) -> Dict[str, Any]:
+    """Return structured feature/version details for a Navigator module."""
+
     versions: Dict[str, str | None] = {}
     for dist in ("bluerobotics_navigator", "bluerobotics-navigator"):
         try:

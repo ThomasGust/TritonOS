@@ -26,6 +26,8 @@ import rov_config as cfg
 from motion.pwm import ThrustWriter, ThrustConfig
 
 def main() -> None:
+    """Cycle configured thruster names through the production ThrustWriter path."""
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--val", type=float, default=0.20)
     ap.add_argument("--on", type=float, default=1.5)

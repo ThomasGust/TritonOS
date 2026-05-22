@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Small CLI client for TritonOS management RPC operations."""
+
 from __future__ import annotations
 
 import argparse
@@ -17,6 +19,8 @@ def _request(endpoint: str, payload: dict) -> dict:
 
 
 def main() -> int:
+    """Parse a management command, send one RPC request, and print JSON."""
+
     ap = argparse.ArgumentParser(description="Client for TritonOS management RPC.")
     ap.add_argument("--endpoint", default="tcp://127.0.0.1:5556")
 

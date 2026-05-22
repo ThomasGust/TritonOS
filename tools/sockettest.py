@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Tiny TCP receive server for checking raw connectivity to the ROV."""
+
 import socket
 import time
 
@@ -6,6 +8,8 @@ HOST = "0.0.0.0"   # listen on all interfaces
 PORT = 6000        # pick a port (use 6000 to match your pilot setup)
 
 def main():
+    """Accept one TCP client and periodically print received data previews."""
+
     print(f"[server] binding {HOST}:{PORT} ...")
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

@@ -24,11 +24,15 @@ def _s16(v: int) -> int:
 
 @dataclass
 class ADS1115Reading:
+    """Snapshot of all ADS1115 single-ended channels in volts."""
+
     ts: float
     volts: list[float]
 
 
 class ADS1115:
+    """Minimal ADS1115 single-shot reader for Navigator analog channels."""
+
     # Registers
     REG_CONVERSION = 0x00
     REG_CONFIG = 0x01
@@ -100,5 +104,7 @@ class ADS1115:
         return float(code) * (self.pga_v / 32768.0)
 
     def read_all(self) -> ADS1115Reading:
+        """Read all four single-ended channels and return volts."""
+
         volts = [self._read_channel(i) for i in range(4)]
         return ADS1115Reading(ts=time.time(), volts=volts)

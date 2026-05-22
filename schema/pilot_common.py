@@ -1,4 +1,11 @@
-# pilot_common.py
+"""Shared pilot-control message schema.
+
+`PilotFrame` is the JSON payload transmitted from TritonPilot to TritonOS. The
+same file is intentionally mirrored in both repositories for now, so changes
+here should be treated as a wire-protocol change and copied to the topside
+repository before either side is deployed.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Tuple, Any
@@ -9,6 +16,8 @@ PILOT_SCHEMA_VERSION = 1
 
 @dataclass
 class PilotAxes:
+    """Normalized analog inputs reported by the topside controller service."""
+
     lx: float = 0.0
     ly: float = 0.0
     rx: float = 0.0
@@ -19,6 +28,8 @@ class PilotAxes:
 
 @dataclass
 class PilotButtons:
+    """Boolean controller button state for one pilot frame."""
+
     a: bool = False
     b: bool = False
     x: bool = False
@@ -33,6 +44,8 @@ class PilotButtons:
 
 @dataclass
 class PilotFrame:
+    """One timestamped pilot-command message sent over the control PUB/SUB link."""
+
     schema: int = PILOT_SCHEMA_VERSION
     seq: int = 0
     ts: float = field(default_factory=lambda: time.time())
@@ -44,6 +57,8 @@ class PilotFrame:
     aux: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        """Serialize the frame to the JSON-compatible pilot wire format."""
+
         return {
             "type": "pilot",
             "schema": self.schema,
@@ -59,6 +74,8 @@ class PilotFrame:
 
     @classmethod
     def from_dict(cls, d: dict) -> "PilotFrame":
+        """Build a frame from a JSON-decoded pilot wire payload."""
+
         return cls(
             schema=d.get("schema", PILOT_SCHEMA_VERSION),
             seq=d.get("seq", 0),

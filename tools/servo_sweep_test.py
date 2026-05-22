@@ -37,10 +37,14 @@ _stop_requested = False
 
 
 def parse_addr(value: str) -> int:
+    """Parse decimal or ``0x`` style integer values."""
+
     return int(value, 0)
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse sweep range, timing, hardware, and dry-run options."""
+
     ap = argparse.ArgumentParser(
         description="Smoothly sweep one Navigator PWM channel through a servo pulse range.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -136,6 +140,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    """Reject unsafe or contradictory sweep settings before hardware access."""
+
     if not (1 <= int(args.channel) <= 16):
         raise SystemExit(f"[error] --channel must be in 1..16 (got {args.channel})")
     if not (float(args.min_us) < float(args.center_us) < float(args.max_us)):
@@ -156,6 +162,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def load_pwm_helpers():
+    """Import shared direct-I2C PWM helpers in module or script execution mode."""
+
     try:
         from tools.direct_i2c_pwm_test import OEController, PCA9685, find_pca9685
 
@@ -176,12 +184,16 @@ def load_pwm_helpers():
 
 
 def request_stop(_signum, _frame) -> None:
+    """Signal handler that asks the sweep loop to exit cleanly."""
+
     global _stop_requested
     _stop_requested = True
     print("\n[STOP] Stop requested; returning to center and disabling outputs...")
 
 
 def ease_fraction(x: float, curve: str) -> float:
+    """Return an eased interpolation fraction for the requested curve."""
+
     x = max(0.0, min(1.0, float(x)))
     if curve == "linear":
         return x
@@ -189,10 +201,14 @@ def ease_fraction(x: float, curve: str) -> float:
 
 
 def ramp_duration_s(start_us: float, end_us: float, rate_us_per_sec: float) -> float:
+    """Compute ramp time from pulse distance and slew rate."""
+
     return abs(float(end_us) - float(start_us)) / float(rate_us_per_sec)
 
 
 def sleep_interruptible(seconds: float) -> None:
+    """Sleep in short chunks so Ctrl+C can request a safe shutdown quickly."""
+
     deadline = time.monotonic() + max(0.0, float(seconds))
     while not _stop_requested:
         remaining = deadline - time.monotonic()
@@ -211,6 +227,8 @@ def ramp_servo(
     curve: str,
     quiet: bool,
 ) -> float:
+    """Move from one pulse width to another using the selected ramp profile."""
+
     distance = abs(float(end_us) - float(start_us))
     if distance <= 1e-6:
         set_pulse_us(float(end_us))
@@ -247,6 +265,8 @@ def ramp_servo(
 
 
 def print_dry_run(args: argparse.Namespace) -> None:
+    """Print timing and sweep geometry without touching hardware."""
+
     end_a, end_b = (
         (float(args.max_us), float(args.min_us))
         if args.first == "max"
@@ -269,6 +289,8 @@ def print_dry_run(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    """Run a safe servo sweep on one Navigator-labeled PWM channel."""
+
     args = parse_args()
     validate_args(args)
 

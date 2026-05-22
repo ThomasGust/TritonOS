@@ -25,6 +25,8 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class Vec3:
+    """IMU vector returned in SI units."""
+
     x: float
     y: float
     z: float
@@ -36,6 +38,8 @@ def _twos(v: int) -> int:
 
 
 class ICM20602:
+    """Minimal I2C-only ICM-20602 driver for accel, gyro, and temperature."""
+
     # Common I2C address for ICM-20602 on many designs
     DEFAULT_ADDRS = (0x68, 0x69)
 
@@ -79,6 +83,8 @@ class ICM20602:
         self._gyro_lsb_per_dps = 131.0
 
     def close(self) -> None:
+        """Close the I2C bus handle."""
+
         try:
             self.bus.close()
         except Exception:
@@ -99,6 +105,8 @@ class ICM20602:
         return list(self.bus.read_i2c_block_data(self.addr, self.REG_ACCEL_XOUT_H, 14))
 
     def read_accel(self) -> Vec3:
+        """Read accelerometer values in m/s^2."""
+
         b = self._read14()
         ax = _twos((b[0] << 8) | b[1])
         ay = _twos((b[2] << 8) | b[3])
@@ -111,6 +119,8 @@ class ICM20602:
         )
 
     def read_gyro(self) -> Vec3:
+        """Read gyroscope values in rad/s."""
+
         b = self._read14()
         gx = _twos((b[8] << 8) | b[9])
         gy = _twos((b[10] << 8) | b[11])
@@ -151,6 +161,8 @@ class ICM20602:
         return (accel, gyro)
 
     def read_temp_c(self) -> float:
+        """Read approximate die temperature in degrees Celsius."""
+
         b = self._read14()
         tr = _twos((b[6] << 8) | b[7])
         # MPU/ICM family temp scaling. Good enough for telemetry.

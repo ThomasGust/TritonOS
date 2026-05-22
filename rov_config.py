@@ -1,4 +1,16 @@
 # rov_config.py
+"""Runtime configuration for the onboard ROV process.
+
+This file is intentionally plain Python because the vehicle needs to read it
+without a separate config parser, and the management RPC can safely edit a
+limited set of top-level uppercase constants. Treat it as the operator-tunable
+source of truth for endpoints, control gains, sensor choices, PWM channel
+mapping, and safety limits.
+
+Most subsystems import these values at startup. Settings that are changed while
+the ROV is running usually require a service restart unless the management RPC
+or the owning service explicitly documents live reload behavior.
+"""
 #
 # SINGLE SOURCE OF TRUTH:
 #   - Edit ONLY CHANNEL_MAP (physical channels 1..16).

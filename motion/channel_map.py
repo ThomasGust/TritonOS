@@ -89,20 +89,28 @@ class ChannelMap:
     # ---- derived convenience ----
     @property
     def horizontal_thrusters(self) -> List[str]:
+        """Return configured thruster names that participate in horizontal motion."""
+
         # Convention: H_* are horizontals
         return [n for n in _REQUIRED_THRUSTER_NAMES if n.startswith("H_") and n in self.thrusters]
 
     @property
     def vertical_thrusters(self) -> List[str]:
+        """Return configured thruster names that participate in vertical motion."""
+
         # Convention: V_* are verticals
         return [n for n in _REQUIRED_THRUSTER_NAMES if n.startswith("V_") and n in self.thrusters]
 
     @property
     def motor_channels(self) -> List[int]:
+        """Return all physical PWM channels used by thrusters."""
+
         return sorted({int(v) for v in self.thrusters.values()})
 
     @property
     def lights_channel(self) -> Optional[int]:
+        """Return the configured lights PWM channel, if one exists."""
+
         return int(self.aux["lights"]) if "lights" in self.aux else None
 
     # ---- validation ----

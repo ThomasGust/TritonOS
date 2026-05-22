@@ -50,6 +50,8 @@ FINAL_STOP_SECONDS = 0.5
 PEAK_HOLD_SECONDS = 0.0
 
 def parse_args() -> argparse.Namespace:
+    """Parse single-channel Navigator motor test options."""
+
     parser = argparse.ArgumentParser(
         description="Navigator native motor test (direct PWM).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -176,6 +178,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    """Validate command-line values before any hardware is touched."""
+
     if not (0 <= int(args.channel) <= 16):
         raise SystemExit(f"[error] --channel must be in 0..16 (got {args.channel})")
     if float(args.freq) <= 0:
@@ -230,6 +234,8 @@ def throttle_to_us(
 
 
 def set_user_leds(on: bool) -> None:
+    """Set Navigator user LEDs when the binding exposes that API."""
+
     # Uses onboard user LEDs (Blue, Green, Red)
     if nav is not None and hasattr(nav, "set_led_all"):
         nav.set_led_all(bool(on))
@@ -247,6 +253,8 @@ def try_set_neopixel_rgb(rgb=None, rgbw=None) -> None:
 
 
 def set_pwm_pulse_us(channel: int, pulse_us: float, freq_hz: float) -> int:
+    """Write one PWM channel and return the computed PCA9685 count."""
+
     if nav is None:
         raise RuntimeError("Navigator module has not been initialized")
     count = us_to_count(pulse_us, freq_hz)
@@ -255,18 +263,24 @@ def set_pwm_pulse_us(channel: int, pulse_us: float, freq_hz: float) -> int:
 
 
 def throttle_steps(target: float, step: float):
+    """Yield ramp values from neutral to a target normalized throttle."""
+
     steps = max(1, int(math.ceil(abs(float(target)) / float(step))))
     for index in range(steps + 1):
         yield float(target) * (index / steps)
 
 
 def set_neopixel_status(args: argparse.Namespace, rgb=None, rgbw=None) -> None:
+    """Apply optional NeoPixel status feedback unless disabled."""
+
     if args.no_neopixel:
         return
     try_set_neopixel_rgb(rgb=rgb, rgbw=rgbw)
 
 
 def run_ramp(label: str, target: float, rgb, ch: int, args: argparse.Namespace) -> None:
+    """Ramp one channel toward a throttle target with printed telemetry."""
+
     print(f"[step] ramp {label} to {target * 100:.0f}%")
     set_neopixel_status(args, rgb=rgb)
     last_count = None
@@ -294,6 +308,8 @@ def run_ramp(label: str, target: float, rgb, ch: int, args: argparse.Namespace) 
 
 
 def safe_stop(ch: int, args: argparse.Namespace) -> None:
+    """Return the channel to neutral, disable PWM, and clear indicators."""
+
     print("[step] STOP + disable PWM")
     try:
         set_pwm_pulse_us(ch, float(args.stop_us), float(args.freq))
@@ -316,6 +332,8 @@ def safe_stop(ch: int, args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Run the single-channel native Navigator motor test."""
+
     global nav
     args = parse_args()
     validate_args(args)

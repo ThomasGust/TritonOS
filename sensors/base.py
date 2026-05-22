@@ -1,3 +1,5 @@
+"""Shared base types for polled sensor telemetry producers."""
+
 # sensors/base.py
 from __future__ import annotations
 

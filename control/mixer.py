@@ -1,4 +1,10 @@
-# rov/control/mixer.py
+"""Named-thruster mixers for Triton's vehicle geometry.
+
+Mixers produce commands keyed by logical thruster names, not PWM channel
+numbers. The channel mapping lives in `rov_config.CHANNEL_MAP` and is validated
+by `motion.channel_map`, which keeps geometry math separate from wiring.
+"""
+
 from __future__ import annotations
 
 from typing import Dict, Mapping, Hashable, Iterable, List
@@ -15,6 +21,8 @@ class EightThrusterMixer:
     """
 
     def mix(self, cmd: Dict[str, float]) -> Dict[str, float]:
+        """Convert a full 6-DOF command into named thruster requests."""
+
         surge = cmd["surge"]
         sway = cmd["sway"]
         heave = cmd["heave"]
@@ -47,6 +55,13 @@ class EightThrusterMixer:
 
 
 def global_limit(thr: Mapping[Hashable, float], max_abs: float = 1.0) -> Dict[Hashable, float]:
+    """Scale a set of thruster commands so none exceed `max_abs`.
+
+    If any output would exceed the allowed magnitude, every command is scaled by
+    the same factor. That preserves the commanded direction/shape while fitting
+    inside the configured thrust envelope.
+    """
+
     peak = max(abs(v) for v in thr.values()) if thr else 0.0
     if peak <= max_abs or peak == 0.0:
         return {k: max(-max_abs, min(max_abs, v)) for k, v in thr.items()}
@@ -73,6 +88,8 @@ class SimpleGroupMixer:
             )
 
     def mix(self, surge: float, heave: float) -> Dict[str, float]:
+        """Map simple surge/heave commands to horizontal and vertical groups."""
+
         out: Dict[str, float] = {}
         for name in self.horizontal_thrusters:
             out[name] = float(surge)

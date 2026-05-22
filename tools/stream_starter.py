@@ -1,3 +1,5 @@
+"""Manual one-camera stream starter for quick local GStreamer testing."""
+
 from video.gst_streamer import StreamConfig, StreamManager
 import time
 

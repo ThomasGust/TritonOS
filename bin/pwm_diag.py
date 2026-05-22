@@ -17,6 +17,8 @@ import time
 from motion.pwm import ThrustWriter
 
 def main():
+    """Run a neutral-output PCA9685/OE diagnostic without commanding thrust."""
+
     try:
         import rov_config as cfg  # type: ignore
         tw = ThrustWriter(

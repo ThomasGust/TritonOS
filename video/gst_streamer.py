@@ -58,6 +58,8 @@ logger.setLevel(logging.INFO)
 
 @dataclass
 class StreamConfig:
+    """Configuration for one camera stream and its network transport."""
+
     # Identification
     name: str
 
@@ -101,12 +103,16 @@ class StreamConfig:
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def clone_with_updates(self, **updates) -> "StreamConfig":
+        """Return a copy with selected dataclass fields replaced."""
+
         d = asdict(self)
         d.update(updates)
         return StreamConfig(**d)
 
 
 class GstError(RuntimeError):
+    """Raised when a GStreamer pipeline cannot be built or controlled."""
+
     pass
 
 
@@ -171,6 +177,8 @@ class GstStream:
 
     # ------------- Public ------------- #
     def start(self) -> None:
+        """Build and start the GStreamer pipeline."""
+
         with self._state_lock:
             if self._pipeline is not None:
                 logger.warning("Stream '%s' already running", self.config.name)
@@ -181,6 +189,8 @@ class GstStream:
             logger.info("Stream '%s' started", self.config.name)
 
     def stop(self, timeout: float = 5.0) -> None:
+        """Stop the pipeline, send EOS best-effort, and release resources."""
+
         with self._state_lock:
             if self._pipeline is None:
                 return
@@ -195,12 +205,16 @@ class GstStream:
             logger.info("Stream '%s' stopped", self.config.name)
 
     def restart(self) -> None:
+        """Stop and immediately rebuild/start the stream."""
+
         logger.info("Restarting stream '%s'", self.config.name)
         self.stop()
         time.sleep(0.1)
         self.start()
 
     def update(self, **updates) -> None:
+        """Apply stream config updates live when possible, otherwise restart."""
+
         new_cfg = self.config.clone_with_updates(**updates)
         live_ok, changes = self._is_live_update(self.config, new_cfg)
         if live_ok and self._pipeline is not None:
@@ -213,9 +227,13 @@ class GstStream:
         self.restart()
 
     def is_running(self) -> bool:
+        """Return True when a pipeline object is currently active."""
+
         return self._pipeline is not None
 
     def last_error(self) -> Optional[str]:
+        """Return the latest GStreamer bus error string, if any."""
+
         return self._last_error
 
     # ------------- Internals ------------- #
@@ -445,11 +463,15 @@ class GstStream:
 
 
 class StreamManager:
+    """Thread-safe registry for named ``GstStream`` instances."""
+
     def __init__(self):
         self._streams: Dict[str, GstStream] = {}
         self._lock = threading.Lock()
 
     def start_stream(self, config: StreamConfig) -> GstStream:
+        """Start and register a new named stream."""
+
         with self._lock:
             if config.name in self._streams:
                 raise ValueError(f"Stream '{config.name}' already exists")
@@ -459,26 +481,36 @@ class StreamManager:
             return st
 
     def stop_stream(self, name: str) -> None:
+        """Stop and unregister a stream by name."""
+
         with self._lock:
             st = self._streams.pop(name, None)
         if st:
             st.stop()
 
     def stop_all(self) -> None:
+        """Stop every registered stream."""
+
         with self._lock:
             names = list(self._streams.keys())
         for n in names:
             self.stop_stream(n)
 
     def get_stream(self, name: str) -> Optional[GstStream]:
+        """Return a stream by name, if it exists."""
+
         with self._lock:
             return self._streams.get(name)
 
     def list_streams(self) -> Dict[str, StreamConfig]:
+        """Return stream configurations keyed by stream name."""
+
         with self._lock:
             return {n: s.config for n, s in self._streams.items()}
 
     def update_stream(self, name: str, **updates) -> None:
+        """Update one registered stream by name."""
+
         st = self.get_stream(name)
         if not st:
             raise KeyError(f"No such stream: {name}")

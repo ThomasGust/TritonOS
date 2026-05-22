@@ -1,6 +1,3 @@
-# sensors/network.py
-from __future__ import annotations
-
 """Network telemetry sensor.
 
 Publishes a lightweight "net" message onto the existing sensor PUB stream so
@@ -12,6 +9,9 @@ Highlights:
   - Still reports the default-route interface for transparency
   - Exposes live RX/TX throughput + error/drop counters
 """
+
+# sensors/network.py
+from __future__ import annotations
 
 import os
 import socket
@@ -203,6 +203,8 @@ class NetworkStatsSensor(BaseSensor):
         return fb, default_iface, tether_iface, "fallback_up"
 
     def read(self) -> Dict[str, Any]:
+        """Return current selected-interface status and throughput counters."""
+
         ts = time.time()
         iface, default_iface, tether_iface, reason = self._pick_iface()
         if not iface:

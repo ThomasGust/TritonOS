@@ -1,3 +1,15 @@
+"""Management RPC service for ROV maintenance and runtime state.
+
+This ZeroMQ REP service is separate from the high-rate pilot/control path. It
+handles infrequent management operations requested by topside tooling: reading
+the active configuration, updating selected config constants, capturing or
+setting depth-reference pressure, reporting hold/autopilot state, invoking the
+code-update script, and scheduling a service restart.
+
+Every handler returns a JSON-serializable `{"ok": bool, ...}` envelope so the
+topside UI can show actionable errors instead of parsing tracebacks.
+"""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +38,8 @@ from utils.vehicle_reference import (
 
 
 class ManagementRpcService:
+    """Threaded ZeroMQ REP server for low-rate management commands."""
+
     def __init__(
         self,
         bind_endpoint: str,
@@ -45,6 +59,8 @@ class ManagementRpcService:
         return Path(__file__).resolve().parents[1]
 
     def start(self) -> None:
+        """Start the background management RPC thread."""
+
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -54,6 +70,8 @@ class ManagementRpcService:
             print(f"[rov/mgmt] RPC listening on {self.bind_endpoint}")
 
     def stop(self) -> None:
+        """Request management RPC shutdown and wait briefly for the thread."""
+
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.0)

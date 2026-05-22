@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """ROV-side helpers for preferring the tether interface.
 
 TritonOS runs on Linux. These helpers are designed to:
@@ -9,6 +7,8 @@ TritonOS runs on Linux. These helpers are designed to:
 All operations are best-effort and should never raise exceptions to callers.
 """
 
+from __future__ import annotations
+
 import os
 import socket
 import struct
@@ -17,10 +17,14 @@ from typing import Optional
 
 
 def is_wifi_iface(iface: str) -> bool:
+    """Return True when Linux exposes the interface as wireless."""
+
     return os.path.isdir(f"/sys/class/net/{iface}/wireless")
 
 
 def iface_operstate(iface: str) -> Optional[str]:
+    """Read the Linux operstate string for an interface, if available."""
+
     try:
         with open(f"/sys/class/net/{iface}/operstate", "r", encoding="utf-8", errors="ignore") as f:
             return f.read().strip()

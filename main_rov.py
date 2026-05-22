@@ -1,32 +1,21 @@
-#Later, this is the main file we start all the services/modules from
 #!/usr/bin/env python3
-"""
-Main entry point for the ROV.
+"""Start and supervise the onboard TritonOS services.
 
-Starts:
-  - video RPC server
-  - pilot/control loop
-  - sensor publisher
+This module is the normal process entry point on the Raspberry Pi / ROV
+computer. It wires together the long-running subsystems that are intentionally
+kept separate elsewhere in the repository:
 
-Assumes your packages are laid out like:
+- video RPC server for camera stream control
+- pilot-frame receiver and thruster/control loop
+- sensor publisher for raw and derived telemetry
+- management RPC server for runtime config/reference updates
 
-  control/
-    pilot_receiver.py
-    control_service.py
-    mixer.py
-  sensors/
-    navigator.py
-    sensor_pub_service.py
-    ms5837.py
-  video/
-    gst_streamer_rpc.py
-  motion/
-    pwm.py            (optional)
-
-And that schema/pilot_common.py is the same one the topside uses.
+Startup is deliberately defensive: if an optional subsystem cannot initialize,
+the failure is printed with a traceback and the rest of the ROV process can
+continue when it is safe to do so. That behavior is useful during bench bring-up
+when a camera, depth sensor, or Navigator peripheral may be absent.
 """
 
-#UPD
 from __future__ import annotations
 import time
 import threading
@@ -46,10 +35,11 @@ DEFAULT_PILOT_TTL_S = 0.5
 
 # --- 1) video --------------------------------------------------------
 def start_video_service():
-    """
-    Start the existing gst_streamer RPC in a thread.
-    We assume video/gst_streamer_rpc.py exposes a start_video_rpc()
-    like in your original code.
+    """Start the camera-stream RPC server in a daemon thread.
+
+    The RPC server owns GStreamer stream start/stop requests and blocks while
+    serving ZeroMQ messages. Running it in a daemon thread lets the control loop
+    and sensor publisher start from the same process.
     """
     try:
         from video import gst_streamer_rpc
@@ -73,6 +63,12 @@ def start_video_service():
 
 
 def start_management_service(*, depth_sensor=None, control_service=None):
+    """Start the management RPC server when enabled in `rov_config`.
+
+    The management service exposes safe runtime operations to topside tools:
+    config snapshots, selected config edits, surface-pressure reference capture,
+    code update hooks, restart requests, and hold-status inspection.
+    """
     if not bool(getattr(cfg, "MANAGEMENT_RPC_ENABLE", True)):
         return None
 
@@ -97,9 +93,12 @@ def start_management_service(*, depth_sensor=None, control_service=None):
 
 # --- 2) sensors ------------------------------------------------------
 def start_sensor_service(ctrl=None, pilot_rx=None, state=None):
-    """
-    Create Navigator sensors and start the pub service.
-    Matches sensors/navigator.py + sensors/sensor_pub_service.py in your tree.
+    """Create physical and derived sensors, then start telemetry publishing.
+
+    Physical sensors are wrapped as `BaseSensor` instances and polled at their
+    configured rates by `SensorPublisherService`. Optional derived processors
+    such as attitude estimation and autopilot status convert raw messages into
+    additional telemetry on the same PUB stream.
     """
     try:
         from sensors.navigator import (
@@ -565,6 +564,8 @@ def start_control_service():
 
 
 def main():
+    """Start all enabled TritonOS services and keep the process alive."""
+
     print("[rov/main] starting services…")
 
     # Optional: start netdiag server (UDP echo + TCP throughput)

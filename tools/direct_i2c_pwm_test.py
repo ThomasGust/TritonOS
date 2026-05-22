@@ -62,6 +62,8 @@ OUTDRV = 0x04
 
 
 def list_i2c_buses() -> List[int]:
+    """Return visible Linux I2C bus numbers from ``/dev/i2c-*``."""
+
     buses: List[int] = []
     for dev in glob.glob('/dev/i2c-*'):
         try:
@@ -72,6 +74,8 @@ def list_i2c_buses() -> List[int]:
 
 
 def probe_reg(bus_num: int, addr: int, reg: int) -> Optional[int]:
+    """Read one register from an I2C device, returning None on failure."""
+
     try:
         with SMBus(bus_num) as bus:
             return bus.read_byte_data(addr, reg)
@@ -80,6 +84,8 @@ def probe_reg(bus_num: int, addr: int, reg: int) -> Optional[int]:
 
 
 def find_pca9685(preferred_bus: Optional[int], preferred_addr: Optional[int]) -> Tuple[int, int]:
+    """Locate a PCA9685 by trying preferred values, then scanning candidates."""
+
     bus_candidates: List[int] = []
     if preferred_bus is not None:
         bus_candidates.append(preferred_bus)
@@ -146,6 +152,8 @@ class OEController:
         return 1 if enabled else 0
 
     def set_enabled(self, enabled: bool) -> None:
+        """Drive the OE line to enable or disable PWM outputs."""
+
         if self._backend is None:
             return
         kind, lib = self._backend
@@ -156,6 +164,8 @@ class OEController:
             self._line.set_value(level)
 
     def close(self) -> None:
+        """Disable outputs and release GPIO resources."""
+
         try:
             self.set_enabled(False)
         except Exception:
@@ -181,6 +191,8 @@ class OEController:
 
 @dataclass
 class PCA9685:
+    """Small direct-I2C PCA9685 driver used by hardware diagnostic scripts."""
+
     bus_num: int
     address: int
     freq_hz: float = 50.0
@@ -190,18 +202,26 @@ class PCA9685:
         self.bus = SMBus(self.bus_num)
 
     def close(self) -> None:
+        """Close the I2C bus handle."""
+
         try:
             self.bus.close()
         except Exception:
             pass
 
     def read8(self, reg: int) -> int:
+        """Read one PCA9685 register."""
+
         return self.bus.read_byte_data(self.address, reg)
 
     def write8(self, reg: int, value: int) -> None:
+        """Write one PCA9685 register."""
+
         self.bus.write_byte_data(self.address, reg, int(value) & 0xFF)
 
     def set_pwm_freq(self, freq_hz: float) -> None:
+        """Configure PCA9685 PWM frequency using the prescale register."""
+
         prescaleval = (self.osc_hz / (4096.0 * float(freq_hz))) - 1.0
         prescale = int(round(prescaleval))
         if not (3 <= prescale <= 255):
@@ -217,12 +237,16 @@ class PCA9685:
         self.freq_hz = float(freq_hz)
 
     def init(self) -> None:
+        """Initialize output mode and PWM frequency."""
+
         self.write8(MODE2, OUTDRV)
         self.write8(MODE1, AI)
         time.sleep(0.005)
         self.set_pwm_freq(self.freq_hz)
 
     def set_pwm_counts(self, channel_zero_based: int, on: int, off: int) -> None:
+        """Write raw ON/OFF counts for one zero-based PCA9685 channel."""
+
         if not (0 <= channel_zero_based <= 15):
             raise ValueError('PCA9685 channel must be 0..15')
         reg = LED0_ON_L + 4 * int(channel_zero_based)
@@ -230,17 +254,23 @@ class PCA9685:
         self.bus.write_i2c_block_data(self.address, reg, data)
 
     def us_to_counts(self, pulse_us: float) -> int:
+        """Convert pulse width in microseconds to a PCA9685 count."""
+
         period_us = 1_000_000.0 / float(self.freq_hz)
         counts = int(round((float(pulse_us) / period_us) * 4096.0))
         return max(0, min(4095, counts))
 
     def set_pulse_us_nav_channel(self, nav_channel_one_based: int, pulse_us: float) -> None:
+        """Set a Navigator-labeled 1..16 channel by pulse width."""
+
         if not (1 <= nav_channel_one_based <= 16):
             raise ValueError('Navigator/PCA9685 channel must be 1..16')
         self.set_pwm_counts(nav_channel_one_based - 1, 0, self.us_to_counts(pulse_us))
 
 
 def parse_channel_list(s: str) -> List[int]:
+    """Parse comma-separated Navigator channel numbers."""
+
     out: List[int] = []
     for part in s.split(','):
         part = part.strip()
@@ -251,6 +281,8 @@ def parse_channel_list(s: str) -> List[int]:
 
 
 def parse_float_list(s: str) -> List[float]:
+    """Parse comma-separated floating-point pulse widths."""
+
     out: List[float] = []
     for part in s.split(','):
         part = part.strip()
@@ -261,11 +293,15 @@ def parse_float_list(s: str) -> List[float]:
 
 
 def set_channels(pca: PCA9685, channels: List[int], pulse_us: float) -> None:
+    """Apply the same pulse width to several Navigator-labeled channels."""
+
     for ch in channels:
         pca.set_pulse_us_nav_channel(ch, pulse_us)
 
 
 def main() -> int:
+    """Run the direct-I2C PWM diagnostic and always return channels neutral."""
+
     ap = argparse.ArgumentParser(description='Direct I2C PCA9685 PWM test (no Navigator Python module).')
     ap.add_argument('--bus', type=int, default=4, help='Preferred I2C bus number. Default: 4')
     ap.add_argument('--addr', type=lambda x: int(x, 0), default=0x40, help='Preferred I2C address. Default: 0x40')

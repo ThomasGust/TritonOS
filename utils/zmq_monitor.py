@@ -1,3 +1,4 @@
+"""Small ZeroMQ monitor helper for diagnostics and runtime connection state."""
 
 # utils/zmq_monitor.py
 from __future__ import annotations
@@ -116,6 +117,8 @@ class ZMQMonitor:
         self._thread.start()
 
     def stop(self):
+        """Stop monitoring and close the internal monitor socket."""
+
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=0.5)
@@ -132,6 +135,8 @@ class ZMQMonitor:
             self._mon_sock = None
 
     def snapshot(self) -> Dict[str, Any]:
+        """Return the latest coarse connection state and event metadata."""
+
         with self._lock:
             return {
                 "name": self.name,

@@ -1,4 +1,12 @@
-# rov/control/pilot_receiver.py
+"""ROV-side subscriber for topside pilot frames.
+
+The receiver binds a ZeroMQ SUB socket on the ROV, drains incoming pilot frames,
+keeps only the newest usable frame for the control loop, and records health
+statistics such as parse failures, duplicate sequence numbers, and estimated
+drops. It also computes button edges locally so safety-critical toggles do not
+depend on topside edge bookkeeping alone.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -15,6 +23,8 @@ from schema.pilot_common import PilotFrame, PilotButtons  # reuse your topside/s
 
 @dataclass
 class PilotRxStats:
+    """Counters describing pilot-link health since receiver startup."""
+
     received: int = 0
     parsed: int = 0
     bad_json: int = 0
@@ -128,6 +138,8 @@ class PilotReceiver:
         self._last_log = 0.0
 
     def start(self):
+        """Start the background SUB receive thread."""
+
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -137,11 +149,15 @@ class PilotReceiver:
             print(f"[rov/pilot_rx] SUB bound on {self.bind_endpoint}")
 
     def stop(self):
+        """Stop the receive thread."""
+
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.0)
 
     def stats(self) -> PilotRxStats:
+        """Return a snapshot of pilot-link counters."""
+
         # return a copy-like snapshot
         s = self._stats
         return PilotRxStats(**s.__dict__)
@@ -231,6 +247,8 @@ class PilotReceiver:
                 self._handle_message(raw, arrival)
 
     def get_latest(self) -> Tuple[Optional[PilotFrame], float]:
+        """Return the newest parsed frame and its local age in seconds."""
+
         with self._lock:
             frame = self._latest
             arr = self._latest_arrival
@@ -238,6 +256,8 @@ class PilotReceiver:
         return frame, age
 
     def get_fresh(self, ttl: float) -> Tuple[Optional[PilotFrame], float]:
+        """Return the latest frame only when it is newer than ``ttl`` seconds."""
+
         frame, age = self.get_latest()
         if frame is None:
             return None, 0.0

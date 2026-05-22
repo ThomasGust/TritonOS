@@ -1,4 +1,15 @@
-# rov/control/depth_hold.py
+"""Sticky depth-hold controller.
+
+Depth is positive downward, while the ROV's normalized heave command is
+positive upward. This controller converts filtered external-depth telemetry and
+pilot intent into a heave command that can be composed with manual control.
+
+The "walk target" behavior is competition/operator oriented: enabling depth
+hold captures the current depth, and manual vertical stick input moves the
+target depth instead of directly commanding thrusters. Brief sensor dropouts keep
+the target rather than resetting it.
+"""
+
 from __future__ import annotations
 
 import math
@@ -82,6 +93,8 @@ class DepthHoldController:
         self.reset()
 
     def reset(self) -> None:
+        """Clear filtered depth, target, integrator, and engagement state."""
+
         self._active = False
         self._z_f: Optional[float] = None
         self._z_prev: Optional[float] = None
@@ -91,6 +104,8 @@ class DepthHoldController:
 
     @property
     def target_depth_m(self) -> Optional[float]:
+        """Return the currently held target depth, if one has been captured."""
+
         return self._z_target
 
     def _clamp_target(self, target_m: float) -> float:

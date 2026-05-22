@@ -1,3 +1,15 @@
+"""Depth and attitude hold coordination.
+
+The autopilot module produces corrected normalized DOF commands before final
+thruster mixing. Depth hold owns the heave correction, while the per-axis
+attitude controllers own roll, pitch, and yaw corrections. `ControlService`
+decides when those corrections are allowed to influence the output based on
+pilot modes, telemetry freshness, and vehicle arming state.
+
+All controllers are conservative by design: missing or stale sensor data falls
+back to manual pilot commands instead of inventing a correction from bad state.
+"""
+
 from __future__ import annotations
 
 import math
@@ -49,6 +61,8 @@ def _mode(value: Any, default: str = "off") -> str:
 
 @dataclass
 class AttitudeAxisConfig:
+    """Tuning and behavior settings for one attitude-hold axis."""
+
     default_mode: str = "off"
     kp: float = 0.012
     ki: float = 0.0
@@ -63,6 +77,8 @@ class AttitudeAxisConfig:
 
 @dataclass
 class AutopilotConfig:
+    """Full autopilot configuration assembled from `rov_config`."""
+
     depth_enable: bool
     attitude_enable: bool
     attitude_stale_s: float
@@ -88,6 +104,8 @@ class AttitudeAxisController:
         self.reset()
 
     def reset(self) -> None:
+        """Clear captured target, integrator, and rate history for this axis."""
+
         self._last_enabled = False
         self._target_deg: Optional[float] = None
         self._i_state = 0.0
@@ -95,6 +113,8 @@ class AttitudeAxisController:
 
     @property
     def target_deg(self) -> Optional[float]:
+        """Return the currently captured attitude target, if any."""
+
         return self._target_deg
 
     def step(
@@ -108,6 +128,8 @@ class AttitudeAxisController:
         dt: float,
         target_deg: Optional[float] = None,
     ) -> Tuple[float, Dict[str, Any]]:
+        """Compute one corrected axis command and return status metadata."""
+
         dt = float(dt) if dt and dt > 0.0 else 0.02
         manual_cmd = float(manual_cmd)
         mode = _mode(mode, self.cfg.default_mode)
@@ -260,6 +282,8 @@ class AutopilotController:
         }
 
     def reset(self) -> None:
+        """Reset depth hold and all attitude-axis controllers."""
+
         self.depth_hold.reset()
         for axis in self.axes.values():
             axis.reset()
@@ -275,6 +299,8 @@ class AutopilotController:
         attitude_age_s: Optional[float],
         dt: float,
     ) -> Tuple[Dict[str, float], Dict[str, Any]]:
+        """Apply enabled depth/attitude holds to a manual command dictionary."""
+
         out = dict(cmd or {})
         modes = dict(modes or {})
         ap_modes = modes.get("autopilot") if isinstance(modes.get("autopilot"), dict) else {}
@@ -394,6 +420,8 @@ class AutopilotController:
 
 
 def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
+    """Assemble autopilot/depth-hold config from a ``rov_config``-like module."""
+
     def axis_config(axis: str, defaults: AttitudeAxisConfig) -> AttitudeAxisConfig:
         prefix = f"AUTOPILOT_{axis.upper()}"
         return AttitudeAxisConfig(

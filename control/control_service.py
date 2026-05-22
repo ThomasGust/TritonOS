@@ -1,4 +1,16 @@
-# rov/control/control_service.py
+"""ROV control-loop orchestration.
+
+`ControlService` is the bridge between the topside pilot stream and physical
+PWM outputs. It receives fresh `PilotFrame` values, applies controller-axis
+configuration, composes optional depth/attitude-hold corrections, mixes the
+result into named thruster outputs, and finally sends safe normalized commands
+to the hardware adapter.
+
+The module keeps control math intentionally separate from hardware writes. That
+separation lets unit tests validate command building, hold behavior, arming, and
+auxiliary outputs without needing a Navigator board attached.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +33,8 @@ from control.sensor_tap import AutopilotSensorTap
 
 @dataclass
 class ControlGains:
+    """Scalar gains applied before mixing normalized pilot DOF commands."""
+
     surge: float = 1.0
     sway: float = 1.0
     heave: float = 1.0
@@ -39,14 +53,20 @@ class ROVControlState:
         self._lock = threading.Lock()
 
     def set_armed(self, val: bool):
+        """Set the shared armed flag."""
+
         with self._lock:
             self._armed = bool(val)
 
     def is_armed(self) -> bool:
+        """Return the current shared armed flag."""
+
         with self._lock:
             return self._armed
 
     def toggle_armed(self) -> bool:
+        """Flip and return the shared armed flag."""
+
         with self._lock:
             self._armed = not self._armed
             return self._armed
@@ -168,6 +188,8 @@ def build_2axis(pilot: PilotFrame, gains: ControlGains) -> Dict[str, float]:
 
 
 def clamp01(x: float) -> float:
+    """Clamp a numeric value to the inclusive [0.0, 1.0] range."""
+
     x = float(x)
     if x < 0.0:
         return 0.0
@@ -556,6 +578,8 @@ class ControlService:
         return None
 
     def start(self):
+        """Start the control-loop background thread."""
+
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -566,6 +590,8 @@ class ControlService:
         print(f"[rov/control] started mode={self._mix_mode} rate={1.0/self.period:.1f}Hz ttl={self.ttl:.2f}s dry_run={self.dry_run} sink={sink_name}")
 
     def stop(self):
+        """Stop the control loop and command safe hardware shutdown."""
+
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.0)

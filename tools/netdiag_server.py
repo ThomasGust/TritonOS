@@ -214,6 +214,8 @@ def start_in_thread(bind_host: str = "0.0.0.0", port: int = 7700, verbose: bool 
 
 
 def main() -> None:
+    """Run the foreground UDP/TCP network diagnostics server."""
+
     ap = argparse.ArgumentParser(description="ROV netdiag server (UDP echo + TCP throughput)")
     ap.add_argument("--bind", default="0.0.0.0", help="bind host (default: 0.0.0.0)")
     ap.add_argument("--port", type=int, default=7700, help="port for UDP+TCP (default: 7700)")

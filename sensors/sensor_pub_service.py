@@ -1,3 +1,12 @@
+"""Sensor telemetry publisher for the ROV runtime.
+
+The service polls a list of ``BaseSensor`` instances at their configured rates,
+normalizes exceptions into telemetry error messages, and publishes compact JSON
+onto a ZeroMQ PUB socket. Derived processors can subscribe internally to each
+raw reading and emit additional telemetry, such as attitude estimates computed
+from IMU and magnetometer samples.
+"""
+
 # rov/sensors/sensor_pub_service.py
 from __future__ import annotations
 import time
@@ -57,6 +66,8 @@ def _zmq_best_effort_qos(sock: zmq.Socket) -> None:
 
 
 class SensorPublisherService:
+    """Poll sensor objects and publish their readings on the sensor stream."""
+
     def __init__(self,
                  bind_endpoint: str,
                  sensors: List[BaseSensor],
@@ -76,6 +87,7 @@ class SensorPublisherService:
         self._thread: threading.Thread | None = None
 
     def start(self):
+        """Start the background polling thread if it is not already running."""
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -85,6 +97,7 @@ class SensorPublisherService:
             print(f"[rov/sensors] PUB bound on {self.bind_endpoint}")
 
     def stop(self):
+        """Signal the polling thread to stop and wait briefly for shutdown."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.0)
