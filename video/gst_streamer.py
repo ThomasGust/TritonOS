@@ -173,6 +173,8 @@ class GstStream:
         self._bus_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._last_error: Optional[str] = None
+        self._started_wall_ts: Optional[float] = None
+        self._started_monotonic_ts: Optional[float] = None
         self._state_lock = threading.Lock()
 
     # ------------- Public ------------- #
@@ -185,6 +187,8 @@ class GstStream:
                 return
             self._pipeline = self._build_pipeline(self.config)
             self._set_state(Gst.State.PLAYING)
+            self._started_wall_ts = time.time()
+            self._started_monotonic_ts = time.monotonic()
             self._start_bus_watcher()
             logger.info("Stream '%s' started", self.config.name)
 
@@ -202,6 +206,8 @@ class GstStream:
                 pass
             self._set_state(Gst.State.NULL)
             self._teardown_pipeline()
+            self._started_wall_ts = None
+            self._started_monotonic_ts = None
             logger.info("Stream '%s' stopped", self.config.name)
 
     def restart(self) -> None:
@@ -235,6 +241,17 @@ class GstStream:
         """Return the latest GStreamer bus error string, if any."""
 
         return self._last_error
+
+    def status(self) -> Dict[str, Any]:
+        """Return stream config plus lightweight timing diagnostics."""
+
+        return {
+            "config": asdict(self.config),
+            "running": self.is_running(),
+            "started_wall_ts": self._started_wall_ts,
+            "started_monotonic_ts": self._started_monotonic_ts,
+            "last_error": self._last_error,
+        }
 
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
@@ -507,6 +524,12 @@ class StreamManager:
 
         with self._lock:
             return {n: s.config for n, s in self._streams.items()}
+
+    def list_stream_status(self) -> Dict[str, Dict[str, Any]]:
+        """Return stream configurations and diagnostic timing metadata."""
+
+        with self._lock:
+            return {n: s.status() for n, s in self._streams.items()}
 
     def update_stream(self, name: str, **updates) -> None:
         """Update one registered stream by name."""

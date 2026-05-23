@@ -130,6 +130,11 @@ Video control RPC is separate from video payload transport. This makes it
 possible for RPC to succeed while payload networking or camera formats still
 need debugging.
 
+Stereo camera work uses the same video service. TritonOS can report stream
+startup timing through `list_stream_status`, but per-frame pairing happens on
+the topside receiver because the current exploreHD cameras do not provide a
+hardware trigger or exposure timestamp in this stack.
+
 ## Management Flow
 
 ```text

@@ -736,6 +736,9 @@ def start_video_rpc():
                 out = {n: vars(cfg) for n, cfg in current.items()}
                 sock.send_json({"ok": True, "data": out})
 
+            elif cmd == "list_stream_status":
+                sock.send_json({"ok": True, "data": mgr.list_stream_status()})
+
             # NEW: list all devices, shallow+caps
             elif cmd == "list_devices":
                 devices = list_video_devices()

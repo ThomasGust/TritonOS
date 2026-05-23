@@ -18,6 +18,8 @@ cross-linked, and close to the code they describe.
   the pieces are expected to be used.
 - [Configuration Guide](CONFIGURATION.md) - How to edit `rov_config.py`, channel
   maps, safety limits, hold-controller settings, and management RPC values.
+- [Stereo Streaming Notes](STEREO_STREAMING.md) - ROV-side camera streaming,
+  software-sync limits, diagnostics, and future hardware-sync path.
 - [Testing And Troubleshooting](TESTING_AND_TROUBLESHOOTING.md) - Unit tests,
   hardware diagnostics, failure symptoms, and recommended debug order.
 
