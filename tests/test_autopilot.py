@@ -176,6 +176,27 @@ def test_explicit_attitude_target_fails_open_to_manual_input():
     assert cmd["yaw"] == pytest.approx(0.25)
 
 
+def test_autopilot_uses_measured_yaw_rate_for_damping():
+    cfg = _config()
+    cfg.yaw = AttitudeAxisConfig(kp=0.01, kd=0.005, out_limit=0.2)
+    autopilot = AutopilotController(cfg)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold", "targets": {"yaw_deg": 0.0}}},
+        cmd=_cmd(),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=-10.0, yaw_rate_dps=20.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    yaw_status = status["attitude"]["axes"]["yaw"]
+    assert yaw_status["rate_dps"] == pytest.approx(20.0)
+    assert yaw_status["rate_source"] == "measured"
+    assert cmd["yaw"] == pytest.approx(0.0)
+
+
 def test_autopilot_fails_open_to_manual_when_attitude_stale():
     autopilot = AutopilotController(_config())
 

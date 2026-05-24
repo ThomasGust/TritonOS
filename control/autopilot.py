@@ -127,6 +127,7 @@ class AttitudeAxisController:
         stale: bool,
         dt: float,
         target_deg: Optional[float] = None,
+        measured_rate_dps: Optional[float] = None,
     ) -> Tuple[float, Dict[str, Any]]:
         """Compute one corrected axis command and return status metadata."""
 
@@ -163,8 +164,10 @@ class AttitudeAxisController:
             return manual_cmd, status
 
         angle = float(angle_deg)
-        rate_dps = 0.0
-        if self._last_angle_deg is not None:
+        measured_rate = _finite_float(measured_rate_dps)
+        rate_source = "measured" if measured_rate is not None else "angle_diff"
+        rate_dps = float(measured_rate) if measured_rate is not None else 0.0
+        if measured_rate is None and self._last_angle_deg is not None:
             rate_dps = _wrap_deg(angle - float(self._last_angle_deg)) / dt
         self._last_angle_deg = angle
 
@@ -182,6 +185,7 @@ class AttitudeAxisController:
                         "angle_deg": angle,
                         "target_deg": target,
                         "rate_dps": rate_dps,
+                        "rate_source": rate_source,
                     }
                 )
                 return manual_cmd, status
@@ -205,6 +209,7 @@ class AttitudeAxisController:
                             "target_deg": float(self._target_deg),
                             "target_source": "command",
                             "rate_dps": rate_dps,
+                            "rate_source": rate_source,
                         }
                     )
                     return manual_cmd, status
@@ -219,6 +224,7 @@ class AttitudeAxisController:
                     "reason": "damp",
                     "angle_deg": angle,
                     "rate_dps": rate_dps,
+                    "rate_source": rate_source,
                     "u_out": u,
                 }
             )
@@ -262,6 +268,7 @@ class AttitudeAxisController:
                 "target_source": "command" if target_cmd is not None else ("level" if mode == "level" else "capture"),
                 "error_deg": error_deg,
                 "rate_dps": rate_dps,
+                "rate_source": rate_source,
                 "u_raw": u_raw,
                 "u_out": u,
             }
@@ -403,6 +410,7 @@ class AutopilotController:
                 stale=stale,
                 dt=dt,
                 target_deg=target,
+                measured_rate_dps=_finite_float((attitude or {}).get(f"{axis}_rate_dps")),
             )
             out[axis] = float(u)
             any_active = any_active or bool(st.get("active"))
