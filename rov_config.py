@@ -142,21 +142,21 @@ DEPTH_HOLD_SENSOR_STALE_S = 2.0
 
 # Low-pass filter time constant on depth (seconds).
 # Keep enough smoothing to avoid pressure-sensor chatter without adding much lag.
-DEPTH_HOLD_LPF_TAU_S = 0.30
+DEPTH_HOLD_LPF_TAU_S = 0.20
 
 # PI(D) gains (heave-command per meter / meter-second)
-DEPTH_HOLD_KP = 0.55
-DEPTH_HOLD_KI = 0.06
-DEPTH_HOLD_KD = 0.08
+DEPTH_HOLD_KP = 0.85
+DEPTH_HOLD_KI = 0.10
+DEPTH_HOLD_KD = 0.18
 
 # Error deadband in meters (reduces thruster chatter near setpoint)
-DEPTH_HOLD_ERROR_DEADBAND_M = 0.010
+DEPTH_HOLD_ERROR_DEADBAND_M = 0.008
 
 # Integrator clamp (in heave-command units)
-DEPTH_HOLD_I_LIMIT = 0.15
+DEPTH_HOLD_I_LIMIT = 0.25
 
 # Output clamp (in heave command units; keep < 1.0 while tuning)
-DEPTH_HOLD_OUT_LIMIT = 0.45
+DEPTH_HOLD_OUT_LIMIT = 0.55
 
 # If the controller pushes the wrong way, flip this to -1.0.
 DEPTH_HOLD_SIGN = 1.0
