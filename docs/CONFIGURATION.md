@@ -229,10 +229,15 @@ AUTOPILOT_ENABLE = True
 AUTOPILOT_ATTITUDE_ENABLE = True
 AUTOPILOT_ATTITUDE_STALE_S = 0.50
 AUTOPILOT_STATUS_ENABLE = True
+AUTOPILOT_YAW_MANUAL_LATCH = True
 ```
 
 Roll, pitch, and yaw hold defaults are intentionally conservative. Leave their
 default modes `"off"` until tuning and validation are complete.
+
+With `AUTOPILOT_YAW_MANUAL_LATCH = True`, manual yaw input turns the ROV
+normally while yaw hold is armed, and the controller latches the current yaw as
+the target when the stick returns to center.
 
 ## Power, Network, And Diagnostics
 

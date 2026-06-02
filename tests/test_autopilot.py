@@ -16,7 +16,7 @@ def _config() -> AutopilotConfig:
         depth=DepthHoldConfig(kp=0.5, ki=0.0, kd=0.0, out_limit=0.5, depth_lpf_tau_s=0.0),
         roll=AttitudeAxisConfig(kp=0.01, kd=0.0, out_limit=0.2),
         pitch=AttitudeAxisConfig(kp=0.01, kd=0.0, out_limit=0.2),
-        yaw=AttitudeAxisConfig(kp=0.01, kd=0.0, out_limit=0.2),
+        yaw=AttitudeAxisConfig(kp=0.01, kd=0.0, out_limit=0.2, manual_latch=True),
     )
 
 
@@ -173,7 +173,87 @@ def test_explicit_attitude_target_fails_open_to_manual_input():
     )
 
     assert status["attitude"]["axes"]["yaw"]["reason"] == "manual_override"
+    assert status["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(100.0)
+    assert status["attitude"]["axes"]["yaw"]["target_source"] == "manual_latch"
     assert cmd["yaw"] == pytest.approx(0.25)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold", "targets": {"yaw_deg": 90.0}}},
+        cmd=_cmd(yaw=0.0),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=100.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    assert status["attitude"]["axes"]["yaw"]["active"] is True
+    assert status["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(100.0)
+    assert status["attitude"]["axes"]["yaw"]["target_source"] == "manual_latch"
+    assert cmd["yaw"] == pytest.approx(0.0)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold", "targets": {"yaw_deg": 120.0}}},
+        cmd=_cmd(yaw=0.0),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=100.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    assert status["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(120.0)
+    assert status["attitude"]["axes"]["yaw"]["target_source"] == "command"
+    assert cmd["yaw"] == pytest.approx(0.2)
+
+
+def test_yaw_hold_manual_input_latches_current_yaw_on_release():
+    autopilot = AutopilotController(_config())
+
+    cmd, status0 = autopilot.step(
+        modes={"autopilot": {"yaw": "hold"}},
+        cmd=_cmd(),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=10.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+    assert status0["attitude"]["axes"]["yaw"]["target_deg"] == pytest.approx(10.0)
+    assert cmd["yaw"] == pytest.approx(0.0)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold"}},
+        cmd=_cmd(yaw=0.25),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=35.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    yaw_status = status["attitude"]["axes"]["yaw"]
+    assert yaw_status["active"] is False
+    assert yaw_status["reason"] == "manual_override"
+    assert yaw_status["target_deg"] == pytest.approx(35.0)
+    assert yaw_status["target_source"] == "manual_latch"
+    assert cmd["yaw"] == pytest.approx(0.25)
+
+    cmd, status = autopilot.step(
+        modes={"autopilot": {"yaw": "hold"}},
+        cmd=_cmd(yaw=0.0),
+        depth_m=None,
+        depth_age_s=None,
+        attitude=_attitude(yaw_deg=35.0),
+        attitude_age_s=0.0,
+        dt=0.02,
+    )
+
+    yaw_status = status["attitude"]["axes"]["yaw"]
+    assert yaw_status["active"] is True
+    assert yaw_status["target_deg"] == pytest.approx(35.0)
+    assert yaw_status["target_source"] == "manual_latch"
+    assert cmd["yaw"] == pytest.approx(0.0)
 
 
 def test_autopilot_uses_measured_yaw_rate_for_damping():

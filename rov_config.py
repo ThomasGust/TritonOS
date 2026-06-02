@@ -221,6 +221,8 @@ AUTOPILOT_YAW_OUT_LIMIT = 0.18
 # The current horizontal thruster/mixer convention needs the inverted sign here.
 AUTOPILOT_YAW_SIGN = -1.0
 AUTOPILOT_YAW_MANUAL_DEADBAND = 0.08
+# Manual yaw while hold is armed turns normally; release latches current yaw.
+AUTOPILOT_YAW_MANUAL_LATCH = True
 AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 
 # ---------------------------------------------------------------------------
