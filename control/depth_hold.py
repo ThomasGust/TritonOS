@@ -4,10 +4,11 @@ Depth is positive downward, while the ROV's normalized heave command is
 positive upward. This controller converts filtered external-depth telemetry and
 pilot intent into a heave command that can be composed with manual control.
 
-The "walk target" behavior is competition/operator oriented: enabling depth
-hold captures the current depth, and manual vertical stick input moves the
-target depth instead of directly commanding thrusters. Brief sensor dropouts keep
-the target rather than resetting it.
+The default operator behavior is sticky manual override: enabling depth hold
+captures the current depth, manual vertical stick input directly commands
+heave, and the target tracks the current depth so releasing the stick holds the
+ROV where the pilot left it. Brief sensor dropouts keep the target rather than
+resetting it.
 """
 
 from __future__ import annotations
@@ -75,8 +76,9 @@ class DepthHoldConfig:
     # Sign flip hook (set to -1.0 if “too deep” makes it go deeper)
     sign: float = 1.0
 
-    # Target walking ("vertical speed" feel)
-    walk_target: bool = True
+    # Legacy target walking ("vertical speed" feel). Disabled by default so
+    # manual vertical stick input moves the ROV normally and release latches.
+    walk_target: bool = False
     walk_deadband: float = 0.08
     walk_rate_mps: float = 0.60
 
@@ -86,7 +88,7 @@ class DepthHoldConfig:
 
 
 class DepthHoldController:
-    """Depth-hold controller with sticky/"walk target" behavior."""
+    """Depth-hold controller with sticky manual override behavior."""
 
     def __init__(self, cfg: DepthHoldConfig):
         self.cfg = cfg
@@ -99,6 +101,8 @@ class DepthHoldController:
         self._z_f: Optional[float] = None
         self._z_prev: Optional[float] = None
         self._z_target: Optional[float] = None
+        self._target_source: str = "none"
+        self._ignore_target_cmd_until_changed: Optional[float] = None
         self._i_state: float = 0.0  # integral of error (meters*sec)
         self._last_enabled: bool = False
 
@@ -123,6 +127,7 @@ class DepthHoldController:
         target = self._clamp_target(target)
         if self._z_target is None or abs(float(self._z_target) - target) > 1e-9:
             self._z_target = target
+            self._target_source = "command"
             self._i_state = 0.0
         return True
 
@@ -150,7 +155,20 @@ class DepthHoldController:
             "active": False,
             "reason": "manual",
         }
-        has_target_cmd = self._apply_target_command(target_m) if enabled else False
+
+        raw_target_cmd = _finite_float(target_m) if enabled else None
+        target_cmd = None
+        if raw_target_cmd is None:
+            self._ignore_target_cmd_until_changed = None
+        else:
+            target_cmd = self._clamp_target(raw_target_cmd)
+            ignored = self._ignore_target_cmd_until_changed
+            if ignored is not None and abs(float(target_cmd) - float(ignored)) <= 1e-9:
+                target_cmd = None
+            else:
+                self._ignore_target_cmd_until_changed = None
+
+        has_target_cmd = self._apply_target_command(target_cmd) if enabled else False
         if has_target_cmd and self._z_target is not None:
             status["target_m"] = float(self._z_target)
             status["target_source"] = "command"
@@ -205,6 +223,7 @@ class DepthHoldController:
         if not self._last_enabled:
             if not has_target_cmd:
                 self._z_target = z_f
+                self._target_source = "capture"
             self._i_state = 0.0
             self._active = True
         self._last_enabled = True
@@ -213,11 +232,25 @@ class DepthHoldController:
         # Ensure target exists.
         if self._z_target is None:
             self._z_target = z_f
+            self._target_source = "capture"
 
         # Walk target with manual stick (optional), or sticky-manual override.
         integrate_ok = True
         if abs(manual_heave) > float(self.cfg.walk_deadband):
-            if has_target_cmd:
+            if self.cfg.walk_target and raw_target_cmd is None:
+                # manual_heave > 0 means "UP" => target depth should DECREASE
+                self._z_target += (-manual_heave) * float(self.cfg.walk_rate_mps) * dt
+                integrate_ok = False  # avoid wind-up while pilot is actively commanding
+                self._target_source = "walk"
+                status["target_source"] = "walk"
+            else:
+                # Sticky mode: pilot is directly commanding heave. Keep the
+                # target glued to the current depth so releasing captures it.
+                self._z_target = self._clamp_target(z_f)
+                self._target_source = "manual_latch"
+                if raw_target_cmd is not None:
+                    self._ignore_target_cmd_until_changed = self._clamp_target(raw_target_cmd)
+                self._i_state = 0.0
                 status.update(
                     {
                         "active": False,
@@ -225,22 +258,9 @@ class DepthHoldController:
                         "depth_m": z,
                         "depth_f_m": z_f,
                         "target_m": float(self._z_target),
-                        "target_source": "command",
+                        "target_source": "manual_latch",
                     }
                 )
-                self._i_state = 0.0
-                return manual_heave, status
-            elif self.cfg.walk_target:
-                # manual_heave > 0 means "UP" => target depth should DECREASE
-                self._z_target += (-manual_heave) * float(self.cfg.walk_rate_mps) * dt
-                integrate_ok = False  # avoid wind-up while pilot is actively commanding
-                status["target_source"] = "walk"
-            else:
-                # "Sticky" mode: pilot is directly commanding heave. Keep the target
-                # glued to the current depth so releasing the stick captures it.
-                self._z_target = z_f
-                self._i_state = 0.0
-                status.update({"active": False, "reason": "manual_override"})
                 return manual_heave, status
 
         # Clamp target if desired.
@@ -288,7 +308,7 @@ class DepthHoldController:
                 "depth_m": z,
                 "depth_f_m": z_f,
                 "target_m": z_t,
-                "target_source": "command" if has_target_cmd else status.get("target_source", "capture"),
+                "target_source": "command" if has_target_cmd else self._target_source,
                 "error_m": e,
                 "dz_mps": dz,
                 "u_raw": u_raw2,

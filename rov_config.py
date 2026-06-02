@@ -129,7 +129,7 @@ DEPTH_HOLD_MIX_DEADBAND = 0.01
 POWER_SCALE = 1.0
 
 # ---------------------------------------------------------------------------
-# 2c) depth hold (sticky / "walk target")
+# 2c) depth hold (sticky manual override)
 # ---------------------------------------------------------------------------
 # Depth hold is enabled/disabled by the pilot via PilotFrame.modes["depth_hold"].
 # These parameters tune the onboard controller.
@@ -161,10 +161,12 @@ DEPTH_HOLD_OUT_LIMIT = 0.55
 # If the controller pushes the wrong way, flip this to -1.0.
 DEPTH_HOLD_SIGN = 1.0
 
-# "Walk target" behavior: stick commands move the target depth; releasing holds.
-DEPTH_HOLD_WALK_TARGET = True
+# Manual vertical stick input normally passes through and latches the current
+# depth as the target on release. Set this True only for legacy "walk setpoint"
+# behavior where stick input moves the target instead of directly heaving.
+DEPTH_HOLD_WALK_TARGET = False
 DEPTH_HOLD_WALK_DEADBAND = 0.10
-DEPTH_HOLD_WALK_RATE_MPS = 0.45  # full stick => ~0.45 m/s target change
+DEPTH_HOLD_WALK_RATE_MPS = 0.45  # legacy only: full stick => ~0.45 m/s target change
 
 # Optional clamp on target depth (meters, depth positive down). Set to None to disable.
 DEPTH_HOLD_TARGET_MIN_M = None

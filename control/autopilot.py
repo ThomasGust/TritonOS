@@ -455,7 +455,7 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
         i_limit=float(getattr(cfg_mod, "DEPTH_HOLD_I_LIMIT", 0.25)),
         out_limit=float(getattr(cfg_mod, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
         sign=float(getattr(cfg_mod, "DEPTH_HOLD_SIGN", 1.0)),
-        walk_target=bool(getattr(cfg_mod, "DEPTH_HOLD_WALK_TARGET", True)),
+        walk_target=bool(getattr(cfg_mod, "DEPTH_HOLD_WALK_TARGET", False)),
         walk_deadband=float(getattr(cfg_mod, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
         walk_rate_mps=float(getattr(cfg_mod, "DEPTH_HOLD_WALK_RATE_MPS", 0.60)),
         target_min_m=getattr(cfg_mod, "DEPTH_HOLD_TARGET_MIN_M", None),
