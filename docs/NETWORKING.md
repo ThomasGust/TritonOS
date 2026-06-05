@@ -49,6 +49,12 @@ Video control and video payloads are separate:
 - Camera payloads are GStreamer RTP streams sent from the ROV to the pilot
   computer using UDP or TCP depending on stream config.
 
+For native H.264 camera streams, TritonOS also tries to apply the configured
+bitrate and keyframe interval through V4L2 camera controls before starting the
+GStreamer RTP pipeline. This improves motion quality when the camera supports
+controls such as `video_bitrate`; if unsupported, the stream falls back to the
+camera defaults.
+
 For tether-first video routing, use:
 
 ```python

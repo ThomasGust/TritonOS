@@ -266,6 +266,18 @@ PRINT_CONFIG_ON_IMPORT = True
 
 Turn verbose control logs on only while diagnosing behavior.
 
+## Video Quality
+
+TritonPilot sends per-stream video targets such as `h264_bitrate` and
+`h264_gop` from its `data/streams.json`. For native H.264 UVC cameras,
+TritonOS applies those values as V4L2 controls when the camera exposes common
+controls such as `video_bitrate` and `h264_i_frame_period`. Unsupported
+controls are skipped so video startup still succeeds with camera defaults.
+
+The current pilot-side default for four 1080p30 streams is 12 Mbps per stream.
+If motion artifacts remain on a clean tether, test 14-16 Mbps. If the network
+status shows loss or rising latency, step back toward 8-10 Mbps.
+
 ## Management RPC
 
 Use the CLI client:

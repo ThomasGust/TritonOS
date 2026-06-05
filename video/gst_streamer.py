@@ -43,6 +43,8 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GObject", "2.0")
 from gi.repository import Gst, GObject
 
+from video.v4l2_controls import apply_h264_quality_controls
+
 # Initialize once
 GObject.threads_init()
 Gst.init(None)
@@ -319,6 +321,15 @@ class GstStream:
         parts = []
         vf = cfg.video_format.lower()
         dev = resolve_v4l2_device(cfg.device, prefer_h264=(vf == "h264"))
+
+        if vf == "h264":
+            apply_h264_quality_controls(
+                dev,
+                h264_bitrate=int(cfg.h264_bitrate),
+                h264_gop=int(cfg.h264_gop),
+                extra=cfg.extra,
+                logger=logger,
+            )
 
         parts.append(f"v4l2src device={dev}")
 
