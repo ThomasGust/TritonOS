@@ -94,6 +94,8 @@ class StreamConfig:
     # RTP payload types
     rtp_pt_jpeg: int = 26
     rtp_pt_h264: int = 96
+    rtp_mtu: int = 1200
+    udp_buffer_size: int = 1024 * 1024
 
     # Jitter buffer (receiver-side item; kept here for symmetry)
     latency_ms: int = 60
@@ -321,6 +323,7 @@ class GstStream:
         parts = []
         vf = cfg.video_format.lower()
         dev = resolve_v4l2_device(cfg.device, prefer_h264=(vf == "h264"))
+        rtp_mtu = max(576, int(cfg.rtp_mtu))
 
         if vf == "h264":
             apply_h264_quality_controls(
@@ -345,16 +348,16 @@ class GstStream:
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
                     "h264parse",
-                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264}",
+                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             else:
-                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg}")
+                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
         elif vf == "h264":
             # Camera outputs H.264
             # Be permissive about stream-format; some cameras output byte-stream.
             parts.append(f"video/x-h264,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1,alignment=au")
             parts.append("h264parse")
-            parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264}")
+            parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
         elif vf == "raw":
             # Camera outputs raw → must encode
             if cfg.encode == "h264":
@@ -365,12 +368,12 @@ class GstStream:
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
                     "h264parse",
-                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264}",
+                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             elif cfg.encode == "mjpeg":
                 parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
                 parts.append("jpegenc")
-                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg}")
+                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
             else:
                 raise ValueError("For video_format='raw', encode must be 'h264' or 'mjpeg'")
         else:
@@ -381,13 +384,14 @@ class GstStream:
             # Note: This is best-effort; if the address is not present on the
             # system, GStreamer will error and the stream will fail to start.
             sync_prop = f"sync={'true' if cfg.sync else 'false'}"
+            udp_buffer = f"buffer-size={max(0, int(cfg.udp_buffer_size))}"
             if cfg.bind_address:
                 parts.append(
                     f"udpsink host={cfg.host} port={cfg.port} bind-address={cfg.bind_address} "
-                    f"{sync_prop} async=false"
+                    f"{udp_buffer} {sync_prop} async=false"
                 )
             else:
-                parts.append(f"udpsink host={cfg.host} port={cfg.port} {sync_prop} async=false")
+                parts.append(f"udpsink host={cfg.host} port={cfg.port} {udp_buffer} {sync_prop} async=false")
         else:
             parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
 
@@ -563,6 +567,8 @@ if __name__ == "__main__":
     ap.add_argument("--encode", default=None, choices=[None, "h264", "mjpeg"])
     ap.add_argument("--h264-bitrate", type=int, default=4_000_000)
     ap.add_argument("--h264-gop", type=int, default=30)
+    ap.add_argument("--rtp-mtu", type=int, default=1200)
+    ap.add_argument("--udp-buffer-size", type=int, default=1024 * 1024)
     ap.add_argument("--transport", default="udp", choices=["udp", "tcp"])
     ap.add_argument("--host", default="192.168.1.1")
     ap.add_argument("--port", type=int, default=5000)
@@ -582,6 +588,8 @@ if __name__ == "__main__":
         encode=args.encode,
         h264_bitrate=args.h264_bitrate,
         h264_gop=args.h264_gop,
+        rtp_mtu=args.rtp_mtu,
+        udp_buffer_size=args.udp_buffer_size,
         transport=args.transport,
         host=args.host,
         port=args.port,

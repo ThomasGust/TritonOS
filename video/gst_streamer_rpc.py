@@ -281,6 +281,8 @@ def streamconfig_from_dict(d: dict) -> StreamConfig:
         bind_address=d.get("bind_address", None),
         rtp_pt_jpeg=d.get("rtp_pt_jpeg", 26),
         rtp_pt_h264=d.get("rtp_pt_h264", 96),
+        rtp_mtu=d.get("rtp_mtu", 1200),
+        udp_buffer_size=d.get("udp_buffer_size", 1024 * 1024),
         latency_ms=d.get("latency_ms", 60),
         sync=d.get("sync", False),
         extra=d.get("extra", {}),
