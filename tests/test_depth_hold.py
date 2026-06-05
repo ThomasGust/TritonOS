@@ -26,7 +26,7 @@ def test_depth_hold_small_error_overcomes_output_deadband_quickly():
             i_limit=float(getattr(cfg, "DEPTH_HOLD_I_LIMIT", 0.25)),
             out_limit=float(getattr(cfg, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
             sign=float(getattr(cfg, "DEPTH_HOLD_SIGN", 1.0)),
-            walk_target=bool(getattr(cfg, "DEPTH_HOLD_WALK_TARGET", True)),
+            walk_target=bool(getattr(cfg, "DEPTH_HOLD_WALK_TARGET", False)),
             walk_deadband=float(getattr(cfg, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
             walk_rate_mps=float(getattr(cfg, "DEPTH_HOLD_WALK_RATE_MPS", 0.60)),
             target_min_m=getattr(cfg, "DEPTH_HOLD_TARGET_MIN_M", None),
@@ -82,4 +82,53 @@ def test_depth_hold_accepts_explicit_target_and_manual_override():
     )
     assert status["active"] is False
     assert status["reason"] == "manual_override"
+    assert status["target_m"] == pytest.approx(1.0)
+    assert status["target_source"] == "manual_latch"
     assert u == pytest.approx(0.3)
+
+    u, status = controller.step(
+        enabled=True,
+        manual_heave=0.0,
+        depth_m=1.0,
+        depth_age_s=0.0,
+        dt=0.02,
+        target_m=1.5,
+    )
+    assert status["active"] is True
+    assert status["target_m"] == pytest.approx(1.0)
+    assert status["target_source"] == "manual_latch"
+    assert u == pytest.approx(0.0)
+
+    u, status = controller.step(
+        enabled=True,
+        manual_heave=0.0,
+        depth_m=1.0,
+        depth_age_s=0.0,
+        dt=0.02,
+        target_m=1.7,
+    )
+    assert status["active"] is True
+    assert status["target_m"] == pytest.approx(1.7)
+    assert status["target_source"] == "command"
+    assert u == pytest.approx(-0.35)
+
+
+def test_depth_hold_manual_heave_latches_current_depth_on_release():
+    controller = DepthHoldController(
+        DepthHoldConfig(kp=0.5, ki=0.0, kd=0.0, out_limit=0.5, depth_lpf_tau_s=0.0)
+    )
+
+    controller.step(enabled=True, manual_heave=0.0, depth_m=1.0, depth_age_s=0.0, dt=0.02)
+    u, status = controller.step(enabled=True, manual_heave=-0.4, depth_m=1.35, depth_age_s=0.0, dt=0.02)
+
+    assert status["active"] is False
+    assert status["reason"] == "manual_override"
+    assert status["target_m"] == pytest.approx(1.35)
+    assert u == pytest.approx(-0.4)
+
+    u, status = controller.step(enabled=True, manual_heave=0.0, depth_m=1.35, depth_age_s=0.0, dt=0.02)
+
+    assert status["active"] is True
+    assert status["target_m"] == pytest.approx(1.35)
+    assert status["target_source"] == "manual_latch"
+    assert u == pytest.approx(0.0)

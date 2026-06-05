@@ -73,6 +73,7 @@ class AttitudeAxisConfig:
     sign: float = 1.0
     manual_deadband: float = 0.08
     walk_rate_dps: float = 35.0
+    manual_latch: bool = False
 
 
 @dataclass
@@ -94,7 +95,8 @@ class AttitudeAxisController:
     Modes:
       - off: pass manual command through
       - damp: pass manual command plus angular-rate damping
-      - hold: capture current angle as target; manual input walks target
+      - hold: capture current angle as target; manual input walks target, or
+        passes through and latches current angle when manual_latch is enabled
       - level: hold a fixed 0-degree target; manual input passes through
     """
 
@@ -108,6 +110,8 @@ class AttitudeAxisController:
 
         self._last_enabled = False
         self._target_deg: Optional[float] = None
+        self._target_source: str = "none"
+        self._ignore_target_cmd_until_changed: Optional[float] = None
         self._i_state = 0.0
         self._last_angle_deg: Optional[float] = None
 
@@ -134,9 +138,17 @@ class AttitudeAxisController:
         dt = float(dt) if dt and dt > 0.0 else 0.02
         manual_cmd = float(manual_cmd)
         mode = _mode(mode, self.cfg.default_mode)
-        target_cmd = _finite_float(target_deg)
-        if target_cmd is not None:
-            target_cmd = _wrap_deg(target_cmd)
+        raw_target_cmd = _finite_float(target_deg)
+        target_cmd = _wrap_deg(raw_target_cmd) if raw_target_cmd is not None else None
+        if bool(self.cfg.manual_latch):
+            if target_cmd is None:
+                self._ignore_target_cmd_until_changed = None
+            else:
+                ignored = self._ignore_target_cmd_until_changed
+                if ignored is not None and abs(_wrap_deg(float(target_cmd) - float(ignored))) <= 1e-9:
+                    target_cmd = None
+                else:
+                    self._ignore_target_cmd_until_changed = None
         status: Dict[str, Any] = {
             "mode": mode,
             "enabled_cmd": mode != "off",
@@ -175,6 +187,7 @@ class AttitudeAxisController:
         if mode == "level":
             target = 0.0
             self._target_deg = target
+            self._target_source = "level"
             if manual_active:
                 self._i_state = 0.0
                 self._last_enabled = True
@@ -193,11 +206,32 @@ class AttitudeAxisController:
             if target_cmd is not None:
                 if self._target_deg is None or abs(_wrap_deg(float(target_cmd) - float(self._target_deg))) > 1e-9:
                     self._target_deg = float(target_cmd)
+                    self._target_source = "command"
                     self._i_state = 0.0
             elif (not self._last_enabled) or self._target_deg is None:
                 self._target_deg = angle
+                self._target_source = "capture"
                 self._i_state = 0.0
             if manual_active:
+                if bool(self.cfg.manual_latch):
+                    self._target_deg = _wrap_deg(angle)
+                    self._target_source = "manual_latch"
+                    if target_cmd is not None:
+                        self._ignore_target_cmd_until_changed = float(target_cmd)
+                    self._i_state = 0.0
+                    self._last_enabled = True
+                    status.update(
+                        {
+                            "active": False,
+                            "reason": "manual_override",
+                            "angle_deg": angle,
+                            "target_deg": float(self._target_deg),
+                            "target_source": "manual_latch",
+                            "rate_dps": rate_dps,
+                            "rate_source": rate_source,
+                        }
+                    )
+                    return manual_cmd, status
                 if target_cmd is not None:
                     self._i_state = 0.0
                     self._last_enabled = True
@@ -214,6 +248,7 @@ class AttitudeAxisController:
                     )
                     return manual_cmd, status
                 self._target_deg = _wrap_deg(float(self._target_deg) + manual_cmd * float(self.cfg.walk_rate_dps) * dt)
+                self._target_source = "walk"
         elif mode == "damp":
             u_damp = float(self.cfg.sign) * (-float(self.cfg.kd) * rate_dps)
             u = _clamp(manual_cmd + u_damp, -float(self.cfg.out_limit), float(self.cfg.out_limit))
@@ -265,7 +300,7 @@ class AttitudeAxisController:
                 "reason": "hold" if mode != "level" else "level",
                 "angle_deg": angle,
                 "target_deg": target,
-                "target_source": "command" if target_cmd is not None else ("level" if mode == "level" else "capture"),
+                "target_source": "command" if target_cmd is not None else self._target_source,
                 "error_deg": error_deg,
                 "rate_dps": rate_dps,
                 "rate_source": rate_source,
@@ -443,6 +478,7 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
             sign=float(getattr(cfg_mod, f"{prefix}_SIGN", defaults.sign)),
             manual_deadband=float(getattr(cfg_mod, f"{prefix}_MANUAL_DEADBAND", defaults.manual_deadband)),
             walk_rate_dps=float(getattr(cfg_mod, f"{prefix}_WALK_RATE_DPS", defaults.walk_rate_dps)),
+            manual_latch=bool(getattr(cfg_mod, f"{prefix}_MANUAL_LATCH", defaults.manual_latch)),
         )
 
     depth_cfg = DepthHoldConfig(
@@ -455,7 +491,7 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
         i_limit=float(getattr(cfg_mod, "DEPTH_HOLD_I_LIMIT", 0.25)),
         out_limit=float(getattr(cfg_mod, "DEPTH_HOLD_OUT_LIMIT", 0.55)),
         sign=float(getattr(cfg_mod, "DEPTH_HOLD_SIGN", 1.0)),
-        walk_target=bool(getattr(cfg_mod, "DEPTH_HOLD_WALK_TARGET", True)),
+        walk_target=bool(getattr(cfg_mod, "DEPTH_HOLD_WALK_TARGET", False)),
         walk_deadband=float(getattr(cfg_mod, "DEPTH_HOLD_WALK_DEADBAND", 0.08)),
         walk_rate_mps=float(getattr(cfg_mod, "DEPTH_HOLD_WALK_RATE_MPS", 0.60)),
         target_min_m=getattr(cfg_mod, "DEPTH_HOLD_TARGET_MIN_M", None),
@@ -464,7 +500,7 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
 
     roll_defaults = AttitudeAxisConfig(kp=0.012, kd=0.002, out_limit=0.16)
     pitch_defaults = AttitudeAxisConfig(kp=0.012, kd=0.002, out_limit=0.16)
-    yaw_defaults = AttitudeAxisConfig(kp=0.006, kd=0.0015, out_limit=0.12)
+    yaw_defaults = AttitudeAxisConfig(kp=0.006, kd=0.0015, out_limit=0.12, manual_latch=True)
     return AutopilotConfig(
         depth_enable=bool(getattr(cfg_mod, "DEPTH_HOLD_ENABLE", True)),
         attitude_enable=bool(getattr(cfg_mod, "AUTOPILOT_ATTITUDE_ENABLE", True)),

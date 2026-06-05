@@ -195,8 +195,13 @@ DEPTH_HOLD_KP = 0.55
 DEPTH_HOLD_KI = 0.06
 DEPTH_HOLD_KD = 0.08
 DEPTH_HOLD_OUT_LIMIT = 0.45
-DEPTH_HOLD_WALK_TARGET = True
+DEPTH_HOLD_WALK_TARGET = False
 ```
+
+With `DEPTH_HOLD_WALK_TARGET = False`, manual vertical stick input passes
+through normally while depth hold is armed, and the controller latches the
+current depth as the target when the stick returns to center. Set it to `True`
+only if you want the older behavior where stick input walks the setpoint.
 
 Tune these slowly. If depth hold drives in the wrong direction, verify sensor
 sign and then use:
@@ -224,10 +229,15 @@ AUTOPILOT_ENABLE = True
 AUTOPILOT_ATTITUDE_ENABLE = True
 AUTOPILOT_ATTITUDE_STALE_S = 0.50
 AUTOPILOT_STATUS_ENABLE = True
+AUTOPILOT_YAW_MANUAL_LATCH = True
 ```
 
 Roll, pitch, and yaw hold defaults are intentionally conservative. Leave their
 default modes `"off"` until tuning and validation are complete.
+
+With `AUTOPILOT_YAW_MANUAL_LATCH = True`, manual yaw input turns the ROV
+normally while yaw hold is armed, and the controller latches the current yaw as
+the target when the stick returns to center.
 
 ## Power, Network, And Diagnostics
 
