@@ -126,6 +126,18 @@ AXIS_ROLL = "dpad_x"
 
 Set an axis to `"none"` if it should be disabled.
 
+Manipulator runtime gains:
+
+```python
+WRIST_ROTATE_SPEED = 0.50
+GRIPPER_PITCH_SCALE = 0.5
+GRIPPER_YAW_SCALE = 1.0
+```
+
+TritonPilot sends `PilotFrame.modes["back_gripper_gain"]` and
+`PilotFrame.modes["arm_gain"]` at runtime. TritonOS clamps those values and
+applies them on top of the fixed wrist/arm calibration values above.
+
 ## Arming Safety
 
 Important safety gates:

@@ -59,6 +59,49 @@ def test_compute_gripper_diff_holds_pitch_when_rotating():
     assert abs(right + 0.5) < 1e-6
 
 
+def test_compute_gripper_diff_scales_live_arm_gain():
+    svc = object.__new__(ControlService)
+    svc._gripper_enabled = True
+    svc._gripper_pitch_key = "gripper_pitch"
+    svc._gripper_yaw_key = "gripper_yaw"
+    svc._gripper_pitch_scale = 0.5
+    svc._gripper_yaw_scale = 1.0
+    svc._gripper_pitch_invert = 1.0
+    svc._gripper_yaw_invert = 1.0
+    svc._gripper_deadzone = 0.01
+    svc._gripper_hold_last = True
+    svc._gripper_last_pitch = 0.0
+    svc._gripper_last_yaw = 0.0
+    svc._gripper_last_left = 0.0
+    svc._gripper_last_right = 0.0
+
+    left, right = ControlService._compute_gripper_diff(
+        svc,
+        SimpleNamespace(aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0}, modes={"arm_gain": 0.4}),
+    )
+
+    assert svc._last_arm_gain == 0.4
+    assert abs(left - 0.2) < 1e-6
+    assert abs(right - 0.2) < 1e-6
+
+
+def test_compute_wrist_rotate_scales_live_back_gripper_gain():
+    svc = object.__new__(ControlService)
+    svc._wrist_rotate_enabled = True
+    svc._wrist_rotate_right_axis = "rt"
+    svc._wrist_rotate_left_axis = "lt"
+    svc._wrist_rotate_trigger_deadzone = 0.10
+    svc._wrist_rotate_speed = 0.50
+
+    cmd = ControlService._compute_wrist_rotate(
+        svc,
+        SimpleNamespace(axes=SimpleNamespace(rt=1.0, lt=0.0), modes={"back_gripper_gain": 0.4}),
+    )
+
+    assert svc._last_back_gripper_gain == 0.4
+    assert abs(cmd - 0.2) < 1e-6
+
+
 def test_send_gripper_park_pose_writes_folded_servo_targets():
     class FakeSink:
         def __init__(self):

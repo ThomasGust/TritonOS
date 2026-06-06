@@ -613,6 +613,8 @@ LIGHTS_TRIM_US = 0
 #   - LT = rotate left
 # The output is sent as a *thruster-style* command (normalized [-1..1]) to the
 # channel configured in CHANNEL_MAP["aux"]["wrist_rotate"].
+# TritonPilot can additionally scale this at runtime with
+# PilotFrame.modes["back_gripper_gain"] (keys 1/2 by default).
 
 WRIST_ROTATE_ENABLE = True
 WRIST_ROTATE_CMD_KEY = "wrist_rotate"
@@ -625,6 +627,8 @@ WRIST_ROTATE_CMD_KEY = "wrist_rotate"
 #   left  = pitch + yaw
 #   right = pitch - yaw
 # Then main_rov configures those outputs as bidirectional servos centered at 1500 us.
+# TritonPilot can additionally scale live WASD commands with
+# PilotFrame.modes["arm_gain"] (keys 6/7 by default).
 GRIPPER_ENABLE = True
 GRIPPER_PITCH_CMD_KEY = "gripper_pitch"
 GRIPPER_YAW_CMD_KEY = "gripper_yaw"

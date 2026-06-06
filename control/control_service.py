@@ -285,6 +285,8 @@ class ControlService:
         # Baseline from rov_config/main_rov; pilot may apply a 0..1 cap multiplier on top.
         self._base_power_scale = float(getattr(gains, 'power_scale', 1.0))
         self._last_pilot_max_gain = 1.0
+        self._last_back_gripper_gain = 1.0
+        self._last_arm_gain = 1.0
         self.period = 1.0 / float(rate_hz)
         self.ttl = float(ttl)
         self.debug = bool(debug)
@@ -805,6 +807,8 @@ class ControlService:
                             "base_power_scale": float(self._base_power_scale),
                             "pilot_max_gain": float(self._last_pilot_max_gain),
                             "effective_power_scale": float(self.gains.power_scale),
+                            "back_gripper_gain": float(self._last_back_gripper_gain),
+                            "arm_gain": float(self._last_arm_gain),
                         },
                     }
                 )
@@ -1013,32 +1017,47 @@ class ControlService:
             else:
                 next_t = time.time()
 
-    def _pilot_gain_multiplier(self, pilot: Optional[PilotFrame]) -> float:
-        """Return pilot-requested max gain multiplier in [0.05..1.0] (default 1.0)."""
+    def _pilot_mode_gain(
+        self,
+        pilot: Optional[PilotFrame],
+        keys: Tuple[str, ...],
+        *,
+        default: float = 1.0,
+        min_value: float = 0.0,
+    ) -> float:
+        """Return a pilot-requested mode gain, clamped to [min_value..1.0]."""
         if pilot is None:
-            return 1.0
+            return float(default)
         try:
             modes = pilot.modes or {}
         except Exception:
-            return 1.0
+            return float(default)
         raw = None
-        # Preferred key from TritonPilot. Accept a few aliases for compatibility.
-        for k in ("max_gain", "pilot_max_gain", "power_scale_max"):
+        for k in keys:
             if k in modes:
                 raw = modes.get(k)
                 break
         if raw is None:
-            return 1.0
+            return float(default)
         try:
             v = float(raw)
         except Exception:
-            return 1.0
-        # Keep a non-zero floor to avoid confusing "armed but no thrust" behavior.
-        if v < 0.05:
-            v = 0.05
+            return float(default)
+        if v < float(min_value):
+            v = float(min_value)
         if v > 1.0:
             v = 1.0
         return v
+
+    def _pilot_gain_multiplier(self, pilot: Optional[PilotFrame]) -> float:
+        """Return pilot-requested max gain multiplier in [0.05..1.0] (default 1.0)."""
+        # Preferred key from TritonPilot. Accept a few aliases for compatibility.
+        return self._pilot_mode_gain(
+            pilot,
+            ("max_gain", "pilot_max_gain", "power_scale_max"),
+            default=1.0,
+            min_value=0.05,
+        )
 
     def _apply_pilot_gain(self, pilot: Optional[PilotFrame]) -> None:
         """Update effective power scale using the pilot's runtime max gain cap."""
@@ -1115,9 +1134,16 @@ class ControlService:
         dz = float(self._wrist_rotate_trigger_deadzone)
         rt_mag = _trigger_mag(rt, dz)
         lt_mag = _trigger_mag(lt, dz)
+        gain = self._pilot_mode_gain(
+            pilot,
+            ("back_gripper_gain", "t200_wrist_gain", "wrist_rotate_gain"),
+            default=1.0,
+            min_value=0.0,
+        )
+        self._last_back_gripper_gain = float(gain)
 
         # Net command lets pilots feather both triggers; equal pressure cancels.
-        cmd = (rt_mag - lt_mag) * float(self._wrist_rotate_speed)
+        cmd = (rt_mag - lt_mag) * float(self._wrist_rotate_speed) * float(gain)
         return max(-1.0, min(1.0, cmd))
 
 
@@ -1137,8 +1163,16 @@ class ControlService:
         except Exception:
             yaw = 0.0
 
-        pitch = max(-1.0, min(1.0, pitch * float(self._gripper_pitch_scale) * float(self._gripper_pitch_invert)))
-        yaw = max(-1.0, min(1.0, yaw * float(self._gripper_yaw_scale) * float(self._gripper_yaw_invert)))
+        arm_gain = self._pilot_mode_gain(
+            pilot,
+            ("arm_gain", "gripper_gain", "servo_wrist_gain"),
+            default=1.0,
+            min_value=0.0,
+        )
+        self._last_arm_gain = float(arm_gain)
+
+        pitch = max(-1.0, min(1.0, pitch * float(self._gripper_pitch_scale) * float(self._gripper_pitch_invert) * float(arm_gain)))
+        yaw = max(-1.0, min(1.0, yaw * float(self._gripper_yaw_scale) * float(self._gripper_yaw_invert) * float(arm_gain)))
 
         pitch_has_input = abs(pitch) > float(self._gripper_deadzone)
         yaw_has_input = abs(yaw) > float(self._gripper_deadzone)
