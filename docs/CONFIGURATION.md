@@ -295,11 +295,15 @@ TritonPilot sends per-stream video targets such as `h264_bitrate`,
 cameras, TritonOS applies the bitrate/GOP values as V4L2 controls when the
 camera exposes common controls such as `video_bitrate` and
 `h264_i_frame_period`. Unsupported controls are skipped so video startup still
-succeeds with camera defaults.
+succeeds with camera defaults. Explicit `v4l2_controls` values may include `0`,
+which is useful for controls such as `exposure_dynamic_framerate=0`.
 
-The current pilot-side default for four 1080p30 streams is 16 Mbps per stream
-with a 1200-byte RTP MTU. If the network status shows loss or rising latency,
-step back toward 12 Mbps before reducing resolution or frame rate.
+The current pilot-side default for four 1080p30 streams is 8 Mbps per stream
+with a 1200-byte RTP MTU. Sender-side leaky queues are enabled by default so
+the Pi drops stale whole frames before RTP packetization instead of building
+latency. Per-stream `extra` options can override this with
+`sender_leaky_queues`, `sender_queue_max_buffers`, `sender_queue_max_time_ms`,
+and `sender_v4l2_do_timestamp`.
 
 ## Management RPC
 

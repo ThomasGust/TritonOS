@@ -38,11 +38,13 @@ def parse_control_names(text: str | None) -> set[str]:
     return names
 
 
-def _int_or_none(value: Any) -> int | None:
+def _int_or_none(value: Any, *, allow_zero: bool = False) -> int | None:
     try:
         out = int(value)
     except Exception:
         return None
+    if allow_zero:
+        return out if out >= 0 else None
     return out if out > 0 else None
 
 
@@ -89,7 +91,7 @@ def build_h264_quality_controls(
     if isinstance(explicit, dict):
         for key, value in explicit.items():
             name = str(key).strip()
-            int_value = _int_or_none(value)
+            int_value = _int_or_none(value, allow_zero=True)
             if name and int_value is not None and name in available_controls:
                 updates[name] = int(int_value)
 

@@ -58,6 +58,10 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 
+_FALSEY_EXTRA = {"0", "false", "no", "off"}
+_TRUTHY_EXTRA = {"1", "true", "yes", "on"}
+
+
 @dataclass
 class StreamConfig:
     """Configuration for one camera stream and its network transport."""
@@ -167,6 +171,119 @@ def resolve_v4l2_device(device: str, *, prefer_h264: bool = False) -> str:
                 return cand
 
     return dev
+
+
+def _extra_bool(extra: Dict[str, Any], *names: str, default: bool = False) -> bool:
+    for name in names:
+        if name not in extra:
+            continue
+        value = extra.get(name)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in _FALSEY_EXTRA:
+            return False
+        if text in _TRUTHY_EXTRA:
+            return True
+        return bool(value)
+    return bool(default)
+
+
+def _extra_int(
+    extra: Dict[str, Any],
+    *names: str,
+    default: int = 0,
+    minimum: int | None = None,
+) -> int:
+    value = default
+    for name in names:
+        if name not in extra or extra.get(name) is None:
+            continue
+        try:
+            value = int(float(extra.get(name)))
+            break
+        except Exception:
+            value = default
+            break
+    if minimum is not None:
+        value = max(int(minimum), int(value))
+    return int(value)
+
+
+def _extra_str(extra: Dict[str, Any], *names: str, default: str = "") -> str:
+    for name in names:
+        value = extra.get(name)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return str(default)
+
+
+def _extra_int_list(extra: Dict[str, Any], *names: str) -> list[int]:
+    for name in names:
+        if name not in extra or extra.get(name) is None:
+            continue
+        value = extra.get(name)
+        raw_values: list[Any]
+        if isinstance(value, str):
+            raw_values = [part.strip() for part in value.split(",") if part.strip()]
+        elif isinstance(value, (list, tuple, set)):
+            raw_values = list(value)
+        else:
+            raw_values = [value]
+        ports: list[int] = []
+        for raw in raw_values:
+            try:
+                port = int(float(raw))
+            except Exception:
+                continue
+            if 0 < port <= 65535 and port not in ports:
+                ports.append(port)
+        return ports
+    return []
+
+
+def _v4l2src_part(dev: str, cfg: StreamConfig) -> str:
+    props = [f"device={dev}"]
+    if _extra_bool(cfg.extra, "sender_v4l2_do_timestamp", "v4l2_do_timestamp", default=True):
+        props.append("do-timestamp=true")
+    io_mode = _extra_str(cfg.extra, "sender_v4l2_io_mode", "v4l2_io_mode")
+    if io_mode:
+        props.append(f"io-mode={io_mode}")
+    return "v4l2src " + " ".join(props)
+
+
+def _sender_queue_parts(cfg: StreamConfig, name: str) -> list[str]:
+    """Return a one-frame leaky queue that sheds stale video instead of buffering it."""
+
+    if not _extra_bool(cfg.extra, "sender_leaky_queues", "leaky_queues", default=True):
+        return []
+    buffers = _extra_int(cfg.extra, "sender_queue_max_buffers", default=1, minimum=1)
+    bytes_ = _extra_int(cfg.extra, "sender_queue_max_bytes", default=0, minimum=0)
+    time_ms = _extra_int(cfg.extra, "sender_queue_max_time_ms", default=0, minimum=0)
+    return [
+        (
+            f"queue name={name} max-size-buffers={buffers} "
+            f"max-size-bytes={bytes_} max-size-time={time_ms * 1_000_000} "
+            "leaky=downstream"
+        )
+    ]
+
+
+def _udp_destination_ports(cfg: StreamConfig) -> list[int]:
+    ports = [int(cfg.port)]
+    for port in _extra_int_list(
+        cfg.extra,
+        "udp_mirror_ports",
+        "mirror_udp_ports",
+        "capture_ports",
+        "capture_port",
+    ):
+        if port not in ports:
+            ports.append(port)
+    return ports
 
 
 class GstStream:
@@ -334,20 +451,23 @@ class GstStream:
                 logger=logger,
             )
 
-        parts.append(f"v4l2src device={dev}")
+        parts.append(_v4l2src_part(dev, cfg))
 
         if vf == "mjpeg":
             # Camera outputs MJPEG.
             # Either send as RTP/JPEG or transcode to H.264 (software, x264enc).
             parts.append(f"image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
+            parts += _sender_queue_parts(cfg, "q_capture")
             if (cfg.encode or "").lower() == "h264":
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
                 parts += [
                     "jpegdec",
                     "videoconvert",
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
+                    *_sender_queue_parts(cfg, "q_encode"),
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
-                    "h264parse",
+                    "h264parse config-interval=-1 disable-passthrough=true",
+                    *_sender_queue_parts(cfg, "q_pay"),
                     f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             else:
@@ -356,7 +476,9 @@ class GstStream:
             # Camera outputs H.264
             # Be permissive about stream-format; some cameras output byte-stream.
             parts.append(f"video/x-h264,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1,alignment=au")
-            parts.append("h264parse")
+            parts += _sender_queue_parts(cfg, "q_capture")
+            parts.append("h264parse config-interval=-1 disable-passthrough=true")
+            parts += _sender_queue_parts(cfg, "q_pay")
             parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
         elif vf == "raw":
             # Camera outputs raw → must encode
@@ -364,14 +486,18 @@ class GstStream:
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
                 parts += [
                     f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
+                    *_sender_queue_parts(cfg, "q_capture"),
                     "videoconvert",
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
+                    *_sender_queue_parts(cfg, "q_encode"),
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
-                    "h264parse",
+                    "h264parse config-interval=-1 disable-passthrough=true",
+                    *_sender_queue_parts(cfg, "q_pay"),
                     f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             elif cfg.encode == "mjpeg":
                 parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
+                parts += _sender_queue_parts(cfg, "q_capture")
                 parts.append("jpegenc")
                 parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
             else:
@@ -385,7 +511,19 @@ class GstStream:
             # system, GStreamer will error and the stream will fail to start.
             sync_prop = f"sync={'true' if cfg.sync else 'false'}"
             udp_buffer = f"buffer-size={max(0, int(cfg.udp_buffer_size))}"
-            if cfg.bind_address:
+            destination_ports = _udp_destination_ports(cfg)
+            if len(destination_ports) > 1:
+                clients = ",".join(f"{cfg.host}:{port}" for port in destination_ports)
+                props = [
+                    f"clients={clients}",
+                    udp_buffer,
+                    sync_prop,
+                    "async=false",
+                ]
+                if cfg.bind_address:
+                    props.append(f"bind-address={cfg.bind_address}")
+                parts.append("multiudpsink " + " ".join(props))
+            elif cfg.bind_address:
                 parts.append(
                     f"udpsink host={cfg.host} port={cfg.port} bind-address={cfg.bind_address} "
                     f"{udp_buffer} {sync_prop} async=false"
@@ -409,7 +547,7 @@ class GstStream:
     def _apply_udp_sink_qos(self, pipeline: Gst.Pipeline, cfg: StreamConfig) -> None:
         """Best-effort DSCP marking for video UDP traffic so control/telemetry can be prioritized."""
         try:
-            udpsink = self._find_element(pipeline, "udpsink")
+            udpsink = self._find_element(pipeline, "udpsink") or self._find_element(pipeline, "multiudpsink")
             if not udpsink:
                 return
             dscp = None

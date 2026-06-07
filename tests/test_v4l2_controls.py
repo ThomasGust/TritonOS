@@ -48,6 +48,17 @@ def test_build_h264_quality_controls_can_be_disabled():
     assert updates == {}
 
 
+def test_build_h264_quality_controls_allows_explicit_zero_values():
+    updates = build_h264_quality_controls(
+        {"exposure_dynamic_framerate"},
+        h264_bitrate=12_000_000,
+        h264_gop=15,
+        extra={"v4l2_controls": {"exposure_dynamic_framerate": 0}},
+    )
+
+    assert updates == {"exposure_dynamic_framerate": 0}
+
+
 def test_set_ctrl_arg_is_stable():
     assert set_ctrl_arg({"video_bitrate": 12_000_000, "h264_i_frame_period": 15}) == (
         "h264_i_frame_period=15,video_bitrate=12000000"
