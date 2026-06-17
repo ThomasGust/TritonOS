@@ -3,6 +3,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "video" / "gst_streamer.py"
 
 
@@ -163,6 +165,42 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
     assert frame.caps == "image/jpeg,width=32,height=24"
     assert frame.data == b"\xff\xd8snapshot\xff\xd9"
     assert sink.calls == [("try-pull-sample", 250_000_000)]
+
+
+def test_capture_stereo_pair_uses_fresh_parallel_snapshots(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+
+    class _FakeStream:
+        def __init__(self, name, monotonic_ts):
+            self.name = name
+            self.monotonic_ts = monotonic_ts
+            self.calls = []
+
+        def capture_snapshot(self, *, timeout_s=1.5, fresh=False):
+            self.calls.append({"timeout_s": timeout_s, "fresh": fresh})
+            return gst_streamer.SnapshotFrame(
+                stream=self.name,
+                data=f"{self.name}-jpg".encode("ascii"),
+                mime_type="image/jpeg",
+                caps="image/jpeg,width=32,height=24",
+                wall_ts=1000.0 + self.monotonic_ts,
+                monotonic_ts=self.monotonic_ts,
+                seq=len(self.calls),
+            )
+
+    manager = gst_streamer.StreamManager()
+    left = _FakeStream("Left", 50.000)
+    right = _FakeStream("Right", 50.008)
+    manager._streams = {"Left": left, "Right": right}
+
+    pair = manager.capture_stereo_pair("Left", "Right", timeout_s=0.5, max_pair_delta_ms=20.0)
+
+    assert pair.left.stream == "Left"
+    assert pair.right.stream == "Right"
+    assert pair.pair_delta_ms == pytest.approx(8.0)
+    assert pair.timestamp_source == "rov_snapshot_appsink_fresh_monotonic"
+    assert left.calls and left.calls[0]["fresh"] is True
+    assert right.calls and right.calls[0]["fresh"] is True
 
 
 def test_sender_low_latency_options_can_be_disabled_explicitly(monkeypatch):

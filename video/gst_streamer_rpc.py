@@ -33,6 +33,25 @@ from video.tether import (
 )
 
 logger = logging.getLogger("gst_streamer_rpc")
+
+
+def _snapshot_frame_payload(frame) -> dict:
+    return {
+        "stream": frame.stream,
+        "mime_type": frame.mime_type,
+        "format": "jpg",
+        "extension": "jpg",
+        "encoding": "base64",
+        "image_b64": base64.b64encode(frame.data).decode("ascii"),
+        "byte_count": len(frame.data),
+        "seq": int(getattr(frame, "seq", 0) or 0),
+        "caps": str(getattr(frame, "caps", "") or ""),
+        "wall_ts": float(getattr(frame, "wall_ts", 0.0) or 0.0),
+        "monotonic_ts": float(getattr(frame, "monotonic_ts", 0.0) or 0.0),
+        "source_pts_ns": getattr(frame, "source_pts_ns", None),
+        "source_dts_ns": getattr(frame, "source_dts_ns", None),
+        "source_duration_ns": getattr(frame, "source_duration_ns", None),
+    }
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
 FPS_RE = re.compile(r"\(([\d.]+)\s*fps\)")
@@ -772,6 +791,43 @@ def start_video_rpc():
                     )
                 except Exception as exc:
                     logger.exception("capture_snapshot: failed for '%s'", name)
+                    sock.send_json({"ok": False, "error": str(exc)})
+
+            elif cmd == "capture_stereo_pair":
+                left = str(args.get("left") or "").strip()
+                right = str(args.get("right") or "").strip()
+                if not left or not right:
+                    sock.send_json({"ok": False, "error": "capture_stereo_pair requires left and right stream names"})
+                    continue
+                try:
+                    timeout_s = float(args.get("timeout_s", args.get("wait_s", 2.0)))
+                except Exception:
+                    timeout_s = 2.0
+                try:
+                    max_pair_delta_ms = float(args.get("max_pair_delta_ms", 50.0))
+                except Exception:
+                    max_pair_delta_ms = 50.0
+                try:
+                    pair = mgr.capture_stereo_pair(
+                        left,
+                        right,
+                        timeout_s=timeout_s,
+                        max_pair_delta_ms=max_pair_delta_ms,
+                    )
+                    sock.send_json(
+                        {
+                            "ok": True,
+                            "data": {
+                                "timestamp_source": pair.timestamp_source,
+                                "pair_delta_ms": pair.pair_delta_ms,
+                                "attempts": pair.attempts,
+                                "left": _snapshot_frame_payload(pair.left),
+                                "right": _snapshot_frame_payload(pair.right),
+                            },
+                        }
+                    )
+                except Exception as exc:
+                    logger.exception("capture_stereo_pair: failed for '%s'/'%s'", left, right)
                     sock.send_json({"ok": False, "error": str(exc)})
 
             # NEW: list all devices, shallow+caps

@@ -134,6 +134,21 @@ class SnapshotFrame:
     caps: str
     wall_ts: float
     monotonic_ts: float
+    seq: int = 0
+    source_pts_ns: int | None = None
+    source_dts_ns: int | None = None
+    source_duration_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class StereoSnapshotPair:
+    """A best-effort simultaneous onboard still-image pair."""
+
+    left: SnapshotFrame
+    right: SnapshotFrame
+    pair_delta_ms: float
+    timestamp_source: str
+    attempts: int = 1
 
 
 def _candidate_h264_sibling_patterns(dev_or_pattern: str) -> list[str]:
@@ -384,6 +399,21 @@ def _snapshot_stream_queue_part() -> str:
     return "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream"
 
 
+def _gst_time_to_ns(value: Any) -> int | None:
+    try:
+        numeric = int(value)
+    except Exception:
+        return None
+    if numeric < 0:
+        return None
+    try:
+        if numeric == int(Gst.CLOCK_TIME_NONE):
+            return None
+    except Exception:
+        pass
+    return numeric
+
+
 class GstStream:
     """A single streaming pipeline with lifecycle management."""
     def __init__(self, config: StreamConfig):
@@ -395,6 +425,8 @@ class GstStream:
         self._started_wall_ts: Optional[float] = None
         self._started_monotonic_ts: Optional[float] = None
         self._state_lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_seq = 0
 
     # ------------- Public ------------- #
     def start(self) -> None:
@@ -473,7 +505,7 @@ class GstStream:
             "snapshot_ready": self._snapshot_sink() is not None,
         }
 
-    def capture_snapshot(self, *, timeout_s: float = 1.5) -> SnapshotFrame:
+    def capture_snapshot(self, *, timeout_s: float = 1.5, fresh: bool = False) -> SnapshotFrame:
         """Return one JPEG still from the live onboard pipeline."""
 
         sink = self._snapshot_sink()
@@ -483,6 +515,11 @@ class GstStream:
         timeout_ns = int(max(0.0, float(timeout_s)) * Gst.SECOND)
         sample = None
         try:
+            if fresh:
+                while True:
+                    stale = sink.emit("try-pull-sample", 0)
+                    if stale is None:
+                        break
             sample = sink.emit("try-pull-sample", timeout_ns)
         except Exception as exc:
             raise GstError(f"Snapshot pull failed for '{self.config.name}': {exc}") from exc
@@ -492,6 +529,9 @@ class GstStream:
         buf = sample.get_buffer()
         if buf is None:
             raise GstError(f"Snapshot sample for '{self.config.name}' had no buffer")
+        source_pts_ns = _gst_time_to_ns(getattr(buf, "pts", None))
+        source_dts_ns = _gst_time_to_ns(getattr(buf, "dts", None))
+        source_duration_ns = _gst_time_to_ns(getattr(buf, "duration", None))
         size = int(buf.get_size())
         if size <= 0:
             raise GstError(f"Snapshot sample for '{self.config.name}' was empty")
@@ -503,6 +543,9 @@ class GstStream:
             raise GstError(f"Snapshot sample for '{self.config.name}' copied no bytes")
         caps = sample.get_caps()
         caps_text = caps.to_string() if caps is not None else ""
+        with self._snapshot_lock:
+            self._snapshot_seq += 1
+            seq = self._snapshot_seq
         return SnapshotFrame(
             stream=self.config.name,
             data=data,
@@ -510,6 +553,10 @@ class GstStream:
             caps=caps_text,
             wall_ts=time.time(),
             monotonic_ts=time.monotonic(),
+            seq=seq,
+            source_pts_ns=source_pts_ns,
+            source_dts_ns=source_dts_ns,
+            source_duration_ns=source_duration_ns,
         )
 
     # ------------- Internals ------------- #
@@ -863,6 +910,109 @@ class StreamManager:
         if not st:
             raise KeyError(f"No such stream: {name}")
         return st.capture_snapshot(timeout_s=timeout_s)
+
+    @staticmethod
+    def _capture_snapshot_pair_once(
+        left_stream: GstStream,
+        right_stream: GstStream,
+        *,
+        timeout_s: float,
+    ) -> tuple[SnapshotFrame, SnapshotFrame]:
+        start = threading.Event()
+        results: dict[str, SnapshotFrame] = {}
+        errors: dict[str, BaseException] = {}
+
+        def _worker(side: str, stream: GstStream) -> None:
+            try:
+                start.wait()
+                results[side] = stream.capture_snapshot(timeout_s=timeout_s, fresh=True)
+            except BaseException as exc:
+                errors[side] = exc
+
+        threads = [
+            threading.Thread(target=_worker, args=("left", left_stream), name="stereo-snapshot-left", daemon=True),
+            threading.Thread(target=_worker, args=("right", right_stream), name="stereo-snapshot-right", daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        start.set()
+        join_timeout = max(0.0, float(timeout_s)) + 0.25
+        for thread in threads:
+            thread.join(join_timeout)
+        alive = [thread.name for thread in threads if thread.is_alive()]
+        if alive:
+            raise TimeoutError(f"Timed out waiting for stereo snapshot workers: {', '.join(alive)}")
+        if errors:
+            side, exc = next(iter(errors.items()))
+            raise GstError(f"{side} stereo snapshot failed: {exc}") from exc
+        if "left" not in results or "right" not in results:
+            raise TimeoutError("Stereo snapshot workers returned no pair")
+        return results["left"], results["right"]
+
+    def capture_stereo_pair(
+        self,
+        left: str,
+        right: str,
+        *,
+        timeout_s: float = 2.0,
+        max_pair_delta_ms: float = 50.0,
+    ) -> StereoSnapshotPair:
+        """Capture a fresh left/right onboard JPEG pair with common-process timing."""
+
+        left_name = str(left or "").strip()
+        right_name = str(right or "").strip()
+        if not left_name or not right_name:
+            raise ValueError("left and right stream names are required")
+        if left_name == right_name:
+            raise ValueError("left and right streams must be different")
+        with self._lock:
+            left_stream = self._streams.get(left_name)
+            right_stream = self._streams.get(right_name)
+        if left_stream is None:
+            raise KeyError(f"No such stream: {left_name}")
+        if right_stream is None:
+            raise KeyError(f"No such stream: {right_name}")
+
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        max_delta_ms = max(0.0, float(max_pair_delta_ms))
+        attempts = 0
+        best: tuple[float, SnapshotFrame, SnapshotFrame] | None = None
+        last_error: BaseException | None = None
+        while True:
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0.0:
+                break
+            attempts += 1
+            try:
+                left_frame, right_frame = self._capture_snapshot_pair_once(
+                    left_stream,
+                    right_stream,
+                    timeout_s=remaining_s,
+                )
+            except BaseException as exc:
+                last_error = exc
+                break
+            delta_ms = abs(float(left_frame.monotonic_ts) - float(right_frame.monotonic_ts)) * 1000.0
+            if best is None or delta_ms < best[0]:
+                best = (delta_ms, left_frame, right_frame)
+            if delta_ms <= max_delta_ms:
+                return StereoSnapshotPair(
+                    left=left_frame,
+                    right=right_frame,
+                    pair_delta_ms=delta_ms,
+                    timestamp_source="rov_snapshot_appsink_fresh_monotonic",
+                    attempts=attempts,
+                )
+
+        if best is not None:
+            delta_ms, left_frame, right_frame = best
+            raise TimeoutError(
+                f"Could not capture stereo pair within {max_delta_ms:.1f} ms "
+                f"(best delta {delta_ms:.1f} ms across {attempts} attempt(s))"
+            )
+        if last_error is not None:
+            raise TimeoutError(f"Could not capture stereo pair: {last_error}") from last_error
+        raise TimeoutError(f"Could not capture stereo pair within {max(0.0, float(timeout_s)):.2f} s")
 
 
 if __name__ == "__main__":
