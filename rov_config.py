@@ -50,8 +50,8 @@ PILOT_TTL = 0.5  # seconds before we consider pilot stale
 # Control mixing mode:
 #   - "simple_groups": bring-up mode (surge drives all horizontals, heave drives all verticals)
 #   - "six_dof": full mixer (surge/sway/yaw on horizontals; heave/pitch/roll on verticals)
-#   - "geometric": physical-geometry least-squares mixer; set back to "six_dof" if testing is poor
-CONTROL_MIX_MODE = "geometric"
+#   - "geometric": physical-geometry least-squares mixer; use only after mapping is proven
+CONTROL_MIX_MODE = "simple_groups"
 
 # Geometric mixer model.
 # Coordinates are vehicle-relative, measured from the approximate frame center:

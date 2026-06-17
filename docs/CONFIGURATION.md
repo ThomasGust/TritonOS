@@ -104,14 +104,16 @@ Core values:
 ```python
 CONTROL_RATE_HZ = 50.0
 PILOT_TTL = 0.5
-CONTROL_MIX_MODE = "six_dof"
+CONTROL_MIX_MODE = "simple_groups"
 POWER_SCALE = 1.0
 THRUSTER_MAX_ABS = 1.0
 MIX_OUTPUT_DEADBAND = 0.05
 ```
 
-Use `CONTROL_MIX_MODE = "simple_groups"` only for bring-up. Normal operation
-should use `six_dof`.
+Use `CONTROL_MIX_MODE = "simple_groups"` for bring-up. In this mode surge drives
+only the horizontal thruster group and heave drives only the vertical thruster
+group. Normal operation should use `six_dof` after logical channel names and
+signs are proven.
 
 Pilot axis mapping:
 
