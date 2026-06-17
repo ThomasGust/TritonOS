@@ -1,5 +1,14 @@
 # rov_config.py
 """Runtime configuration for the onboard ROV process.
+single hfl turned right
+single hfr turned left
+single hrl turned left
+simgle hrr very weak turn right
+left pair moved forward and maybe to the right
+right pair moved forward and to the left
+front pair straight forward
+rear pair turned left and kind of went forward
+all forward hook left
 
 This file is intentionally plain Python because the vehicle needs to read it
 without a separate config parser, and the management RPC can safely edit a

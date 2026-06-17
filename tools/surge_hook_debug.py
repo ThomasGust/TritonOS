@@ -104,14 +104,49 @@ def _neutral_command(names: Iterable[str]) -> Dict[str, float]:
     return {name: 0.0 for name in names}
 
 
-def _print_config(cm: ChannelMap, rev: Mapping[object, bool]) -> None:
+def _apply_profile(channels: Dict[str, int], rev: Dict[object, bool], profile: str) -> List[str]:
+    """Apply a temporary diagnostic profile without changing rov_config.py."""
+
+    profile = str(profile or "current").strip().lower()
+    notes: List[str] = []
+    if profile == "current":
+        return notes
+    if profile in ("swap_rear", "rear_swapped"):
+        channels["H_RL"], channels["H_RR"] = channels["H_RR"], channels["H_RL"]
+        notes.append("swapped H_RL/H_RR PWM channels")
+        return notes
+    if profile in ("flip_rear_signs", "rear_signs_flipped"):
+        rev["H_RL"] = not bool(rev.get("H_RL", False))
+        rev["H_RR"] = not bool(rev.get("H_RR", False))
+        notes.append("toggled H_RL/H_RR reversed flags")
+        return notes
+    if profile in ("recent_debug", "swap_rear_and_flip_signs"):
+        channels["H_RL"], channels["H_RR"] = channels["H_RR"], channels["H_RL"]
+        rev["H_RL"] = not bool(rev.get("H_RL", False))
+        rev["H_RR"] = not bool(rev.get("H_RR", False))
+        notes.append("swapped H_RL/H_RR PWM channels")
+        notes.append("toggled H_RL/H_RR reversed flags")
+        return notes
+    raise SystemExit(
+        "unknown --profile "
+        f"{profile!r}; expected current, swap_rear, flip_rear_signs, or recent_debug"
+    )
+
+
+def _print_config(channels: Mapping[str, int], rev: Mapping[object, bool], notes: Sequence[str]) -> None:
     print("=== surge hook debug config ===")
+    if notes:
+        print("temporary overrides:")
+        for note in notes:
+            print(f"  - {note}")
+    else:
+        print("temporary overrides: none")
     print(f"mix_mode: {getattr(cfg, 'CONTROL_MIX_MODE', '<missing>')}")
     print(f"axis_surge: {getattr(cfg, 'AXIS_SURGE', '<missing>')} invert={getattr(cfg, 'AXIS_SURGE_INVERT', '<missing>')}")
     print(f"axis_yaw:   {getattr(cfg, 'AXIS_YAW', '<missing>')} invert={getattr(cfg, 'AXIS_YAW_INVERT', '<missing>')}")
     print("horizontal thrusters:")
     for name in HORIZONTAL_THRUSTERS:
-        ch = cm.thrusters.get(name)
+        ch = channels.get(name)
         reversed_v = bool(rev.get(name, False) or rev.get(ch, False) or rev.get(str(ch), False))
         print(f"  {name}: pwm={ch} reversed={reversed_v}")
     print("================================")
@@ -157,6 +192,14 @@ def main() -> None:
     ap.add_argument("--seconds", type=float, default=1.2, help="Seconds to hold each pulse.")
     ap.add_argument("--off", type=float, default=1.0, help="Neutral time between pulses.")
     ap.add_argument("--step", action="append", default=[], help="Run only this step; may be repeated.")
+    ap.add_argument(
+        "--profile",
+        default="current",
+        help=(
+            "Temporary rear-thruster override: current, swap_rear, "
+            "flip_rear_signs, or recent_debug."
+        ),
+    )
     ap.add_argument("--list", action="store_true", help="List available steps and exit.")
     ap.add_argument("--yes", action="store_true", help="Do not prompt before arming or each pulse.")
     ap.add_argument("--debug-pwm", action="store_true", help="Enable verbose ThrustWriter PWM mapping logs.")
@@ -171,14 +214,16 @@ def main() -> None:
         return
 
     cm = ChannelMap.from_config(cfg)
+    channels = dict(cm.thrusters)
     rev = _reversal_map()
-    _print_config(cm, rev)
+    override_notes = _apply_profile(channels, rev, str(args.profile))
+    _print_config(channels, rev, override_notes)
     print(f"pulse: power={power:.2f} seconds={float(args.seconds):.1f} off={float(args.off):.1f}")
     print("Stop the normal ROV service before running this tool. Keep power low and the vehicle clear.")
     _wait_for_enter("Press Enter to arm PWM and start the selected steps, or Ctrl+C to abort. ", assume_yes=bool(args.yes))
 
     tw = ThrustWriter(
-        thruster_channels=dict(cm.thrusters),
+        thruster_channels=channels,
         cfg=_thrust_config(),
         reversed_map=rev if rev else None,
         debug=bool(args.debug_pwm),
