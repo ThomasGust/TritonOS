@@ -51,7 +51,7 @@ PILOT_TTL = 0.5  # seconds before we consider pilot stale
 #   - "simple_groups": bring-up mode (surge drives all horizontals, heave drives all verticals)
 #   - "six_dof": full mixer (surge/sway/yaw on horizontals; heave/pitch/roll on verticals)
 #   - "geometric": physical-geometry least-squares mixer; use only after mapping is proven
-CONTROL_MIX_MODE = "simple_groups"
+CONTROL_MIX_MODE = "geometric"
 
 # Geometric mixer model.
 # Coordinates are vehicle-relative, measured from the approximate frame center:
@@ -474,57 +474,20 @@ PWM_DIRECT_OE_ACTIVE_LOW = True
 #
 # Physical Navigator channel numbering (1..16), same numbering as native_motor_test.
 #
-# Your wiring:
-#   Lights: physical channel 5
-#   Motors 0,1,2,3: physical channels 1,2,3,4
-#   Motors 5,6,7,8: physical channels 6,7,8,9
-#
-# Your desired grouping behavior:
-#   Horizontals should be motors: 7,5,1,6  => channels 8,6,2,7
-#   Verticals should be motors:   3,2,0,8  => channels 4,3,1,9
+# Active runtime map restored to the June 10 default snapshot.
 #
 # IMPORTANT:
 #   Thruster naming is functional (H_FL/H_FR/H_RL/H_RR and V_FL/V_FR/V_RL/V_RR).
 #   If yaw/sway directions feel wrong later, you’ll either:
 #     - swap which physical motor is assigned to which name here, or
 #     - set THRUSTER_REVERSED for that named thruster.
-"""
 CHANNEL_MAP = {
     "thrusters": {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
-        "H_FL": 8,  # motor7 -> physical channel 8
-        "H_FR": 6,  # motor5 -> physical channel 6
-        "H_RL": 7,  # motor6 -> physical channel 7
-        "H_RR": 2,  # motor1 -> physical channel 2
-
-        # Verticals (heave/pitch/roll)
-        # Your wiring (physical Navigator channels):
-        #   V_FL (front-left)  = 3
-        #   V_FR (front-right) = 4
-        #   V_RL (rear-left)   = 9
-        #   V_RR (rear-right)  = 1
-        "V_FL": 3,
-        "V_FR": 4,
-        "V_RL": 9,
-        "V_RR": 1,
-    },
-    "aux": {
-        "lights": 5,         # physical channel 5
-        "wrist_rotate": 10,  # physical channel 10 (T200 wrist rotate motor)
-        "gripper_left": 12,  # physical channel 12 (differential servo)
-        "gripper_right": 13, # physical channel 13 (differential servo)
-    },
-}
-"""
-
-
-CHANNEL_MAP = {
-    "thrusters": {
-        # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
-        "H_FL": 12,  # motor7 -> physical channel 8
-        "H_FR": 2,  # motor5 -> physical channel 6
-        "H_RL": 3,  # motor6 -> physical channel 7
-        "H_RR": 14,  # motor1 -> physical channel 2
+        "H_FL": 12,
+        "H_FR": 2,
+        "H_RL": 3,
+        "H_RR": 14,
 
         # Verticals (heave/pitch/roll)
         # Your wiring (physical Navigator channels):

@@ -104,16 +104,16 @@ Core values:
 ```python
 CONTROL_RATE_HZ = 50.0
 PILOT_TTL = 0.5
-CONTROL_MIX_MODE = "simple_groups"
+CONTROL_MIX_MODE = "geometric"
 POWER_SCALE = 1.0
 THRUSTER_MAX_ABS = 1.0
 MIX_OUTPUT_DEADBAND = 0.05
 ```
 
-Use `CONTROL_MIX_MODE = "simple_groups"` for bring-up. In this mode surge drives
-only the horizontal thruster group and heave drives only the vertical thruster
-group. Normal operation should use `six_dof` after logical channel names and
-signs are proven.
+The restored June 10 runtime snapshot uses `CONTROL_MIX_MODE = "geometric"`.
+This mixer solves coupled vehicle motion from measured thruster geometry, so
+use the TritonPilot Thrusters tab to compare `cmd_final`, raw thrusters, and
+final horizontal/vertical outputs while validating signs.
 
 Pilot axis mapping:
 
