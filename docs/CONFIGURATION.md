@@ -117,9 +117,9 @@ Pilot axis mapping:
 
 ```python
 AXIS_SURGE = "ly"
-AXIS_SWAY = "rx"
+AXIS_SWAY = "lx"
 AXIS_HEAVE = "ry"
-AXIS_YAW = "lx"
+AXIS_YAW = "rx"
 AXIS_PITCH = "dpad_y"
 AXIS_ROLL = "dpad_x"
 ```

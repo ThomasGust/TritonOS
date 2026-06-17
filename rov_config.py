@@ -95,17 +95,17 @@ THRUSTER_GEOMETRY = {
 # Controller axis mapping (PilotFrame.axes fields).
 # Desired mapping:
 #   left stick Y (ly) -> surge
-#   left stick X (lx) -> pitch
+#   left stick X (lx) -> sway / crab
 #   right stick Y (ry) -> heave
-#   right stick X (rx) -> sway
+#   right stick X (rx) -> yaw
 #
 # Notes:
 #   - Set AXIS_YAW = "none" to disable yaw if you don't want turning.
 #   - AXIS_PITCH/AXIS_ROLL override D-pad pitch/roll when set.
 AXIS_SURGE = "ly"
 AXIS_HEAVE = "ry"
-AXIS_SWAY  = "rx"
-AXIS_YAW   = "lx"
+AXIS_SWAY  = "lx"
+AXIS_YAW   = "rx"
 
 # Put pitch/roll somewhere “secondary” for now:
 AXIS_PITCH = "dpad_y"   # or "none" to fully disable pitch
