@@ -11,7 +11,7 @@ def _load_gst_streamer(monkeypatch):
     fake_gi.require_version = lambda *args, **kwargs: None
 
     fake_repo = types.ModuleType("gi.repository")
-    fake_gst = types.SimpleNamespace(init=lambda *args, **kwargs: None)
+    fake_gst = types.SimpleNamespace(init=lambda *args, **kwargs: None, SECOND=1_000_000_000)
     fake_gobject = types.SimpleNamespace(threads_init=lambda *args, **kwargs: None)
     fake_repo.Gst = fake_gst
     fake_repo.GObject = fake_gobject
@@ -63,6 +63,10 @@ def test_h264_pipeline_defaults_to_stable_nonleaky_sender_path(monkeypatch):
     assert desc.index("h264parse") < desc.index("rtph264pay")
     assert "multiudpsink" in desc
     assert "clients=192.168.1.1:5000" in desc
+    assert "tee name=snapshot_tee" in desc
+    assert "appsink name=snapshot_sink" in desc
+    assert "decodebin" in desc
+    assert "jpegenc quality=90" in desc
 
 
 def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):
@@ -83,6 +87,82 @@ def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):
     assert "queue name=q_capture max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
     assert "queue name=q_pay max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
     assert desc.index("queue name=q_pay") < desc.index("rtph264pay")
+
+
+def test_onboard_snapshot_branch_can_be_disabled(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+    cfg = gst_streamer.StreamConfig(
+        name="Primary Camera",
+        device="/dev/video2",
+        width=1920,
+        height=1080,
+        fps=30,
+        video_format="h264",
+        host="192.168.1.1",
+        extra={"rov_snapshot_enabled": False},
+    )
+
+    desc = _build_description(gst_streamer, monkeypatch, cfg)
+
+    assert "tee name=snapshot_tee" not in desc
+    assert "appsink name=snapshot_sink" not in desc
+
+
+def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+
+    class _FakeBuffer:
+        def __init__(self, data):
+            self.data = bytes(data)
+
+        def get_size(self):
+            return len(self.data)
+
+        def extract_dup(self, offset, size):
+            return self.data[offset : offset + size]
+
+    class _FakeCaps:
+        def to_string(self):
+            return "image/jpeg,width=32,height=24"
+
+    class _FakeSample:
+        def __init__(self, data):
+            self._buffer = _FakeBuffer(data)
+
+        def get_buffer(self):
+            return self._buffer
+
+        def get_caps(self):
+            return _FakeCaps()
+
+    class _FakeSink:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, signal_name, timeout_ns):
+            self.calls.append((signal_name, timeout_ns))
+            return _FakeSample(b"\xff\xd8snapshot\xff\xd9")
+
+    class _FakePipeline:
+        def __init__(self, sink):
+            self.sink = sink
+
+        def get_by_name(self, name):
+            return self.sink if name == "snapshot_sink" else None
+
+    sink = _FakeSink()
+    stream = gst_streamer.GstStream(
+        gst_streamer.StreamConfig(name="Primary Camera", video_format="h264", host="192.168.1.1")
+    )
+    stream._pipeline = _FakePipeline(sink)
+
+    frame = stream.capture_snapshot(timeout_s=0.25)
+
+    assert frame.stream == "Primary Camera"
+    assert frame.mime_type == "image/jpeg"
+    assert frame.caps == "image/jpeg,width=32,height=24"
+    assert frame.data == b"\xff\xd8snapshot\xff\xd9"
+    assert sink.calls == [("try-pull-sample", 250_000_000)]
 
 
 def test_sender_low_latency_options_can_be_disabled_explicitly(monkeypatch):

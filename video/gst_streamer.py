@@ -124,6 +124,18 @@ class GstError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class SnapshotFrame:
+    """One onboard still image captured from a live stream pipeline."""
+
+    stream: str
+    data: bytes
+    mime_type: str
+    caps: str
+    wall_ts: float
+    monotonic_ts: float
+
+
 def _candidate_h264_sibling_patterns(dev_or_pattern: str) -> list[str]:
     """Return likely sibling node patterns for UVC cameras where H.264 lives on a non-zero video-index."""
     s = (dev_or_pattern or "").strip()
@@ -323,6 +335,54 @@ def _only_udp_mirrors_changed(old: Dict[str, Any], new: Dict[str, Any]) -> bool:
     return _extra_without_udp_mirrors(old) == _extra_without_udp_mirrors(new)
 
 
+def _snapshot_enabled(cfg: StreamConfig) -> bool:
+    return _extra_bool(cfg.extra, "rov_snapshot_enabled", "snapshot_enabled", default=True)
+
+
+def _snapshot_fps(cfg: StreamConfig) -> int:
+    return _extra_int(cfg.extra, "rov_snapshot_fps", "snapshot_fps", default=4, minimum=1)
+
+
+def _snapshot_quality(cfg: StreamConfig) -> int:
+    return _extra_int(cfg.extra, "rov_snapshot_jpeg_quality", "snapshot_jpeg_quality", default=90, minimum=1)
+
+
+def _snapshot_appsink_part() -> str:
+    return "appsink name=snapshot_sink emit-signals=false sync=false max-buffers=1 drop=true"
+
+
+def _snapshot_raw_to_jpeg_parts(cfg: StreamConfig) -> list[str]:
+    fps = _snapshot_fps(cfg)
+    quality = min(100, _snapshot_quality(cfg))
+    return [
+        "videoconvert",
+        "videorate drop-only=true",
+        f"video/x-raw,framerate={fps}/1",
+        f"jpegenc quality={quality}",
+        _snapshot_appsink_part(),
+    ]
+
+
+def _snapshot_branch_parts(cfg: StreamConfig) -> list[str]:
+    vf = cfg.video_format.lower()
+    queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
+    if vf == "mjpeg":
+        return [queue, _snapshot_appsink_part()]
+    if vf == "h264":
+        return [
+            queue,
+            "h264parse config-interval=-1 disable-passthrough=true",
+            "decodebin",
+            *_snapshot_raw_to_jpeg_parts(cfg),
+        ]
+    if vf == "raw":
+        return [queue, *_snapshot_raw_to_jpeg_parts(cfg)]
+    return []
+
+
+def _snapshot_stream_queue_part() -> str:
+    return "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream"
+
 
 class GstStream:
     """A single streaming pipeline with lifecycle management."""
@@ -410,7 +470,47 @@ class GstStream:
             "started_wall_ts": self._started_wall_ts,
             "started_monotonic_ts": self._started_monotonic_ts,
             "last_error": self._last_error,
+            "snapshot_ready": self._snapshot_sink() is not None,
         }
+
+    def capture_snapshot(self, *, timeout_s: float = 1.5) -> SnapshotFrame:
+        """Return one JPEG still from the live onboard pipeline."""
+
+        sink = self._snapshot_sink()
+        if sink is None:
+            raise GstError(f"Stream '{self.config.name}' has no onboard snapshot sink")
+
+        timeout_ns = int(max(0.0, float(timeout_s)) * Gst.SECOND)
+        sample = None
+        try:
+            sample = sink.emit("try-pull-sample", timeout_ns)
+        except Exception as exc:
+            raise GstError(f"Snapshot pull failed for '{self.config.name}': {exc}") from exc
+        if sample is None:
+            raise TimeoutError(f"No onboard snapshot frame available for '{self.config.name}'")
+
+        buf = sample.get_buffer()
+        if buf is None:
+            raise GstError(f"Snapshot sample for '{self.config.name}' had no buffer")
+        size = int(buf.get_size())
+        if size <= 0:
+            raise GstError(f"Snapshot sample for '{self.config.name}' was empty")
+        try:
+            data = bytes(buf.extract_dup(0, size))
+        except Exception as exc:
+            raise GstError(f"Could not copy snapshot buffer for '{self.config.name}': {exc}") from exc
+        if not data:
+            raise GstError(f"Snapshot sample for '{self.config.name}' copied no bytes")
+        caps = sample.get_caps()
+        caps_text = caps.to_string() if caps is not None else ""
+        return SnapshotFrame(
+            stream=self.config.name,
+            data=data,
+            mime_type="image/jpeg",
+            caps=caps_text,
+            wall_ts=time.time(),
+            monotonic_ts=time.monotonic(),
+        )
 
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
@@ -468,6 +568,18 @@ class GstStream:
         if ret == Gst.StateChangeReturn.FAILURE:
             raise GstError(f"Failed to set pipeline state to {state}")
 
+    def _snapshot_sink(self) -> Optional[Gst.Element]:
+        pipeline = self._pipeline
+        if pipeline is None:
+            return None
+        try:
+            sink = pipeline.get_by_name("snapshot_sink")
+            if sink is not None:
+                return sink
+        except Exception:
+            pass
+        return self._find_element(pipeline, "appsink")
+
     # ------------- Pipeline build ------------- #
     def _build_pipeline(self, cfg: StreamConfig) -> Gst.Pipeline:
         if cfg.transport not in {"udp", "tcp"}:
@@ -475,7 +587,8 @@ class GstStream:
         if cfg.transport == "udp" and not cfg.host:
             raise ValueError("host is required for UDP transport")
 
-        parts = []
+        source_parts = []
+        stream_parts = []
         vf = cfg.video_format.lower()
         dev = resolve_v4l2_device(cfg.device, prefer_h264=(vf == "h264"))
         rtp_mtu = max(576, int(cfg.rtp_mtu))
@@ -489,16 +602,16 @@ class GstStream:
                 logger=logger,
             )
 
-        parts.append(_v4l2src_part(dev, cfg))
+        source_parts.append(_v4l2src_part(dev, cfg))
 
         if vf == "mjpeg":
             # Camera outputs MJPEG.
             # Either send as RTP/JPEG or transcode to H.264 (software, x264enc).
-            parts.append(f"image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
-            parts += _sender_queue_parts(cfg, "q_capture")
+            source_parts.append(f"image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
+            source_parts += _sender_queue_parts(cfg, "q_capture")
             if (cfg.encode or "").lower() == "h264":
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
-                parts += [
+                stream_parts += [
                     "jpegdec",
                     "videoconvert",
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
@@ -509,22 +622,22 @@ class GstStream:
                     f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             else:
-                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
+                stream_parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
         elif vf == "h264":
             # Camera outputs H.264
             # Be permissive about stream-format; some cameras output byte-stream.
-            parts.append(f"video/x-h264,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1,alignment=au")
-            parts += _sender_queue_parts(cfg, "q_capture")
-            parts.append("h264parse config-interval=-1 disable-passthrough=true")
-            parts += _sender_queue_parts(cfg, "q_pay")
-            parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
+            source_parts.append(f"video/x-h264,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1,alignment=au")
+            source_parts += _sender_queue_parts(cfg, "q_capture")
+            stream_parts.append("h264parse config-interval=-1 disable-passthrough=true")
+            stream_parts += _sender_queue_parts(cfg, "q_pay")
+            stream_parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
         elif vf == "raw":
             # Camera outputs raw â†’ must encode
             if cfg.encode == "h264":
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
-                parts += [
-                    f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
-                    *_sender_queue_parts(cfg, "q_capture"),
+                source_parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
+                source_parts += _sender_queue_parts(cfg, "q_capture")
+                stream_parts += [
                     "videoconvert",
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
                     *_sender_queue_parts(cfg, "q_encode"),
@@ -534,10 +647,10 @@ class GstStream:
                     f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             elif cfg.encode == "mjpeg":
-                parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
-                parts += _sender_queue_parts(cfg, "q_capture")
-                parts.append("jpegenc")
-                parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
+                source_parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
+                source_parts += _sender_queue_parts(cfg, "q_capture")
+                stream_parts.append("jpegenc")
+                stream_parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
             else:
                 raise ValueError("For video_format='raw', encode must be 'h264' or 'mjpeg'")
         else:
@@ -557,11 +670,24 @@ class GstStream:
             ]
             if cfg.bind_address:
                 props.append(f"bind-address={cfg.bind_address}")
-            parts.append("multiudpsink " + " ".join(props))
+            stream_parts.append("multiudpsink " + " ".join(props))
         else:
-            parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
+            stream_parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
 
-        desc = " ! ".join(parts)
+        if _snapshot_enabled(cfg):
+            tee_name = "snapshot_tee"
+            snapshot_parts = _snapshot_branch_parts(cfg)
+            if not snapshot_parts:
+                desc = " ! ".join(source_parts + stream_parts)
+            else:
+                prefix = " ! ".join(source_parts + [f"tee name={tee_name}"])
+                main_parts = [_snapshot_stream_queue_part(), *stream_parts]
+                desc = (
+                    f"{prefix} {tee_name}. ! {' ! '.join(main_parts)} "
+                    f"{tee_name}. ! {' ! '.join(snapshot_parts)}"
+                )
+        else:
+            desc = " ! ".join(source_parts + stream_parts)
         logger.debug("Pipeline(%s): %s", cfg.name, desc)
         try:
             pipeline = Gst.parse_launch(desc)
@@ -729,6 +855,14 @@ class StreamManager:
         if not st:
             raise KeyError(f"No such stream: {name}")
         st.update(**updates)
+
+    def capture_snapshot(self, name: str, *, timeout_s: float = 1.5) -> SnapshotFrame:
+        """Capture one onboard JPEG snapshot from a running stream."""
+
+        st = self.get_stream(name)
+        if not st:
+            raise KeyError(f"No such stream: {name}")
+        return st.capture_snapshot(timeout_s=timeout_s)
 
 
 if __name__ == "__main__":

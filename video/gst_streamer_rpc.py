@@ -7,6 +7,7 @@ Run on the Pi:
 """
 
 import argparse
+import base64
 import json
 import logging
 import traceback
@@ -740,6 +741,38 @@ def start_video_rpc():
 
             elif cmd == "list_stream_status":
                 sock.send_json({"ok": True, "data": mgr.list_stream_status()})
+
+            elif cmd == "capture_snapshot":
+                name = str(args.get("name") or "").strip()
+                if not name:
+                    sock.send_json({"ok": False, "error": "capture_snapshot requires stream name"})
+                    continue
+                try:
+                    timeout_s = float(args.get("timeout_s", 1.5))
+                except Exception:
+                    timeout_s = 1.5
+                try:
+                    frame = mgr.capture_snapshot(name, timeout_s=timeout_s)
+                    payload = base64.b64encode(frame.data).decode("ascii")
+                    sock.send_json(
+                        {
+                            "ok": True,
+                            "data": {
+                                "name": frame.stream,
+                                "mime_type": frame.mime_type,
+                                "extension": "jpg",
+                                "encoding": "base64",
+                                "data_b64": payload,
+                                "byte_count": len(frame.data),
+                                "caps": frame.caps,
+                                "wall_ts": frame.wall_ts,
+                                "monotonic_ts": frame.monotonic_ts,
+                            },
+                        }
+                    )
+                except Exception as exc:
+                    logger.exception("capture_snapshot: failed for '%s'", name)
+                    sock.send_json({"ok": False, "error": str(exc)})
 
             # NEW: list all devices, shallow+caps
             elif cmd == "list_devices":
