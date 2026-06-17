@@ -61,6 +61,8 @@ def test_h264_pipeline_defaults_to_stable_nonleaky_sender_path(monkeypatch):
     assert "h264parse config-interval=-1 disable-passthrough=true" in desc
     assert "queue name=" not in desc
     assert desc.index("h264parse") < desc.index("rtph264pay")
+    assert "multiudpsink" in desc
+    assert "clients=192.168.1.1:5000" in desc
 
 
 def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):
@@ -125,3 +127,43 @@ def test_udp_mirror_ports_use_multiudpsink(monkeypatch):
     assert "clients=192.168.1.1:5000,192.168.1.1:6000" in desc
     assert "udpsink host=192.168.1.1 port=5000" not in desc
 
+
+def test_udp_mirror_port_changes_are_live_updates(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+    old = gst_streamer.StreamConfig(
+        name="Primary Camera",
+        device="/dev/video2",
+        width=1920,
+        height=1080,
+        fps=30,
+        video_format="h264",
+        host="192.168.1.1",
+        port=5000,
+        extra={"sender_leaky_queues": True},
+    )
+    new = old.clone_with_updates(extra={"sender_leaky_queues": True, "udp_mirror_ports": [61000]})
+
+    live, changes = gst_streamer.GstStream._is_live_update(old, new)
+
+    assert live is True
+    assert set(changes) == {"extra"}
+
+
+def test_non_mirror_extra_changes_still_rebuild(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+    old = gst_streamer.StreamConfig(
+        name="Primary Camera",
+        device="/dev/video2",
+        width=1920,
+        height=1080,
+        fps=30,
+        video_format="h264",
+        host="192.168.1.1",
+        extra={"sender_leaky_queues": True},
+    )
+    new = old.clone_with_updates(extra={"sender_leaky_queues": False})
+
+    live, changes = gst_streamer.GstStream._is_live_update(old, new)
+
+    assert live is False
+    assert set(changes) == {"extra"}

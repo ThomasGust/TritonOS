@@ -308,6 +308,21 @@ def _udp_destination_ports(cfg: StreamConfig) -> list[int]:
     return ports
 
 
+def _udp_clients(cfg: StreamConfig) -> str:
+    return ",".join(f"{cfg.host}:{port}" for port in _udp_destination_ports(cfg))
+
+
+def _extra_without_udp_mirrors(extra: Dict[str, Any]) -> Dict[str, Any]:
+    stripped = dict(extra or {})
+    stripped.pop("udp_mirror_ports", None)
+    stripped.pop("mirror_udp_ports", None)
+    return stripped
+
+
+def _only_udp_mirrors_changed(old: Dict[str, Any], new: Dict[str, Any]) -> bool:
+    return _extra_without_udp_mirrors(old) == _extra_without_udp_mirrors(new)
+
+
 
 class GstStream:
     """A single streaming pipeline with lifecycle management."""
@@ -534,25 +549,15 @@ class GstStream:
             # system, GStreamer will error and the stream will fail to start.
             sync_prop = f"sync={'true' if cfg.sync else 'false'}"
             udp_buffer = f"buffer-size={max(0, int(cfg.udp_buffer_size))}"
-            destination_ports = _udp_destination_ports(cfg)
-            if len(destination_ports) > 1:
-                clients = ",".join(f"{cfg.host}:{port}" for port in destination_ports)
-                props = [
-                    f"clients={clients}",
-                    udp_buffer,
-                    sync_prop,
-                    "async=false",
-                ]
-                if cfg.bind_address:
-                    props.append(f"bind-address={cfg.bind_address}")
-                parts.append("multiudpsink " + " ".join(props))
-            elif cfg.bind_address:
-                parts.append(
-                    f"udpsink host={cfg.host} port={cfg.port} bind-address={cfg.bind_address} "
-                    f"{udp_buffer} {sync_prop} async=false"
-                )
-            else:
-                parts.append(f"udpsink host={cfg.host} port={cfg.port} {udp_buffer} {sync_prop} async=false")
+            props = [
+                f"clients={_udp_clients(cfg)}",
+                udp_buffer,
+                sync_prop,
+                "async=false",
+            ]
+            if cfg.bind_address:
+                props.append(f"bind-address={cfg.bind_address}")
+            parts.append("multiudpsink " + " ".join(props))
         else:
             parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
 
@@ -601,15 +606,25 @@ class GstStream:
             if ov != nv:
                 changes[f] = (ov, nv)
 
-        # allow live updates only for a few settings
-        live_keys = {"host", "port", "h264_bitrate"}
+        live_keys = {"host", "port", "h264_bitrate", "extra"}
         if changes and all(k in live_keys for k in changes.keys()):
+            if "extra" in changes and not _only_udp_mirrors_changed(old.extra, new.extra):
+                return False, changes
             return True, changes
         return False, changes
 
     def _apply_live_updates(self, cfg: StreamConfig) -> None:
         assert self._pipeline is not None
-        udpsink = self._find_element(self._pipeline, "udpsink")
+        multiudpsink = self._find_element(self._pipeline, "multiudpsink")
+        if multiudpsink:
+            try:
+                clients = _udp_clients(cfg)
+                multiudpsink.set_property("clients", clients)
+                logger.info("Updated multiudpsink clients -> %s", clients)
+            except Exception as e:
+                logger.warning("Failed to live-set multiudpsink clients: %s", e)
+
+        udpsink = None if multiudpsink else self._find_element(self._pipeline, "udpsink")
         if udpsink:
             if self.config.host != cfg.host:
                 try:
