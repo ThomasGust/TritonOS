@@ -46,7 +46,7 @@ def _build_description(module, monkeypatch, cfg):
     return captured["desc"]
 
 
-def test_h264_pipeline_uses_capture_timestamps_and_leaky_sender_queues(monkeypatch):
+def test_h264_pipeline_defaults_to_stable_nonleaky_sender_path(monkeypatch):
     gst_streamer = _load_gst_streamer(monkeypatch)
     cfg = gst_streamer.StreamConfig(
         name="Primary Camera",
@@ -61,13 +61,32 @@ def test_h264_pipeline_uses_capture_timestamps_and_leaky_sender_queues(monkeypat
     desc = _build_description(gst_streamer, monkeypatch, cfg)
 
     assert "v4l2src device=/dev/video2 do-timestamp=true" in desc
-    assert "queue name=q_capture max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
     assert "h264parse config-interval=-1 disable-passthrough=true" in desc
+    assert "queue name=" not in desc
+    assert desc.index("h264parse") < desc.index("rtph264pay")
+
+
+def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+    cfg = gst_streamer.StreamConfig(
+        name="Primary Camera",
+        device="/dev/video2",
+        width=1920,
+        height=1080,
+        fps=30,
+        video_format="h264",
+        host="192.168.1.1",
+        extra={"sender_leaky_queues": True},
+    )
+
+    desc = _build_description(gst_streamer, monkeypatch, cfg)
+
+    assert "queue name=q_capture max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
     assert "queue name=q_pay max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
     assert desc.index("queue name=q_pay") < desc.index("rtph264pay")
 
 
-def test_sender_low_latency_options_can_be_disabled(monkeypatch):
+def test_sender_low_latency_options_can_be_disabled_explicitly(monkeypatch):
     gst_streamer = _load_gst_streamer(monkeypatch)
     cfg = gst_streamer.StreamConfig(
         name="Primary Camera",

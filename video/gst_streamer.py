@@ -294,9 +294,9 @@ def _v4l2src_part(dev: str, cfg: StreamConfig) -> str:
 
 
 def _sender_queue_parts(cfg: StreamConfig, name: str) -> list[str]:
-    """Return a one-frame leaky queue that sheds stale video instead of buffering it."""
+    """Return optional leaky sender queues for explicit low-latency profiles."""
 
-    if not _extra_bool(cfg.extra, "sender_leaky_queues", "leaky_queues", default=True):
+    if not _extra_bool(cfg.extra, "sender_leaky_queues", "leaky_queues", default=False):
         return []
     buffers = _extra_int(cfg.extra, "sender_queue_max_buffers", default=1, minimum=1)
     bytes_ = _extra_int(cfg.extra, "sender_queue_max_bytes", default=0, minimum=0)
