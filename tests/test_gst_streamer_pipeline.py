@@ -131,6 +131,7 @@ def test_capture_ring_branch_is_opt_in_and_leaky(monkeypatch):
     assert "tee name=capture_t" in desc
     assert "capture_t." in desc
     assert "queue name=q_capture_ring max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
+    assert "openh264dec" in desc
     assert "videorate drop-only=true" in desc
     assert "framerate=2/1" in desc
     assert "pngenc" in desc

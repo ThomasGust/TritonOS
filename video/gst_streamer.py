@@ -355,6 +355,16 @@ def _capture_ring_history_size(cfg: StreamConfig) -> int:
     )
 
 
+def _capture_ring_h264_decoder(cfg: StreamConfig) -> str:
+    decoder = _extra_str(
+        cfg.extra,
+        "capture_ring_h264_decoder",
+        "stereo_capture_ring_h264_decoder",
+        default="openh264dec",
+    )
+    return decoder or "openh264dec"
+
+
 def _capture_ring_branch(cfg: StreamConfig, source_kind: str) -> str:
     """Return a passive latest-frame PNG appsink branch for an upstream tee."""
 
@@ -368,7 +378,7 @@ def _capture_ring_branch(cfg: StreamConfig, source_kind: str) -> str:
     ]
     kind = str(source_kind or "").lower()
     if kind == "h264":
-        branch += ["!", "decodebin"]
+        branch += ["!", _capture_ring_h264_decoder(cfg)]
     elif kind == "mjpeg":
         branch += ["!", "jpegdec"]
     branch += [
