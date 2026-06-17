@@ -121,6 +121,7 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
             return len(self.data)
 
         def extract_dup(self, offset, size):
+            copy_started["value"] = True
             return self.data[offset : offset + size]
 
     class _FakeCaps:
@@ -153,10 +154,12 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
             return self.sink if name == "snapshot_sink" else None
 
     sink = _FakeSink()
+    copy_started = {"value": False}
     stream = gst_streamer.GstStream(
         gst_streamer.StreamConfig(name="Primary Camera", video_format="h264", host="192.168.1.1")
     )
     stream._pipeline = _FakePipeline(sink)
+    monkeypatch.setattr(gst_streamer.time, "monotonic", lambda: 20.0 if copy_started["value"] else 10.0)
 
     frame = stream.capture_snapshot(timeout_s=0.25)
 
@@ -164,6 +167,7 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
     assert frame.mime_type == "image/jpeg"
     assert frame.caps == "image/jpeg,width=32,height=24"
     assert frame.data == b"\xff\xd8snapshot\xff\xd9"
+    assert frame.monotonic_ts == 10.0
     assert sink.calls == [("try-pull-sample", 250_000_000)]
 
 

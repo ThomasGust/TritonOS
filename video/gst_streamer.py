@@ -521,6 +521,7 @@ class GstStream:
                     if stale is None:
                         break
             sample = sink.emit("try-pull-sample", timeout_ns)
+            pulled_monotonic_ts = time.monotonic()
         except Exception as exc:
             raise GstError(f"Snapshot pull failed for '{self.config.name}': {exc}") from exc
         if sample is None:
@@ -552,7 +553,7 @@ class GstStream:
             mime_type="image/jpeg",
             caps=caps_text,
             wall_ts=time.time(),
-            monotonic_ts=time.monotonic(),
+            monotonic_ts=pulled_monotonic_ts,
             seq=seq,
             source_pts_ns=source_pts_ns,
             source_dts_ns=source_dts_ns,
