@@ -1,4 +1,4 @@
-"""
+﻿"""
 OO GStreamer wrapper for Raspberry Pi streaming (MJPEG & H.264)
 
 This version explicitly matches:
@@ -35,7 +35,6 @@ import logging
 import os
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Optional, Any, Tuple
 
@@ -61,19 +60,6 @@ logger.setLevel(logging.INFO)
 
 _FALSEY_EXTRA = {"0", "false", "no", "off"}
 _TRUTHY_EXTRA = {"1", "true", "yes", "on"}
-
-
-@dataclass
-class CaptureFrame:
-    """One encoded capture frame from a stream-local capture ring."""
-
-    data: bytes
-    seq: int
-    monotonic_ts: float
-    wall_ts: float
-    source_pts_ns: Optional[int] = None
-    shape: list[int] = field(default_factory=list)
-    format: str = "png"
 
 
 @dataclass
@@ -106,7 +92,7 @@ class StreamConfig:
     port: int = 5000
 
     # When set, bind the UDP sender to a specific local interface address.
-    # This helps keep video on the tether even if Wi‑Fi is enabled.
+    # This helps keep video on the tether even if Wiâ€‘Fi is enabled.
     bind_address: Optional[str] = None
 
     # RTP payload types
@@ -316,171 +302,11 @@ def _udp_destination_ports(cfg: StreamConfig) -> list[int]:
         cfg.extra,
         "udp_mirror_ports",
         "mirror_udp_ports",
-        "capture_ports",
-        "capture_port",
     ):
         if port not in ports:
             ports.append(port)
     return ports
 
-
-def _capture_ring_enabled(cfg: StreamConfig) -> bool:
-    return _extra_bool(
-        cfg.extra,
-        "capture_ring",
-        "enable_capture_ring",
-        "stereo_capture_ring",
-        default=False,
-    )
-
-
-def _capture_ring_fps(cfg: StreamConfig) -> float:
-    return _extra_float(
-        cfg.extra,
-        "capture_ring_fps",
-        "stereo_capture_ring_fps",
-        default=5.0,
-        minimum=0.25,
-        maximum=max(1.0, float(cfg.fps or 30)),
-    )
-
-
-def _capture_ring_history_size(cfg: StreamConfig) -> int:
-    return _extra_int(
-        cfg.extra,
-        "capture_ring_history_size",
-        "stereo_capture_ring_history_size",
-        default=30,
-        minimum=1,
-    )
-
-
-def _capture_ring_h264_decoder(cfg: StreamConfig) -> str:
-    decoder = _extra_str(
-        cfg.extra,
-        "capture_ring_h264_decoder",
-        "stereo_capture_ring_h264_decoder",
-        default="openh264dec",
-    )
-    return decoder or "openh264dec"
-
-
-def _capture_ring_branch(cfg: StreamConfig, source_kind: str) -> str:
-    """Return a passive latest-frame PNG appsink branch for an upstream tee."""
-
-    width = max(1, int(cfg.width or 1))
-    height = max(1, int(cfg.height or 1))
-    rate = max(1, int(round(_capture_ring_fps(cfg))))
-    branch = [
-        "capture_t.",
-        "!",
-        "queue name=q_capture_ring max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream",
-    ]
-    kind = str(source_kind or "").lower()
-    if kind == "h264":
-        branch += ["!", _capture_ring_h264_decoder(cfg)]
-    elif kind == "mjpeg":
-        branch += ["!", "jpegdec"]
-    branch += [
-        "!",
-        "videoconvert",
-        "!",
-        f"video/x-raw,format=RGB,width={width},height={height}",
-        "!",
-        "videorate drop-only=true",
-        "!",
-        f"video/x-raw,format=RGB,width={width},height={height},framerate={rate}/1",
-        "!",
-        "pngenc",
-        "!",
-        "appsink name=capture_sink emit-signals=true max-buffers=1 drop=true sync=false",
-    ]
-    return " ".join(branch)
-
-
-class _CaptureRing:
-    """Small condition-backed latest-frame buffer for occasional still capture."""
-
-    def __init__(self, maxlen: int):
-        self._frames: deque[CaptureFrame] = deque(maxlen=max(1, int(maxlen)))
-        self._seq = 0
-        self._cond = threading.Condition()
-
-    def add(
-        self,
-        data: bytes,
-        *,
-        monotonic_ts: float,
-        wall_ts: float,
-        source_pts_ns: int | None = None,
-        shape: list[int] | None = None,
-        fmt: str = "png",
-    ) -> CaptureFrame:
-        with self._cond:
-            self._seq += 1
-            frame = CaptureFrame(
-                data=bytes(data),
-                seq=self._seq,
-                monotonic_ts=float(monotonic_ts),
-                wall_ts=float(wall_ts),
-                source_pts_ns=source_pts_ns,
-                shape=list(shape or []),
-                format=str(fmt or "png"),
-            )
-            self._frames.append(frame)
-            self._cond.notify_all()
-            return frame
-
-    def latest(self, *, wait_s: float = 0.0, min_monotonic_ts: float | None = None) -> CaptureFrame:
-        deadline = time.monotonic() + max(0.0, float(wait_s or 0.0))
-        with self._cond:
-            while True:
-                if self._frames:
-                    frame = self._frames[-1]
-                    if min_monotonic_ts is None or frame.monotonic_ts >= float(min_monotonic_ts):
-                        return frame
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("no capture frame available")
-                self._cond.wait(timeout=remaining)
-
-    def recent(
-        self,
-        *,
-        max_age_s: float = 2.0,
-        min_monotonic_ts: float | None = None,
-        wait_s: float = 0.0,
-    ) -> list[CaptureFrame]:
-        deadline = time.monotonic() + max(0.0, float(wait_s or 0.0))
-        min_ts = None if min_monotonic_ts is None else float(min_monotonic_ts)
-        max_age = max(0.0, float(max_age_s or 0.0))
-        with self._cond:
-            while True:
-                now = time.monotonic()
-                earliest = now - max_age if max_age > 0 else None
-                frames = [
-                    frame
-                    for frame in self._frames
-                    if (earliest is None or frame.monotonic_ts >= earliest)
-                    and (min_ts is None or frame.monotonic_ts >= min_ts)
-                ]
-                if frames:
-                    return frames
-                remaining = deadline - now
-                if remaining <= 0:
-                    return []
-                self._cond.wait(timeout=remaining)
-
-    def status(self) -> dict[str, Any]:
-        with self._cond:
-            latest = self._frames[-1] if self._frames else None
-            return {
-                "enabled": True,
-                "count": len(self._frames),
-                "latest_seq": latest.seq if latest is not None else None,
-                "latest_monotonic_ts": latest.monotonic_ts if latest is not None else None,
-                "latest_wall_ts": latest.wall_ts if latest is not None else None,
-            }
 
 
 class GstStream:
@@ -494,7 +320,6 @@ class GstStream:
         self._started_wall_ts: Optional[float] = None
         self._started_monotonic_ts: Optional[float] = None
         self._state_lock = threading.Lock()
-        self._capture_ring: Optional[_CaptureRing] = None
 
     # ------------- Public ------------- #
     def start(self) -> None:
@@ -564,46 +389,13 @@ class GstStream:
     def status(self) -> Dict[str, Any]:
         """Return stream config plus lightweight timing diagnostics."""
 
-        ring = self._capture_ring
         return {
             "config": asdict(self.config),
             "running": self.is_running(),
             "started_wall_ts": self._started_wall_ts,
             "started_monotonic_ts": self._started_monotonic_ts,
             "last_error": self._last_error,
-            "capture_ring": ring.status() if ring is not None else {"enabled": False},
         }
-
-    def latest_capture_frame(
-        self,
-        *,
-        wait_s: float = 0.0,
-        min_monotonic_ts: float | None = None,
-    ) -> CaptureFrame:
-        """Return the latest encoded capture-ring frame."""
-
-        if self._pipeline is None:
-            raise GstError(f"Stream '{self.config.name}' is not running")
-        ring = self._capture_ring
-        if ring is None:
-            raise GstError(f"Stream '{self.config.name}' capture ring is not enabled")
-        return ring.latest(wait_s=wait_s, min_monotonic_ts=min_monotonic_ts)
-
-    def recent_capture_frames(
-        self,
-        *,
-        max_age_s: float = 2.0,
-        min_monotonic_ts: float | None = None,
-        wait_s: float = 0.0,
-    ) -> list[CaptureFrame]:
-        """Return recent encoded capture-ring frames matching the time gate."""
-
-        if self._pipeline is None:
-            raise GstError(f"Stream '{self.config.name}' is not running")
-        ring = self._capture_ring
-        if ring is None:
-            raise GstError(f"Stream '{self.config.name}' capture ring is not enabled")
-        return ring.recent(max_age_s=max_age_s, min_monotonic_ts=min_monotonic_ts, wait_s=wait_s)
 
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
@@ -672,8 +464,6 @@ class GstStream:
         vf = cfg.video_format.lower()
         dev = resolve_v4l2_device(cfg.device, prefer_h264=(vf == "h264"))
         rtp_mtu = max(576, int(cfg.rtp_mtu))
-        capture_ring = _capture_ring_enabled(cfg)
-        capture_branch = ""
 
         if vf == "h264":
             apply_h264_quality_controls(
@@ -691,9 +481,6 @@ class GstStream:
             # Either send as RTP/JPEG or transcode to H.264 (software, x264enc).
             parts.append(f"image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
             parts += _sender_queue_parts(cfg, "q_capture")
-            if capture_ring:
-                parts.append("tee name=capture_t")
-                capture_branch = _capture_ring_branch(cfg, "mjpeg")
             if (cfg.encode or "").lower() == "h264":
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
                 parts += [
@@ -714,19 +501,15 @@ class GstStream:
             parts.append(f"video/x-h264,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1,alignment=au")
             parts += _sender_queue_parts(cfg, "q_capture")
             parts.append("h264parse config-interval=-1 disable-passthrough=true")
-            if capture_ring:
-                parts.append("tee name=capture_t")
-                capture_branch = _capture_ring_branch(cfg, "h264")
             parts += _sender_queue_parts(cfg, "q_pay")
             parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
         elif vf == "raw":
-            # Camera outputs raw → must encode
+            # Camera outputs raw â†’ must encode
             if cfg.encode == "h264":
                 kbps = max(1, int(cfg.h264_bitrate // 1000))
                 parts += [
                     f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
                     *_sender_queue_parts(cfg, "q_capture"),
-                    *(["tee name=capture_t"] if capture_ring else []),
                     "videoconvert",
                     f"video/x-raw,format=I420,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1",
                     *_sender_queue_parts(cfg, "q_encode"),
@@ -735,14 +518,9 @@ class GstStream:
                     *_sender_queue_parts(cfg, "q_pay"),
                     f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
-                if capture_ring:
-                    capture_branch = _capture_ring_branch(cfg, "raw")
             elif cfg.encode == "mjpeg":
                 parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
                 parts += _sender_queue_parts(cfg, "q_capture")
-                if capture_ring:
-                    parts.append("tee name=capture_t")
-                    capture_branch = _capture_ring_branch(cfg, "raw")
                 parts.append("jpegenc")
                 parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
             else:
@@ -779,96 +557,14 @@ class GstStream:
             parts.append(f"tcpserversink host=0.0.0.0 port={cfg.port}")
 
         desc = " ! ".join(parts)
-        if capture_branch:
-            desc = f"{desc} {capture_branch}"
         logger.debug("Pipeline(%s): %s", cfg.name, desc)
         try:
             pipeline = Gst.parse_launch(desc)
         except Exception as e:
-            self._capture_ring = None
             raise GstError(f"Failed to build pipeline: {e}\nDesc: {desc}")
-        if capture_ring:
-            self._capture_ring = _CaptureRing(_capture_ring_history_size(cfg))
-            self._configure_capture_ring(pipeline, cfg)
-        else:
-            self._capture_ring = None
         if cfg.transport == "udp":
             self._apply_udp_sink_qos(pipeline, cfg)
         return pipeline
-
-    def _configure_capture_ring(self, pipeline: Gst.Pipeline, cfg: StreamConfig) -> None:
-        """Attach appsink callbacks for the optional capture ring."""
-
-        sink = None
-        try:
-            get_by_name = getattr(pipeline, "get_by_name", None)
-            if callable(get_by_name):
-                sink = get_by_name("capture_sink")
-        except Exception:
-            sink = None
-        if sink is None:
-            return
-        try:
-            sink.connect("new-sample", self._on_capture_sample)
-        except Exception as exc:
-            logger.warning("Stream '%s' capture appsink could not connect: %s", cfg.name, exc)
-
-    def _on_capture_sample(self, sink):
-        ring = self._capture_ring
-        if ring is None:
-            return getattr(getattr(Gst, "FlowReturn", object), "OK", None)
-        try:
-            sample = sink.emit("pull-sample")
-            if sample is None:
-                return getattr(getattr(Gst, "FlowReturn", object), "OK", None)
-            buf = sample.get_buffer()
-            if buf is None:
-                return getattr(getattr(Gst, "FlowReturn", object), "OK", None)
-            ok, map_info = buf.map(Gst.MapFlags.READ)
-            if not ok:
-                return getattr(getattr(Gst, "FlowReturn", object), "OK", None)
-            try:
-                data = bytes(map_info.data)
-            finally:
-                buf.unmap(map_info)
-
-            shape: list[int] = []
-            try:
-                cfg_width = int(self.config.width or 0)
-                cfg_height = int(self.config.height or 0)
-                if cfg_width > 0 and cfg_height > 0:
-                    shape = [cfg_height, cfg_width, 3]
-            except Exception:
-                shape = []
-            try:
-                caps = sample.get_caps()
-                structure = caps.get_structure(0) if caps is not None and caps.get_size() > 0 else None
-                if structure is not None:
-                    width = int(structure.get_value("width") or 0)
-                    height = int(structure.get_value("height") or 0)
-                    if width > 0 and height > 0:
-                        shape = [height, width, 3]
-            except Exception:
-                shape = []
-            pts = None
-            try:
-                raw_pts = int(buf.pts)
-                clock_none = int(getattr(Gst, "CLOCK_TIME_NONE", -1))
-                if raw_pts >= 0 and raw_pts != clock_none:
-                    pts = raw_pts
-            except Exception:
-                pts = None
-            ring.add(
-                data,
-                monotonic_ts=time.monotonic(),
-                wall_ts=time.time(),
-                source_pts_ns=pts,
-                shape=shape,
-                fmt="png",
-            )
-        except Exception as exc:
-            logger.debug("Stream '%s' capture sample ignored: %s", self.config.name, exc)
-        return getattr(getattr(Gst, "FlowReturn", object), "OK", None)
 
 
     def _apply_udp_sink_qos(self, pipeline: Gst.Pipeline, cfg: StreamConfig) -> None:
@@ -1018,69 +714,6 @@ class StreamManager:
         if not st:
             raise KeyError(f"No such stream: {name}")
         st.update(**updates)
-
-    def capture_frame(self, name: str, *, wait_s: float = 1.0) -> CaptureFrame:
-        """Capture one latest-frame PNG from a stream-local capture ring."""
-
-        st = self.get_stream(name)
-        if not st:
-            raise KeyError(f"No such stream: {name}")
-        return st.latest_capture_frame(wait_s=wait_s)
-
-    def capture_stereo_pair(
-        self,
-        left: str,
-        right: str,
-        *,
-        max_pair_delta_ms: float = 50.0,
-        wait_s: float = 1.0,
-    ) -> tuple[CaptureFrame, CaptureFrame, float]:
-        """Return the closest ROV-timestamped left/right frames after this request."""
-
-        left_stream = self.get_stream(left)
-        right_stream = self.get_stream(right)
-        if not left_stream:
-            raise KeyError(f"No such stream: {left}")
-        if not right_stream:
-            raise KeyError(f"No such stream: {right}")
-
-        request_ts = time.monotonic()
-        deadline = request_ts + max(0.0, float(wait_s or 0.0))
-        threshold_ms = max(0.0, float(max_pair_delta_ms))
-        history_s = max(1.0, float(wait_s or 0.0) + 1.0)
-        best: tuple[float, CaptureFrame, CaptureFrame] | None = None
-
-        while True:
-            now = time.monotonic()
-            remaining = max(0.0, deadline - now)
-            left_frames = left_stream.recent_capture_frames(
-                max_age_s=history_s,
-                min_monotonic_ts=request_ts,
-                wait_s=remaining,
-            )
-            now = time.monotonic()
-            remaining = max(0.0, deadline - now)
-            right_frames = right_stream.recent_capture_frames(
-                max_age_s=history_s,
-                min_monotonic_ts=request_ts,
-                wait_s=remaining,
-            )
-            for lf in left_frames:
-                for rf in right_frames:
-                    delta_ms = abs(float(lf.monotonic_ts) - float(rf.monotonic_ts)) * 1000.0
-                    if best is None or delta_ms < best[0]:
-                        best = (delta_ms, lf, rf)
-            if best is not None and best[0] <= threshold_ms:
-                return best[1], best[2], best[0]
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
-
-        if best is None:
-            raise TimeoutError("no frames available from capture ring")
-        raise TimeoutError(
-            f"closest stereo pair delta {best[0]:.1f} ms exceeds threshold {threshold_ms:.1f} ms"
-        )
 
 
 if __name__ == "__main__":

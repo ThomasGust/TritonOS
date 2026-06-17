@@ -3,9 +3,6 @@ import sys
 import types
 from pathlib import Path
 
-import pytest
-
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "video" / "gst_streamer.py"
 
 
@@ -128,87 +125,3 @@ def test_udp_mirror_ports_use_multiudpsink(monkeypatch):
     assert "clients=192.168.1.1:5000,192.168.1.1:6000" in desc
     assert "udpsink host=192.168.1.1 port=5000" not in desc
 
-
-def test_capture_ring_branch_is_opt_in_and_leaky(monkeypatch):
-    gst_streamer = _load_gst_streamer(monkeypatch)
-    cfg = gst_streamer.StreamConfig(
-        name="Primary Camera",
-        device="/dev/video2",
-        width=1920,
-        height=1080,
-        fps=30,
-        video_format="h264",
-        host="192.168.1.1",
-        extra={
-            "capture_ring": True,
-            "capture_ring_fps": 2,
-        },
-    )
-
-    desc = _build_description(gst_streamer, monkeypatch, cfg)
-
-    assert "tee name=capture_t" in desc
-    assert "capture_t." in desc
-    assert "queue name=q_capture_ring max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream" in desc
-    assert "openh264dec" in desc
-    assert "videorate drop-only=true" in desc
-    assert "framerate=2/1" in desc
-    assert "pngenc" in desc
-    assert "appsink name=capture_sink emit-signals=true max-buffers=1 drop=true sync=false" in desc
-    assert "rtph264pay" in desc
-    assert "udpsink host=192.168.1.1 port=5000" in desc
-
-
-def test_stream_manager_capture_stereo_pair_chooses_closest_pair(monkeypatch):
-    gst_streamer = _load_gst_streamer(monkeypatch)
-
-    class _FakeCaptureStream:
-        def __init__(self, frames):
-            self._frames = list(frames)
-
-        def recent_capture_frames(self, **_kwargs):
-            return list(self._frames)
-
-    left_frames = [
-        gst_streamer.CaptureFrame(b"left-a", seq=1, monotonic_ts=10.000, wall_ts=100.000),
-        gst_streamer.CaptureFrame(b"left-b", seq=2, monotonic_ts=10.040, wall_ts=100.040),
-    ]
-    right_frames = [
-        gst_streamer.CaptureFrame(b"right-a", seq=10, monotonic_ts=10.018, wall_ts=100.018),
-        gst_streamer.CaptureFrame(b"right-b", seq=11, monotonic_ts=10.044, wall_ts=100.044),
-    ]
-    mgr = gst_streamer.StreamManager()
-    mgr._streams = {
-        "Left": _FakeCaptureStream(left_frames),
-        "Right": _FakeCaptureStream(right_frames),
-    }
-
-    left, right, delta_ms = mgr.capture_stereo_pair("Left", "Right", max_pair_delta_ms=10, wait_s=0)
-
-    assert left.seq == 2
-    assert right.seq == 11
-    assert delta_ms == pytest.approx(4.0)
-
-
-def test_stream_manager_capture_stereo_pair_rejects_over_threshold(monkeypatch):
-    gst_streamer = _load_gst_streamer(monkeypatch)
-
-    class _FakeCaptureStream:
-        def __init__(self, frames):
-            self._frames = list(frames)
-
-        def recent_capture_frames(self, **_kwargs):
-            return list(self._frames)
-
-    mgr = gst_streamer.StreamManager()
-    mgr._streams = {
-        "Left": _FakeCaptureStream(
-            [gst_streamer.CaptureFrame(b"left", seq=1, monotonic_ts=10.000, wall_ts=100.000)]
-        ),
-        "Right": _FakeCaptureStream(
-            [gst_streamer.CaptureFrame(b"right", seq=2, monotonic_ts=10.030, wall_ts=100.030)]
-        ),
-    }
-
-    with pytest.raises(TimeoutError, match="exceeds threshold"):
-        mgr.capture_stereo_pair("Left", "Right", max_pair_delta_ms=10, wait_s=0)

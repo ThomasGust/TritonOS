@@ -7,7 +7,6 @@ Run on the Pi:
 """
 
 import argparse
-import base64
 import json
 import logging
 import traceback
@@ -262,21 +261,6 @@ def build_structured_modes(parsed_formats: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # StreamConfig helper
 # ---------------------------------------------------------------------------
-
-def _capture_frame_payload(frame, stream: str) -> dict:
-    """Convert a gst_streamer CaptureFrame into JSON-safe RPC data."""
-
-    return {
-        "stream": stream,
-        "seq": int(getattr(frame, "seq", 0)),
-        "monotonic_ts": float(getattr(frame, "monotonic_ts", 0.0)),
-        "wall_ts": float(getattr(frame, "wall_ts", 0.0)),
-        "source_pts_ns": getattr(frame, "source_pts_ns", None),
-        "shape": list(getattr(frame, "shape", []) or []),
-        "format": str(getattr(frame, "format", "png") or "png"),
-        "image_b64": base64.b64encode(bytes(getattr(frame, "data", b""))).decode("ascii"),
-    }
-
 
 def streamconfig_from_dict(d: dict) -> StreamConfig:
     """Build a ``StreamConfig`` from a JSON/RPC argument dictionary."""
@@ -756,43 +740,6 @@ def start_video_rpc():
 
             elif cmd == "list_stream_status":
                 sock.send_json({"ok": True, "data": mgr.list_stream_status()})
-
-            elif cmd == "capture_frame":
-                name = args.get("stream") or args.get("name")
-                if not name:
-                    raise ValueError("capture_frame requires stream or name")
-                fmt = str(args.get("format", "png") or "png").strip().lower()
-                if fmt not in {"png", "image/png"}:
-                    raise ValueError("capture_frame only supports png format")
-                wait_s = float(args.get("wait_s", 1.0))
-                frame = mgr.capture_frame(str(name), wait_s=wait_s)
-                sock.send_json({"ok": True, "data": _capture_frame_payload(frame, str(name))})
-
-            elif cmd == "capture_stereo_pair":
-                left = args.get("left")
-                right = args.get("right")
-                if not left or not right:
-                    raise ValueError("capture_stereo_pair requires left and right")
-                fmt = str(args.get("format", "png") or "png").strip().lower()
-                if fmt not in {"png", "image/png"}:
-                    raise ValueError("capture_stereo_pair only supports png format")
-                wait_s = float(args.get("wait_s", 1.0))
-                max_pair_delta_ms = float(args.get("max_pair_delta_ms", 50.0))
-                left_frame, right_frame, delta_ms = mgr.capture_stereo_pair(
-                    str(left),
-                    str(right),
-                    max_pair_delta_ms=max_pair_delta_ms,
-                    wait_s=wait_s,
-                )
-                sock.send_json({
-                    "ok": True,
-                    "data": {
-                        "timestamp_source": "rov_capture_ring",
-                        "pair_delta_ms": float(delta_ms),
-                        "left": _capture_frame_payload(left_frame, str(left)),
-                        "right": _capture_frame_payload(right_frame, str(right)),
-                    },
-                })
 
             # NEW: list all devices, shallow+caps
             elif cmd == "list_devices":
