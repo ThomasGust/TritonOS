@@ -8,10 +8,13 @@ TritonAnalysis calibrates the saved image pairs.
 The current exploreHD stereo plan is software-synchronized:
 
 - Both cameras stream independently through the normal GStreamer video service.
-- TritonPilot records receiver-side timestamps for the latest decoded frame from
-  each stream.
-- A stereo pair is accepted when the left/right timestamp delta is below the
-  configured threshold.
+- For still stereo capture, TritonPilot asks TritonOS to capture both streams on
+  the ROV through one paired RPC.
+- When configured, TritonOS tries each camera's MJPEG/raw still source first so
+  stills are captured before H.264 display compression. If that source is busy,
+  it falls back to the running display pipeline's onboard snapshot branch.
+- A stereo pair is accepted when the left/right ROV-side monotonic timestamp
+  delta is below the configured threshold.
 
 This is not true hardware sync. The exploreHD is a rolling-shutter UVC camera
 without an external trigger path in this stack. For calibration and still
@@ -31,8 +34,9 @@ Use matching settings for the stereo pair:
   re-enumeration.
 
 H.264 is usually the practical choice on the tether because two 1080p streams
-fit comfortably at controlled bitrates. If calibration corner quality becomes a
-problem, test MJPEG or a higher H.264 bitrate during calibration sessions.
+fit comfortably at controlled bitrates. For still snapshots, prefer a configured
+MJPEG/raw still source or a pre-H.264 tee so motion artifacts from H.264 are not
+baked into calibration images.
 
 ## Diagnostics
 

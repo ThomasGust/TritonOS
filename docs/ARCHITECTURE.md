@@ -131,9 +131,11 @@ possible for RPC to succeed while payload networking or camera formats still
 need debugging.
 
 Stereo camera work uses the same video service. TritonOS can report stream
-startup timing through `list_stream_status`, but per-frame pairing happens on
-the topside receiver because the current exploreHD cameras do not provide a
-hardware trigger or exposure timestamp in this stack.
+startup timing through `list_stream_status`. For still-image stereo capture,
+TritonOS can also capture a paired left/right still on the ROV, preferring a
+configured MJPEG/raw still source before falling back to the display pipeline's
+snapshot branch. This is still software sync because the current exploreHD
+cameras do not provide a hardware trigger or exposure timestamp in this stack.
 
 ## Management Flow
 

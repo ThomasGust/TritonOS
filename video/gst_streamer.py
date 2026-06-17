@@ -138,6 +138,8 @@ class SnapshotFrame:
     source_pts_ns: int | None = None
     source_dts_ns: int | None = None
     source_duration_ns: int | None = None
+    extension: str = "jpg"
+    capture_source: str = "rov_snapshot_appsink"
 
 
 @dataclass(frozen=True)
@@ -362,6 +364,106 @@ def _snapshot_quality(cfg: StreamConfig) -> int:
     return _extra_int(cfg.extra, "rov_snapshot_jpeg_quality", "snapshot_jpeg_quality", default=90, minimum=1)
 
 
+def _still_enabled(cfg: StreamConfig) -> bool:
+    has_explicit_source = bool(_extra_str(cfg.extra, "rov_still_device", "still_device"))
+    return _extra_bool(cfg.extra, "rov_still_enabled", "still_enabled", default=has_explicit_source)
+
+
+def _still_video_format(cfg: StreamConfig) -> str:
+    return _extra_str(cfg.extra, "rov_still_video_format", "still_video_format", default="mjpeg").lower()
+
+
+def _still_device(cfg: StreamConfig) -> str:
+    explicit = _extra_str(cfg.extra, "rov_still_device", "still_device")
+    if explicit:
+        return explicit
+    if _extra_bool(cfg.extra, "rov_still_auto_sibling", "still_auto_sibling", default=False):
+        return str(cfg.device or "").replace("video-index2", "video-index0")
+    return ""
+
+
+def _still_dimension(cfg: StreamConfig, name: str, fallback: int) -> int:
+    return _extra_int(cfg.extra, f"rov_still_{name}", f"still_{name}", default=fallback, minimum=1)
+
+
+def _still_fps(cfg: StreamConfig) -> int:
+    return _extra_int(cfg.extra, "rov_still_fps", "still_fps", default=cfg.fps, minimum=1)
+
+
+def _still_output_format(cfg: StreamConfig, video_format: str) -> str:
+    default = "source" if video_format == "mjpeg" else "png"
+    value = _extra_str(cfg.extra, "rov_still_output_format", "still_output_format", default=default).lower()
+    if value in {"jpeg", "jpg"}:
+        return "jpeg"
+    if value == "png":
+        return "png"
+    return "source"
+
+
+def _still_appsink_part() -> str:
+    return "appsink name=still_sink emit-signals=false sync=false max-buffers=1 drop=true"
+
+
+def _v4l2_still_src_part(dev: str, cfg: StreamConfig) -> str:
+    props = [f"device={dev}", "num-buffers=1"]
+    if _extra_bool(
+        cfg.extra,
+        "rov_still_v4l2_do_timestamp",
+        "still_v4l2_do_timestamp",
+        "sender_v4l2_do_timestamp",
+        "v4l2_do_timestamp",
+        default=True,
+    ):
+        props.append("do-timestamp=true")
+    io_mode = _extra_str(cfg.extra, "rov_still_v4l2_io_mode", "still_v4l2_io_mode")
+    if io_mode:
+        props.append(f"io-mode={io_mode}")
+    return "v4l2src " + " ".join(props)
+
+
+def _still_capture_pipeline_parts(cfg: StreamConfig, dev: str) -> tuple[list[str], str, str, str]:
+    width = _still_dimension(cfg, "width", int(cfg.width))
+    height = _still_dimension(cfg, "height", int(cfg.height))
+    fps = _still_fps(cfg)
+    video_format = _still_video_format(cfg)
+    output_format = _still_output_format(cfg, video_format)
+    source = _v4l2_still_src_part(dev, cfg)
+    if video_format == "mjpeg":
+        parts = [
+            source,
+            f"image/jpeg,width={width},height={height},framerate={fps}/1",
+            _still_appsink_part(),
+        ]
+        return parts, "image/jpeg", "jpg", "rov_still_source_mjpeg"
+    if video_format == "raw":
+        parts = [
+            source,
+            f"video/x-raw,width={width},height={height},framerate={fps}/1",
+            "videoconvert",
+        ]
+        if output_format == "png":
+            compression = _extra_int(
+                cfg.extra,
+                "rov_still_png_compression",
+                "still_png_compression",
+                default=3,
+                minimum=0,
+            )
+            compression = min(9, compression)
+            parts.extend(
+                [
+                    "video/x-raw,format=RGB",
+                    f"pngenc snapshot=true compression-level={compression}",
+                    _still_appsink_part(),
+                ]
+            )
+            return parts, "image/png", "png", "rov_still_source_raw_png"
+        quality = min(100, _snapshot_quality(cfg))
+        parts.extend([f"jpegenc quality={quality}", _still_appsink_part()])
+        return parts, "image/jpeg", "jpg", "rov_still_source_raw_jpeg"
+    raise ValueError(f"Unsupported ROV still video format: {video_format}")
+
+
 def _snapshot_appsink_part() -> str:
     return "appsink name=snapshot_sink emit-signals=false sync=false max-buffers=1 drop=true"
 
@@ -503,10 +605,28 @@ class GstStream:
             "started_monotonic_ts": self._started_monotonic_ts,
             "last_error": self._last_error,
             "snapshot_ready": self._snapshot_sink() is not None,
+            "still_source_enabled": _still_enabled(self.config),
         }
 
     def capture_snapshot(self, *, timeout_s: float = 1.5, fresh: bool = False) -> SnapshotFrame:
-        """Return one JPEG still from the live onboard pipeline."""
+        """Return one still image from the configured ROV capture path."""
+
+        if _still_enabled(self.config):
+            try:
+                return self._capture_still_source_snapshot(timeout_s=timeout_s)
+            except Exception as exc:
+                if not _extra_bool(
+                    self.config.extra,
+                    "rov_still_fallback_to_snapshot_branch",
+                    "still_fallback_to_snapshot_branch",
+                    default=True,
+                ):
+                    raise
+                logger.warning(
+                    "Still source capture failed for '%s'; falling back to snapshot branch: %s",
+                    self.config.name,
+                    exc,
+                )
 
         sink = self._snapshot_sink()
         if sink is None:
@@ -559,6 +679,81 @@ class GstStream:
             source_dts_ns=source_dts_ns,
             source_duration_ns=source_duration_ns,
         )
+
+    def _capture_still_source_snapshot(self, *, timeout_s: float = 1.5) -> SnapshotFrame:
+        """Capture one still from a configured camera still source."""
+
+        dev_pattern = _still_device(self.config)
+        if not dev_pattern:
+            raise GstError(f"Stream '{self.config.name}' has no ROV still device configured")
+        dev = resolve_v4l2_device(dev_pattern, prefer_h264=False)
+        parts, mime_type, extension, capture_source = _still_capture_pipeline_parts(self.config, dev)
+        desc = " ! ".join(parts)
+        logger.debug("StillPipeline(%s): %s", self.config.name, desc)
+
+        timeout_limit_s = _extra_float(
+            self.config.extra,
+            "rov_still_timeout_s",
+            "still_timeout_s",
+            default=min(max(0.0, float(timeout_s)), 0.9),
+            minimum=0.05,
+        )
+        timeout_ns = int(min(max(0.0, float(timeout_s)), timeout_limit_s) * Gst.SECOND)
+        pipeline = None
+        try:
+            pipeline = Gst.parse_launch(desc)
+            sink = pipeline.get_by_name("still_sink")
+            if sink is None:
+                sink = self._find_element(pipeline, "appsink")
+            if sink is None:
+                raise GstError(f"Still source for '{self.config.name}' has no appsink")
+            pipeline.set_state(Gst.State.PLAYING)
+            sample = sink.emit("try-pull-sample", timeout_ns)
+            pulled_monotonic_ts = time.monotonic()
+            if sample is None:
+                raise TimeoutError(f"No still-source frame available for '{self.config.name}'")
+
+            buf = sample.get_buffer()
+            if buf is None:
+                raise GstError(f"Still-source sample for '{self.config.name}' had no buffer")
+            source_pts_ns = _gst_time_to_ns(getattr(buf, "pts", None))
+            source_dts_ns = _gst_time_to_ns(getattr(buf, "dts", None))
+            source_duration_ns = _gst_time_to_ns(getattr(buf, "duration", None))
+            size = int(buf.get_size())
+            if size <= 0:
+                raise GstError(f"Still-source sample for '{self.config.name}' was empty")
+            data = bytes(buf.extract_dup(0, size))
+            if not data:
+                raise GstError(f"Still-source sample for '{self.config.name}' copied no bytes")
+            caps = sample.get_caps()
+            caps_text = caps.to_string() if caps is not None else ""
+            with self._snapshot_lock:
+                self._snapshot_seq += 1
+                seq = self._snapshot_seq
+            return SnapshotFrame(
+                stream=self.config.name,
+                data=data,
+                mime_type=mime_type,
+                caps=caps_text,
+                wall_ts=time.time(),
+                monotonic_ts=pulled_monotonic_ts,
+                seq=seq,
+                source_pts_ns=source_pts_ns,
+                source_dts_ns=source_dts_ns,
+                source_duration_ns=source_duration_ns,
+                extension=extension,
+                capture_source=capture_source,
+            )
+        except Exception as exc:
+            if isinstance(exc, (GstError, TimeoutError, ValueError)):
+                raise
+            raise GstError(f"Still source capture failed for '{self.config.name}': {exc}") from exc
+        finally:
+            if pipeline is not None:
+                try:
+                    pipeline.set_state(Gst.State.NULL)
+                except Exception:
+                    pass
 
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
@@ -905,7 +1100,7 @@ class StreamManager:
         st.update(**updates)
 
     def capture_snapshot(self, name: str, *, timeout_s: float = 1.5) -> SnapshotFrame:
-        """Capture one onboard JPEG snapshot from a running stream."""
+        """Capture one onboard still image from a running stream."""
 
         st = self.get_stream(name)
         if not st:
@@ -997,19 +1192,29 @@ class StreamManager:
             if best is None or delta_ms < best[0]:
                 best = (delta_ms, left_frame, right_frame)
             if delta_ms <= max_delta_ms:
+                left_source = str(getattr(left_frame, "capture_source", "") or "")
+                right_source = str(getattr(right_frame, "capture_source", "") or "")
+                timestamp_source = (
+                    "rov_still_source_parallel_monotonic"
+                    if left_source.startswith("rov_still_source") and right_source.startswith("rov_still_source")
+                    else "rov_snapshot_appsink_fresh_monotonic"
+                )
                 return StereoSnapshotPair(
                     left=left_frame,
                     right=right_frame,
                     pair_delta_ms=delta_ms,
-                    timestamp_source="rov_snapshot_appsink_fresh_monotonic",
+                    timestamp_source=timestamp_source,
                     attempts=attempts,
                 )
 
         if best is not None:
             delta_ms, left_frame, right_frame = best
+            left_source = str(getattr(left_frame, "capture_source", "") or "unknown")
+            right_source = str(getattr(right_frame, "capture_source", "") or "unknown")
             raise TimeoutError(
                 f"Could not capture stereo pair within {max_delta_ms:.1f} ms "
-                f"(best delta {delta_ms:.1f} ms across {attempts} attempt(s))"
+                f"(best delta {delta_ms:.1f} ms across {attempts} attempt(s); "
+                f"sources left={left_source} right={right_source})"
             )
         if last_error is not None:
             raise TimeoutError(f"Could not capture stereo pair: {last_error}") from last_error

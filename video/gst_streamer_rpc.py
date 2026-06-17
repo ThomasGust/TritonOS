@@ -36,11 +36,12 @@ logger = logging.getLogger("gst_streamer_rpc")
 
 
 def _snapshot_frame_payload(frame) -> dict:
+    extension = str(getattr(frame, "extension", "") or "jpg").lstrip(".").lower() or "jpg"
     return {
         "stream": frame.stream,
         "mime_type": frame.mime_type,
-        "format": "jpg",
-        "extension": "jpg",
+        "format": extension,
+        "extension": extension,
         "encoding": "base64",
         "image_b64": base64.b64encode(frame.data).decode("ascii"),
         "byte_count": len(frame.data),
@@ -51,6 +52,7 @@ def _snapshot_frame_payload(frame) -> dict:
         "source_pts_ns": getattr(frame, "source_pts_ns", None),
         "source_dts_ns": getattr(frame, "source_dts_ns", None),
         "source_duration_ns": getattr(frame, "source_duration_ns", None),
+        "capture_source": str(getattr(frame, "capture_source", "") or ""),
     }
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
@@ -777,15 +779,9 @@ def start_video_rpc():
                         {
                             "ok": True,
                             "data": {
+                                **_snapshot_frame_payload(frame),
                                 "name": frame.stream,
-                                "mime_type": frame.mime_type,
-                                "extension": "jpg",
-                                "encoding": "base64",
                                 "data_b64": payload,
-                                "byte_count": len(frame.data),
-                                "caps": frame.caps,
-                                "wall_ts": frame.wall_ts,
-                                "monotonic_ts": frame.monotonic_ts,
                             },
                         }
                     )
