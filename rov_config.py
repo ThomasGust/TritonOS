@@ -514,8 +514,8 @@ CHANNEL_MAP = {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
         "H_FL": 12,  # motor7 -> physical channel 8
         "H_FR": 2,  # motor5 -> physical channel 6
-        "H_RL": 3,  # motor6 -> physical channel 7
-        "H_RR": 14,  # motor1 -> physical channel 2
+        "H_RL": 14,  # diagnostic swap with H_RR; was physical channel 3
+        "H_RR": 3,  # diagnostic swap with H_RL; was physical channel 14
 
         # Verticals (heave/pitch/roll)
         # Your wiring (physical Navigator channels):
@@ -564,8 +564,8 @@ THRUSTER_REVERSED = {
 THRUSTER_REVERSED = {
       "H_FL": True,
     # "H_FR": True,
-      "H_RL": True,
-    # "H_RR": True,
+      "H_RL": False,  # diagnostic rear sign flip; was True
+      "H_RR": True,  # diagnostic rear sign flip; was False
     # "V_FL": True,
       "V_FR": True,
       "V_RL": True,
