@@ -1,0 +1,217 @@
+import pytest
+
+from control.station_keep import (
+    StationKeepAxis,
+    StationKeepConfig,
+    StationKeepController,
+    station_keep_config_from_module,
+)
+
+
+def _ctrl(**axis_overrides):
+    axis = StationKeepAxis(dof="sway", error_key="ex", kp=0.5, error_deadband=0.02, out_limit=0.4)
+    for k, v in axis_overrides.items():
+        setattr(axis, k, v)
+    return StationKeepController(StationKeepConfig(enable=True, stale_s=0.5, axes=[axis]))
+
+
+def test_disabled_passes_manual_through_untouched():
+    c = _ctrl()
+    out, st = c.step(enabled=False, manual_cmd={"sway": 0.3}, visual={"valid": True, "ex": 0.4}, dt=0.02)
+    assert out["sway"] == 0.3
+    assert st["enabled_cmd"] is False
+    assert st["reason"] == "disabled"
+
+
+def test_no_lock_holds_manual():
+    c = _ctrl()
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": False}, dt=0.02)
+    assert out["sway"] == 0.0
+    assert st["enabled_cmd"] is True
+    assert st["active"] is False
+    assert st["reason"] == "no_lock"
+
+
+def test_missing_visual_holds_manual():
+    c = _ctrl()
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=None, dt=0.02)
+    assert out["sway"] == 0.0
+    assert st["reason"] == "no_lock"
+
+
+def test_valid_lock_produces_proportional_correction():
+    c = _ctrl()
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.4}, dt=0.02)
+    assert out["sway"] == pytest.approx(0.2)  # sign=1 * kp=0.5 * ex=0.4
+    assert st["active"] is True
+    assert st["axes"]["sway"]["active"] is True
+
+
+def test_sign_flips_correction_direction():
+    c = _ctrl(sign=-1.0)
+    out, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.4}, dt=0.02)
+    assert out["sway"] == pytest.approx(-0.2)
+
+
+def test_output_is_clamped_to_axis_limit():
+    c = _ctrl(kp=5.0, out_limit=0.3)
+    out, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.9}, dt=0.02)
+    assert out["sway"] == pytest.approx(0.3)
+
+
+def test_error_deadband_suppresses_tiny_corrections():
+    c = _ctrl(error_deadband=0.1)
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.05}, dt=0.02)
+    assert out["sway"] == 0.0
+    assert st["active"] is False
+
+
+def test_pilot_manual_input_yields_the_dof():
+    c = _ctrl()
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.5}, visual={"valid": True, "ex": 0.4}, dt=0.02)
+    assert out["sway"] == 0.5  # untouched
+    assert st["axes"]["sway"]["reason"] == "manual_override"
+
+
+def test_frozen_producer_goes_stale():
+    c = _ctrl()
+    # Same timestamp held for > stale_s while still "valid" -> stale fallback.
+    frozen = {"valid": True, "ex": 0.4, "ts": 123.0}
+    reason = None
+    for _ in range(40):  # 40 * 0.02 = 0.8s > 0.5s
+        out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=frozen, dt=0.02)
+        reason = st["reason"]
+    assert reason == "stale_lock"
+    assert out["sway"] == 0.0
+
+
+def test_fresh_timestamps_stay_active():
+    c = _ctrl()
+    out = st = None
+    for i in range(40):
+        visual = {"valid": True, "ex": 0.4, "ts": float(i)}
+        out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=visual, dt=0.02)
+    assert st["reason"] == "active"
+    assert out["sway"] == pytest.approx(0.2)
+
+
+def test_config_from_module_uses_defaults_and_overrides():
+    class _Mod:
+        STATION_KEEP_ENABLE = True
+        STATION_KEEP_STALE_S = 0.75
+        STATION_KEEP_SWAY_KP = 0.8
+        STATION_KEEP_SURGE_KP = 0.0
+
+    cfg = station_keep_config_from_module(_Mod())
+    assert cfg.enable is True
+    assert cfg.stale_s == 0.75
+    by_dof = {ax.dof: ax for ax in cfg.axes}
+    assert by_dof["sway"].error_key == "ex"
+    assert by_dof["sway"].kp == 0.8
+    assert by_dof["surge"].error_key == "es"
+
+
+def test_direct_command_drives_dof_and_is_clamped():
+    cfg = StationKeepConfig(enable=True, stale_s=0.5, direct_limit=0.6, axes=[])
+    c = StationKeepController(cfg)
+    visual = {"valid": True, "command": {"surge": 0.4, "sway": 0.9, "yaw": -0.9}}
+    out, st = c.step(enabled=True, manual_cmd={"surge": 0.0, "sway": 0.0, "yaw": 0.0}, visual=visual, dt=0.02)
+    assert out["surge"] == pytest.approx(0.4)
+    assert out["sway"] == pytest.approx(0.6)   # clamped to direct_limit
+    assert out["yaw"] == pytest.approx(-0.6)   # clamped
+    assert st["active"] is True
+    assert st["axes"]["surge"]["reason"] == "direct"
+
+
+def test_direct_command_overrides_error_pid_for_same_dof():
+    cfg = StationKeepConfig(
+        enable=True, stale_s=0.5, direct_limit=1.0,
+        axes=[StationKeepAxis(dof="sway", error_key="ex", kp=0.5, out_limit=0.4)],
+    )
+    c = StationKeepController(cfg)
+    visual = {"valid": True, "ex": 0.4, "command": {"sway": -0.3}}
+    out, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=visual, dt=0.02)
+    assert out["sway"] == pytest.approx(-0.3)  # direct wins over PID's +0.2
+
+
+def test_direct_command_yields_to_pilot_manual():
+    cfg = StationKeepConfig(enable=True, stale_s=0.5, direct_limit=1.0, axes=[])
+    c = StationKeepController(cfg)
+    visual = {"valid": True, "command": {"sway": 0.5}}
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.5}, visual=visual, dt=0.02)
+    assert out["sway"] == 0.5
+    assert st["axes"]["sway"]["reason"] == "manual_override"
+
+
+def test_direct_command_ignored_without_valid_lock():
+    cfg = StationKeepConfig(enable=True, stale_s=0.5, direct_limit=1.0, axes=[])
+    c = StationKeepController(cfg)
+    out, st = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": False, "command": {"sway": 0.5}}, dt=0.02)
+    assert out["sway"] == 0.0
+    assert st["reason"] == "no_lock"
+
+
+def test_autopilot_step_applies_station_keep():
+    from control.autopilot import AutopilotConfig, AutopilotController, AttitudeAxisConfig
+    from control.depth_hold import DepthHoldConfig
+
+    cfg = AutopilotConfig(
+        depth_enable=False,
+        attitude_enable=False,
+        attitude_stale_s=0.5,
+        depth=DepthHoldConfig(),
+        roll=AttitudeAxisConfig(),
+        pitch=AttitudeAxisConfig(),
+        yaw=AttitudeAxisConfig(),
+        station_keep=StationKeepConfig(
+            enable=True, stale_s=0.5,
+            axes=[StationKeepAxis(dof="sway", error_key="ex", kp=0.5, out_limit=0.4)],
+        ),
+    )
+    ap = AutopilotController(cfg)
+    cmd = {"surge": 0.0, "sway": 0.0, "heave": 0.0, "yaw": 0.0, "roll": 0.0, "pitch": 0.0}
+    modes = {"autopilot": {"station_keep": True, "visual": {"valid": True, "ex": 0.4}}}
+    out, st = ap.step(
+        modes=modes, cmd=cmd, depth_m=None, depth_age_s=None,
+        attitude={}, attitude_age_s=None, dt=0.02,
+    )
+    assert out["sway"] == pytest.approx(0.2)
+    assert st["station_keep"]["active"] is True
+    assert st["active"] is True
+
+
+def test_autopilot_combines_dynamic_depth_setpoint_with_direct_translation():
+    """Model drives depth via the depth-hold setpoint AND translation directly."""
+    from control.autopilot import AutopilotConfig, AutopilotController, AttitudeAxisConfig
+    from control.depth_hold import DepthHoldConfig
+
+    cfg = AutopilotConfig(
+        depth_enable=True,
+        attitude_enable=False,
+        attitude_stale_s=0.5,
+        depth=DepthHoldConfig(kp=0.5, ki=0.0, kd=0.0, out_limit=0.5, depth_lpf_tau_s=0.0),
+        roll=AttitudeAxisConfig(),
+        pitch=AttitudeAxisConfig(),
+        yaw=AttitudeAxisConfig(),
+        station_keep=StationKeepConfig(enable=True, stale_s=0.5, direct_limit=1.0, axes=[]),
+    )
+    ap = AutopilotController(cfg)
+    cmd = {"surge": 0.0, "sway": 0.0, "heave": 0.0, "yaw": 0.0, "roll": 0.0, "pitch": 0.0}
+    modes = {
+        "autopilot": {
+            "depth": True,
+            "station_keep": True,
+            "targets": {"depth_m": 1.0},
+            "visual": {"valid": True, "command": {"surge": 0.3, "sway": -0.2}},
+        }
+    }
+    # Vehicle is above target depth -> depth hold should drive heave.
+    out, st = ap.step(
+        modes=modes, cmd=cmd, depth_m=0.5, depth_age_s=0.0,
+        attitude={}, attitude_age_s=None, dt=0.02,
+    )
+    assert out["surge"] == pytest.approx(0.3)   # direct translation from model
+    assert out["sway"] == pytest.approx(-0.2)
+    assert abs(out["heave"]) > 0.0              # depth hold tracking the setpoint
+    assert st["depth_hold"]["active"] is True
+    assert st["station_keep"]["active"] is True

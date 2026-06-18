@@ -13,10 +13,16 @@ back to manual pilot commands instead of inventing a correction from bad state.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 from control.depth_hold import DepthHoldConfig, DepthHoldController
+from control.station_keep import (
+    StationKeepConfig,
+    StationKeepController,
+    default_station_keep_axes,
+    station_keep_config_from_module,
+)
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -87,6 +93,11 @@ class AutopilotConfig:
     roll: AttitudeAxisConfig
     pitch: AttitudeAxisConfig
     yaw: AttitudeAxisConfig
+    # Visual station-keeping (optical-tracking autopilot). Default is inert
+    # (zero-gain axes) so it never affects control until configured/tuned.
+    station_keep: StationKeepConfig = field(
+        default_factory=lambda: StationKeepConfig(axes=default_station_keep_axes())
+    )
 
 
 class AttitudeAxisController:
@@ -317,6 +328,7 @@ class AutopilotController:
     def __init__(self, cfg: AutopilotConfig):
         self.cfg = cfg
         self.depth_hold = DepthHoldController(cfg.depth)
+        self.station_keep = StationKeepController(cfg.station_keep)
         self.axes = {
             "roll": AttitudeAxisController("roll", cfg.roll),
             "pitch": AttitudeAxisController("pitch", cfg.pitch),
@@ -324,9 +336,10 @@ class AutopilotController:
         }
 
     def reset(self) -> None:
-        """Reset depth hold and all attitude-axis controllers."""
+        """Reset depth hold, attitude-axis, and station-keep controllers."""
 
         self.depth_hold.reset()
+        self.station_keep.reset()
         for axis in self.axes.values():
             axis.reset()
 
@@ -365,11 +378,30 @@ class AutopilotController:
             out["heave"] = float(heave_out)
 
         attitude_status = self._step_attitude(ap_modes, modes, targets, out, attitude, attitude_age_s, dt)
+
+        # Visual station-keeping (optical-tracking autopilot). The visual error is
+        # supplied by a topside CV module in modes["autopilot"]["visual"]; this
+        # controller folds in surge/sway corrections after attitude/depth.
+        visual = ap_modes.get("visual") if isinstance(ap_modes.get("visual"), dict) else {}
+        sk_enabled = bool(ap_modes.get("station_keep", modes.get("station_keep", False)))
+        out, sk_status = self.station_keep.step(
+            enabled=sk_enabled, manual_cmd=out, visual=visual, dt=dt
+        )
+
         status = {
-            "enabled_cmd": bool(depth_status.get("enabled_cmd")) or bool(attitude_status.get("enabled_cmd")),
-            "active": bool(depth_status.get("active")) or bool(attitude_status.get("active")),
+            "enabled_cmd": (
+                bool(depth_status.get("enabled_cmd"))
+                or bool(attitude_status.get("enabled_cmd"))
+                or bool(sk_status.get("enabled_cmd"))
+            ),
+            "active": (
+                bool(depth_status.get("active"))
+                or bool(attitude_status.get("active"))
+                or bool(sk_status.get("active"))
+            ),
             "depth_hold": depth_status,
             "attitude": attitude_status,
+            "station_keep": sk_status,
         }
         return out, status
 
@@ -509,4 +541,5 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
         roll=axis_config("roll", roll_defaults),
         pitch=axis_config("pitch", pitch_defaults),
         yaw=axis_config("yaw", yaw_defaults),
+        station_keep=station_keep_config_from_module(cfg_mod),
     )
