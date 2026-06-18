@@ -394,8 +394,16 @@ def _snapshot_cache_frames(cfg: StreamConfig) -> int:
 
 
 def _snapshot_ondemand(cfg: StreamConfig) -> bool:
-    """On-demand compressed-GOP snapshot path (decode only at capture time)."""
-    return _extra_bool(cfg.extra, "rov_snapshot_ondemand", "snapshot_ondemand", default=False)
+    """On-demand compressed-GOP snapshot path (decode only at capture time).
+
+    Defaults ON for H.264: the alternative branch runs a continuous software
+    H.264 decode (openh264dec) just to feed a snapshot appsink, which burns a
+    whole core per camera even when nobody is capturing -- that pegged the Pi and
+    caused thermal-throttle stutter on the display. The on-demand AU ring only
+    copies compressed access units (cheap) and decodes a frame at capture time.
+    """
+    default = str(cfg.video_format).lower() == "h264"
+    return _extra_bool(cfg.extra, "rov_snapshot_ondemand", "snapshot_ondemand", default=default)
 
 
 def _snapshot_ring_aus(cfg: StreamConfig) -> int:

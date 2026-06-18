@@ -104,8 +104,8 @@ THRUSTER_GEOMETRY = {
 #   - AXIS_PITCH/AXIS_ROLL override D-pad pitch/roll when set.
 AXIS_SURGE = "ly"
 AXIS_HEAVE = "ry"
-AXIS_SWAY  = "lx"
-AXIS_YAW   = "rx"
+AXIS_SWAY  = "rx"
+AXIS_YAW   = "lx"
 
 # Put pitch/roll somewhere “secondary” for now:
 AXIS_PITCH = "dpad_y"   # or "none" to fully disable pitch

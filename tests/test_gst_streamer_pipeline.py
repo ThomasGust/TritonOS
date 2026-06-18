@@ -73,14 +73,15 @@ def test_h264_pipeline_defaults_to_stable_nonleaky_sender_path(monkeypatch):
     assert "clients=192.168.1.1:5000" in desc
     assert "tee name=snapshot_tee" in desc
     assert "appsink name=snapshot_sink" in desc
-    # Snapshot decode is pinned to openh264dec; decodebin selected a corrupting
-    # H.264 decoder on the Pi (chroma speckle), mirroring the topside fix.
-    assert "openh264dec" in desc
+    # H.264 defaults to the on-demand compressed-AU ring: no continuous decode in
+    # the pipeline (that pegged the Pi and caused thermal-throttle stutter).
+    assert "video/x-h264,alignment=au,stream-format=byte-stream" in desc
     assert "decodebin" not in desc
-    assert "jpegenc quality=90" in desc
+    assert "openh264dec" not in desc
+    assert "jpegenc" not in desc
 
 
-def test_h264_snapshot_ondemand_branch_uses_compressed_au_ring(monkeypatch):
+def test_h264_snapshot_decode_branch_when_ondemand_disabled(monkeypatch):
     gst_streamer = _load_gst_streamer(monkeypatch)
     cfg = gst_streamer.StreamConfig(
         name="Primary Camera",
@@ -90,17 +91,17 @@ def test_h264_snapshot_ondemand_branch_uses_compressed_au_ring(monkeypatch):
         fps=30,
         video_format="h264",
         host="192.168.1.1",
-        extra={"rov_snapshot_ondemand": True},
+        extra={"rov_snapshot_ondemand": False},
     )
 
     desc = _build_description(gst_streamer, monkeypatch, cfg)
 
-    # On-demand path stores compressed access units (no in-pipeline decode/encode).
+    # Legacy decode->jpeg branch: pinned openh264dec (not decodebin), encodes JPEG.
     assert "tee name=snapshot_tee" in desc
     assert "appsink name=snapshot_sink" in desc
-    assert "video/x-h264,alignment=au,stream-format=byte-stream" in desc
-    assert "openh264dec" not in desc
-    assert "jpegenc" not in desc
+    assert "openh264dec" in desc
+    assert "decodebin" not in desc
+    assert "jpegenc quality=90" in desc
 
 
 def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):
@@ -188,7 +189,12 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
     sink = _FakeSink()
     copy_started = {"value": False}
     stream = gst_streamer.GstStream(
-        gst_streamer.StreamConfig(name="Primary Camera", video_format="h264", host="192.168.1.1")
+        gst_streamer.StreamConfig(
+            name="Primary Camera",
+            video_format="h264",
+            host="192.168.1.1",
+            extra={"rov_snapshot_ondemand": False},
+        )
     )
     stream._pipeline = _FakePipeline(sink)
     monkeypatch.setattr(gst_streamer.time, "monotonic", lambda: 20.0 if copy_started["value"] else 10.0)

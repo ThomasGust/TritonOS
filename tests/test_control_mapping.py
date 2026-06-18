@@ -13,17 +13,19 @@ def test_default_stick_mapping_matches_pilot_translation_model():
     assert forward["sway"] == pytest.approx(0.0)
     assert forward["yaw"] == pytest.approx(0.0)
 
-    crab_left = build_6dof(PilotFrame(axes=PilotAxes(lx=-1.0)), gains)
+    # Sway and yaw axes are swapped: sway is on the right stick X (rx),
+    # yaw is on the left stick X (lx).
+    crab_left = build_6dof(PilotFrame(axes=PilotAxes(rx=-1.0)), gains)
     assert crab_left["surge"] == pytest.approx(0.0)
     assert crab_left["sway"] == pytest.approx(-1.0)
     assert crab_left["yaw"] == pytest.approx(0.0)
 
-    crab_right = build_6dof(PilotFrame(axes=PilotAxes(lx=1.0)), gains)
+    crab_right = build_6dof(PilotFrame(axes=PilotAxes(rx=1.0)), gains)
     assert crab_right["surge"] == pytest.approx(0.0)
     assert crab_right["sway"] == pytest.approx(1.0)
     assert crab_right["yaw"] == pytest.approx(0.0)
 
-    yaw_right = build_6dof(PilotFrame(axes=PilotAxes(rx=1.0)), gains)
+    yaw_right = build_6dof(PilotFrame(axes=PilotAxes(lx=1.0)), gains)
     assert yaw_right["surge"] == pytest.approx(0.0)
     assert yaw_right["sway"] == pytest.approx(0.0)
     assert yaw_right["yaw"] == pytest.approx(1.0)
