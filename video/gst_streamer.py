@@ -1199,7 +1199,7 @@ class GstStream:
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
                     "h264parse config-interval=-1 disable-passthrough=true",
                     *_sender_queue_parts(cfg, "q_pay"),
-                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
+                    f"rtph264pay config-interval=-1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             else:
                 stream_parts.append(f"rtpjpegpay pt={cfg.rtp_pt_jpeg} mtu={rtp_mtu}")
@@ -1210,7 +1210,7 @@ class GstStream:
             source_parts += _sender_queue_parts(cfg, "q_capture")
             stream_parts.append("h264parse config-interval=-1 disable-passthrough=true")
             stream_parts += _sender_queue_parts(cfg, "q_pay")
-            stream_parts.append(f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
+            stream_parts.append(f"rtph264pay config-interval=-1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}")
         elif vf == "raw":
             # Camera outputs raw â†’ must encode
             if cfg.encode == "h264":
@@ -1224,7 +1224,7 @@ class GstStream:
                     f"x264enc tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={cfg.h264_gop}",
                     "h264parse config-interval=-1 disable-passthrough=true",
                     *_sender_queue_parts(cfg, "q_pay"),
-                    f"rtph264pay config-interval=1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
+                    f"rtph264pay config-interval=-1 pt={cfg.rtp_pt_h264} mtu={rtp_mtu}",
                 ]
             elif cfg.encode == "mjpeg":
                 source_parts.append(f"video/x-raw,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1")
