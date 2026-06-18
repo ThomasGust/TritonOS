@@ -10,11 +10,11 @@ The current exploreHD stereo plan is software-synchronized:
 - Both cameras stream independently through the normal GStreamer video service.
 - For still stereo capture, TritonPilot asks TritonOS to capture both streams on
   the ROV through one paired RPC.
-- When configured, TritonOS tries each camera's MJPEG/raw still source first so
-  stills are captured before H.264 display compression. If that source is busy,
-  it falls back to the running display pipeline's onboard snapshot branch.
-- A stereo pair is accepted when the left/right ROV-side monotonic timestamp
-  delta is below the configured threshold.
+- For Primary/Aux, TritonOS keeps the display pipeline's onboard snapshot
+  branches warm in a small async cache and chooses the closest cached pair after
+  the request.
+- A stereo pair is accepted when the left/right ROV-side timestamp delta is
+  below the configured threshold.
 
 This is not true hardware sync. The exploreHD is a rolling-shutter UVC camera
 without an external trigger path in this stack. For calibration and still
@@ -34,9 +34,11 @@ Use matching settings for the stereo pair:
   re-enumeration.
 
 H.264 is usually the practical choice on the tether because two 1080p streams
-fit comfortably at controlled bitrates. For still snapshots, prefer a configured
-MJPEG/raw still source or a pre-H.264 tee so motion artifacts from H.264 are not
-baked into calibration images.
+fit comfortably at controlled bitrates. The cached still path preserves that
+display stream, but still images can retain H.264 motion artifacts. For future
+calibration-grade moving scenes, prefer cameras or plumbing that provide a
+hardware trigger, exposure timestamps, or a proven pre-H.264 still path that can
+coexist with the display stream.
 
 ## Diagnostics
 
@@ -50,6 +52,8 @@ also returns timing diagnostics:
     "started_wall_ts": 1779490000.0,
     "started_monotonic_ts": 12345.67,
     "last_error": null,
+    "snapshot_cache_enabled": true,
+    "snapshot_cache_frames": 12,
     "config": {}
   }
 }

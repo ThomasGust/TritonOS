@@ -132,10 +132,11 @@ need debugging.
 
 Stereo camera work uses the same video service. TritonOS can report stream
 startup timing through `list_stream_status`. For still-image stereo capture,
-TritonOS can also capture a paired left/right still on the ROV, preferring a
-configured MJPEG/raw still source before falling back to the display pipeline's
-snapshot branch. This is still software sync because the current exploreHD
-cameras do not provide a hardware trigger or exposure timestamp in this stack.
+TritonOS can also capture a paired left/right still on the ROV from the display
+pipeline's onboard snapshot branches. Stereo streams can keep a small async
+snapshot cache so capture requests choose a close pair instead of blocking two
+fresh pulls. This is still software sync because the current exploreHD cameras
+do not provide a hardware trigger or exposure timestamp in this stack.
 
 ## Management Flow
 

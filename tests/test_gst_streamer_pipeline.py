@@ -177,147 +177,6 @@ def test_capture_snapshot_pulls_jpeg_from_appsink(monkeypatch):
     assert sink.calls == [("try-pull-sample", 250_000_000)]
 
 
-def test_capture_snapshot_prefers_configured_mjpeg_still_source(monkeypatch):
-    gst_streamer = _load_gst_streamer(monkeypatch)
-    captured = {}
-
-    class _FakeBuffer:
-        pts = 123
-        dts = 100
-        duration = 33
-
-        def __init__(self, data):
-            self.data = bytes(data)
-
-        def get_size(self):
-            return len(self.data)
-
-        def extract_dup(self, offset, size):
-            return self.data[offset : offset + size]
-
-    class _FakeCaps:
-        def to_string(self):
-            return "image/jpeg,width=1920,height=1080"
-
-    class _FakeSample:
-        def get_buffer(self):
-            return _FakeBuffer(b"\xff\xd8still-source\xff\xd9")
-
-        def get_caps(self):
-            return _FakeCaps()
-
-    class _FakeSink:
-        def __init__(self):
-            self.calls = []
-
-        def emit(self, signal_name, timeout_ns):
-            self.calls.append((signal_name, timeout_ns))
-            return _FakeSample()
-
-    class _FakePipeline:
-        def __init__(self):
-            self.sink = _FakeSink()
-            self.states = []
-
-        def get_by_name(self, name):
-            return self.sink if name == "still_sink" else None
-
-        def set_state(self, state):
-            self.states.append(state)
-
-    pipeline = _FakePipeline()
-
-    def fake_parse_launch(desc):
-        captured["desc"] = desc
-        return pipeline
-
-    monkeypatch.setattr(gst_streamer.Gst, "parse_launch", fake_parse_launch)
-    monkeypatch.setattr(gst_streamer, "resolve_v4l2_device", lambda device, prefer_h264=False: device)
-    monkeypatch.setattr(gst_streamer.time, "monotonic", lambda: 42.0)
-    stream = gst_streamer.GstStream(
-        gst_streamer.StreamConfig(
-            name="Primary Camera",
-            device="/dev/v4l/by-path/*1.2.5*video-index2",
-            width=1920,
-            height=1080,
-            fps=30,
-            video_format="h264",
-            host="192.168.1.1",
-            extra={
-                "rov_still_enabled": True,
-                "rov_still_device": "/dev/v4l/by-path/*1.2.5*video-index0",
-                "rov_still_video_format": "mjpeg",
-            },
-        )
-    )
-
-    frame = stream.capture_snapshot(timeout_s=0.5)
-
-    assert "v4l2src device=/dev/v4l/by-path/*1.2.5*video-index0 num-buffers=1 do-timestamp=true" in captured["desc"]
-    assert "image/jpeg,width=1920,height=1080,framerate=30/1" in captured["desc"]
-    assert "decodebin" not in captured["desc"]
-    assert frame.data == b"\xff\xd8still-source\xff\xd9"
-    assert frame.mime_type == "image/jpeg"
-    assert frame.extension == "jpg"
-    assert frame.capture_source == "rov_still_source_mjpeg"
-    assert frame.monotonic_ts == 42.0
-    assert pipeline.sink.calls == [("try-pull-sample", 500_000_000)]
-    assert pipeline.states == ["PLAYING", "NULL"]
-
-
-def test_capture_snapshot_falls_back_when_still_source_is_busy(monkeypatch):
-    gst_streamer = _load_gst_streamer(monkeypatch)
-
-    class _FakeBuffer:
-        def __init__(self, data):
-            self.data = bytes(data)
-
-        def get_size(self):
-            return len(self.data)
-
-        def extract_dup(self, offset, size):
-            return self.data[offset : offset + size]
-
-    class _FakeCaps:
-        def to_string(self):
-            return "image/jpeg,width=32,height=24"
-
-    class _FakeSample:
-        def get_buffer(self):
-            return _FakeBuffer(b"\xff\xd8fallback\xff\xd9")
-
-        def get_caps(self):
-            return _FakeCaps()
-
-    class _FakeSink:
-        def emit(self, signal_name, timeout_ns):
-            return _FakeSample()
-
-    class _FakePipeline:
-        def get_by_name(self, name):
-            return _FakeSink() if name == "snapshot_sink" else None
-
-    monkeypatch.setattr(gst_streamer.Gst, "parse_launch", lambda desc: (_ for _ in ()).throw(RuntimeError("busy")))
-    stream = gst_streamer.GstStream(
-        gst_streamer.StreamConfig(
-            name="Primary Camera",
-            video_format="h264",
-            host="192.168.1.1",
-            extra={
-                "rov_still_enabled": True,
-                "rov_still_device": "/dev/video0",
-                "rov_still_video_format": "mjpeg",
-            },
-        )
-    )
-    stream._pipeline = _FakePipeline()
-
-    frame = stream.capture_snapshot(timeout_s=0.25)
-
-    assert frame.data == b"\xff\xd8fallback\xff\xd9"
-    assert frame.capture_source == "rov_snapshot_appsink"
-
-
 def test_capture_stereo_pair_uses_fresh_parallel_snapshots(monkeypatch):
     gst_streamer = _load_gst_streamer(monkeypatch)
 
@@ -349,37 +208,67 @@ def test_capture_stereo_pair_uses_fresh_parallel_snapshots(monkeypatch):
     assert pair.left.stream == "Left"
     assert pair.right.stream == "Right"
     assert pair.pair_delta_ms == pytest.approx(8.0)
-    assert pair.timestamp_source == "rov_snapshot_appsink_fresh_monotonic"
+    assert pair.timestamp_source == "rov_snapshot_appsink_fresh_pull_monotonic"
     assert left.calls and left.calls[0]["fresh"] is True
     assert right.calls and right.calls[0]["fresh"] is True
 
 
-def test_capture_stereo_pair_reports_still_source_timing(monkeypatch):
+def test_capture_stereo_pair_uses_cached_frames_and_source_timing(monkeypatch):
     gst_streamer = _load_gst_streamer(monkeypatch)
+    monkeypatch.setattr(gst_streamer.time, "monotonic", lambda: 1000.0)
 
-    class _FakeStream:
-        def __init__(self, name, monotonic_ts):
-            self.name = name
-            self.monotonic_ts = monotonic_ts
-
-        def capture_snapshot(self, *, timeout_s=1.5, fresh=False):
-            return gst_streamer.SnapshotFrame(
-                stream=self.name,
-                data=f"{self.name}-jpg".encode("ascii"),
-                mime_type="image/jpeg",
-                caps="image/jpeg,width=32,height=24",
-                wall_ts=1000.0 + self.monotonic_ts,
-                monotonic_ts=self.monotonic_ts,
-                capture_source="rov_still_source_mjpeg",
-            )
-
+    left = gst_streamer.GstStream(
+        gst_streamer.StreamConfig(
+            name="Left",
+            video_format="h264",
+            host="192.168.1.1",
+            extra={"rov_snapshot_cache_enabled": True},
+        )
+    )
+    right = gst_streamer.GstStream(
+        gst_streamer.StreamConfig(
+            name="Right",
+            video_format="h264",
+            host="192.168.1.1",
+            extra={"rov_snapshot_cache_enabled": True},
+        )
+    )
+    left._snapshot_cache_frames.append(
+        gst_streamer.SnapshotFrame(
+            stream="Left",
+            data=b"left-jpg",
+            mime_type="image/jpeg",
+            caps="image/jpeg,width=32,height=24",
+            wall_ts=1000.0,
+            monotonic_ts=1000.010,
+            seq=1,
+            source_monotonic_ts=50.000,
+            capture_source="rov_snapshot_cache",
+        )
+    )
+    right._snapshot_cache_frames.append(
+        gst_streamer.SnapshotFrame(
+            stream="Right",
+            data=b"right-jpg",
+            mime_type="image/jpeg",
+            caps="image/jpeg,width=32,height=24",
+            wall_ts=1000.0,
+            monotonic_ts=1000.018,
+            seq=2,
+            source_monotonic_ts=50.004,
+            capture_source="rov_snapshot_cache",
+        )
+    )
     manager = gst_streamer.StreamManager()
-    manager._streams = {"Left": _FakeStream("Left", 50.000), "Right": _FakeStream("Right", 50.004)}
+    manager._streams = {"Left": left, "Right": right}
 
     pair = manager.capture_stereo_pair("Left", "Right", timeout_s=0.5, max_pair_delta_ms=20.0)
 
+    assert pair.left.stream == "Left"
+    assert pair.right.stream == "Right"
     assert pair.pair_delta_ms == pytest.approx(4.0)
-    assert pair.timestamp_source == "rov_still_source_parallel_monotonic"
+    assert pair.timestamp_source == "rov_snapshot_cache_source_monotonic"
+    assert pair.attempts == 1
 
 
 def test_sender_low_latency_options_can_be_disabled_explicitly(monkeypatch):

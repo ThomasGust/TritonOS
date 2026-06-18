@@ -35,6 +35,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Optional, Any, Tuple
 
@@ -138,6 +139,7 @@ class SnapshotFrame:
     source_pts_ns: int | None = None
     source_dts_ns: int | None = None
     source_duration_ns: int | None = None
+    source_monotonic_ts: float | None = None
     extension: str = "jpg"
     capture_source: str = "rov_snapshot_appsink"
 
@@ -364,104 +366,12 @@ def _snapshot_quality(cfg: StreamConfig) -> int:
     return _extra_int(cfg.extra, "rov_snapshot_jpeg_quality", "snapshot_jpeg_quality", default=90, minimum=1)
 
 
-def _still_enabled(cfg: StreamConfig) -> bool:
-    has_explicit_source = bool(_extra_str(cfg.extra, "rov_still_device", "still_device"))
-    return _extra_bool(cfg.extra, "rov_still_enabled", "still_enabled", default=has_explicit_source)
+def _snapshot_cache_enabled(cfg: StreamConfig) -> bool:
+    return _extra_bool(cfg.extra, "rov_snapshot_cache_enabled", "snapshot_cache_enabled", default=False)
 
 
-def _still_video_format(cfg: StreamConfig) -> str:
-    return _extra_str(cfg.extra, "rov_still_video_format", "still_video_format", default="mjpeg").lower()
-
-
-def _still_device(cfg: StreamConfig) -> str:
-    explicit = _extra_str(cfg.extra, "rov_still_device", "still_device")
-    if explicit:
-        return explicit
-    if _extra_bool(cfg.extra, "rov_still_auto_sibling", "still_auto_sibling", default=False):
-        return str(cfg.device or "").replace("video-index2", "video-index0")
-    return ""
-
-
-def _still_dimension(cfg: StreamConfig, name: str, fallback: int) -> int:
-    return _extra_int(cfg.extra, f"rov_still_{name}", f"still_{name}", default=fallback, minimum=1)
-
-
-def _still_fps(cfg: StreamConfig) -> int:
-    return _extra_int(cfg.extra, "rov_still_fps", "still_fps", default=cfg.fps, minimum=1)
-
-
-def _still_output_format(cfg: StreamConfig, video_format: str) -> str:
-    default = "source" if video_format == "mjpeg" else "png"
-    value = _extra_str(cfg.extra, "rov_still_output_format", "still_output_format", default=default).lower()
-    if value in {"jpeg", "jpg"}:
-        return "jpeg"
-    if value == "png":
-        return "png"
-    return "source"
-
-
-def _still_appsink_part() -> str:
-    return "appsink name=still_sink emit-signals=false sync=false max-buffers=1 drop=true"
-
-
-def _v4l2_still_src_part(dev: str, cfg: StreamConfig) -> str:
-    props = [f"device={dev}", "num-buffers=1"]
-    if _extra_bool(
-        cfg.extra,
-        "rov_still_v4l2_do_timestamp",
-        "still_v4l2_do_timestamp",
-        "sender_v4l2_do_timestamp",
-        "v4l2_do_timestamp",
-        default=True,
-    ):
-        props.append("do-timestamp=true")
-    io_mode = _extra_str(cfg.extra, "rov_still_v4l2_io_mode", "still_v4l2_io_mode")
-    if io_mode:
-        props.append(f"io-mode={io_mode}")
-    return "v4l2src " + " ".join(props)
-
-
-def _still_capture_pipeline_parts(cfg: StreamConfig, dev: str) -> tuple[list[str], str, str, str]:
-    width = _still_dimension(cfg, "width", int(cfg.width))
-    height = _still_dimension(cfg, "height", int(cfg.height))
-    fps = _still_fps(cfg)
-    video_format = _still_video_format(cfg)
-    output_format = _still_output_format(cfg, video_format)
-    source = _v4l2_still_src_part(dev, cfg)
-    if video_format == "mjpeg":
-        parts = [
-            source,
-            f"image/jpeg,width={width},height={height},framerate={fps}/1",
-            _still_appsink_part(),
-        ]
-        return parts, "image/jpeg", "jpg", "rov_still_source_mjpeg"
-    if video_format == "raw":
-        parts = [
-            source,
-            f"video/x-raw,width={width},height={height},framerate={fps}/1",
-            "videoconvert",
-        ]
-        if output_format == "png":
-            compression = _extra_int(
-                cfg.extra,
-                "rov_still_png_compression",
-                "still_png_compression",
-                default=3,
-                minimum=0,
-            )
-            compression = min(9, compression)
-            parts.extend(
-                [
-                    "video/x-raw,format=RGB",
-                    f"pngenc snapshot=true compression-level={compression}",
-                    _still_appsink_part(),
-                ]
-            )
-            return parts, "image/png", "png", "rov_still_source_raw_png"
-        quality = min(100, _snapshot_quality(cfg))
-        parts.extend([f"jpegenc quality={quality}", _still_appsink_part()])
-        return parts, "image/jpeg", "jpg", "rov_still_source_raw_jpeg"
-    raise ValueError(f"Unsupported ROV still video format: {video_format}")
+def _snapshot_cache_frames(cfg: StreamConfig) -> int:
+    return _extra_int(cfg.extra, "rov_snapshot_cache_frames", "snapshot_cache_frames", default=16, minimum=2)
 
 
 def _snapshot_appsink_part() -> str:
@@ -529,6 +439,9 @@ class GstStream:
         self._state_lock = threading.Lock()
         self._snapshot_lock = threading.Lock()
         self._snapshot_seq = 0
+        self._snapshot_cache_cond = threading.Condition()
+        self._snapshot_cache_frames = deque(maxlen=_snapshot_cache_frames(config))
+        self._snapshot_cache_thread: threading.Thread | None = None
 
     # ------------- Public ------------- #
     def start(self) -> None:
@@ -543,6 +456,7 @@ class GstStream:
             self._started_wall_ts = time.time()
             self._started_monotonic_ts = time.monotonic()
             self._start_bus_watcher()
+            self._start_snapshot_cache()
             logger.info("Stream '%s' started", self.config.name)
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -553,6 +467,7 @@ class GstStream:
                 return
             logger.info("Stopping stream '%s'", self.config.name)
             self._stop_event.set()
+            self._stop_snapshot_cache()
             try:
                 self._send_eos(timeout=1.0)
             except Exception:
@@ -605,28 +520,16 @@ class GstStream:
             "started_monotonic_ts": self._started_monotonic_ts,
             "last_error": self._last_error,
             "snapshot_ready": self._snapshot_sink() is not None,
-            "still_source_enabled": _still_enabled(self.config),
+            "snapshot_cache_enabled": _snapshot_cache_enabled(self.config),
+            "snapshot_cache_frames": len(self.snapshot_cache_frames()),
         }
 
     def capture_snapshot(self, *, timeout_s: float = 1.5, fresh: bool = False) -> SnapshotFrame:
         """Return one still image from the configured ROV capture path."""
 
-        if _still_enabled(self.config):
-            try:
-                return self._capture_still_source_snapshot(timeout_s=timeout_s)
-            except Exception as exc:
-                if not _extra_bool(
-                    self.config.extra,
-                    "rov_still_fallback_to_snapshot_branch",
-                    "still_fallback_to_snapshot_branch",
-                    default=True,
-                ):
-                    raise
-                logger.warning(
-                    "Still source capture failed for '%s'; falling back to snapshot branch: %s",
-                    self.config.name,
-                    exc,
-                )
+        if _snapshot_cache_enabled(self.config):
+            after_ts = time.monotonic() if fresh else None
+            return self.capture_cached_snapshot(timeout_s=timeout_s, after_monotonic_ts=after_ts)
 
         sink = self._snapshot_sink()
         if sink is None:
@@ -647,12 +550,30 @@ class GstStream:
         if sample is None:
             raise TimeoutError(f"No onboard snapshot frame available for '{self.config.name}'")
 
+        return self._snapshot_frame_from_sample(
+            sample,
+            pulled_monotonic_ts=pulled_monotonic_ts,
+            capture_source="rov_snapshot_appsink",
+        )
+
+    def _snapshot_frame_from_sample(
+        self,
+        sample,
+        *,
+        pulled_monotonic_ts: float,
+        mime_type: str = "image/jpeg",
+        extension: str = "jpg",
+        capture_source: str = "rov_snapshot_appsink",
+    ) -> SnapshotFrame:
         buf = sample.get_buffer()
         if buf is None:
             raise GstError(f"Snapshot sample for '{self.config.name}' had no buffer")
         source_pts_ns = _gst_time_to_ns(getattr(buf, "pts", None))
         source_dts_ns = _gst_time_to_ns(getattr(buf, "dts", None))
         source_duration_ns = _gst_time_to_ns(getattr(buf, "duration", None))
+        source_monotonic_ts: float | None = None
+        if source_pts_ns is not None and self._started_monotonic_ts is not None:
+            source_monotonic_ts = float(self._started_monotonic_ts) + (float(source_pts_ns) / float(Gst.SECOND))
         size = int(buf.get_size())
         if size <= 0:
             raise GstError(f"Snapshot sample for '{self.config.name}' was empty")
@@ -670,7 +591,7 @@ class GstStream:
         return SnapshotFrame(
             stream=self.config.name,
             data=data,
-            mime_type="image/jpeg",
+            mime_type=mime_type,
             caps=caps_text,
             wall_ts=time.time(),
             monotonic_ts=pulled_monotonic_ts,
@@ -678,82 +599,84 @@ class GstStream:
             source_pts_ns=source_pts_ns,
             source_dts_ns=source_dts_ns,
             source_duration_ns=source_duration_ns,
+            source_monotonic_ts=source_monotonic_ts,
+            extension=extension,
+            capture_source=capture_source,
         )
 
-    def _capture_still_source_snapshot(self, *, timeout_s: float = 1.5) -> SnapshotFrame:
-        """Capture one still from a configured camera still source."""
-
-        dev_pattern = _still_device(self.config)
-        if not dev_pattern:
-            raise GstError(f"Stream '{self.config.name}' has no ROV still device configured")
-        dev = resolve_v4l2_device(dev_pattern, prefer_h264=False)
-        parts, mime_type, extension, capture_source = _still_capture_pipeline_parts(self.config, dev)
-        desc = " ! ".join(parts)
-        logger.debug("StillPipeline(%s): %s", self.config.name, desc)
-
-        timeout_limit_s = _extra_float(
-            self.config.extra,
-            "rov_still_timeout_s",
-            "still_timeout_s",
-            default=min(max(0.0, float(timeout_s)), 0.9),
-            minimum=0.05,
+    def _start_snapshot_cache(self) -> None:
+        if not _snapshot_cache_enabled(self.config):
+            return
+        sink = self._snapshot_sink()
+        if sink is None:
+            logger.warning("Snapshot cache requested for '%s' but no snapshot sink is ready", self.config.name)
+            return
+        with self._snapshot_cache_cond:
+            self._snapshot_cache_frames = deque(maxlen=_snapshot_cache_frames(self.config))
+            self._snapshot_cache_cond.notify_all()
+        self._snapshot_cache_thread = threading.Thread(
+            target=self._snapshot_cache_loop,
+            name=f"snapshot-cache-{self.config.name}",
+            daemon=True,
         )
-        timeout_ns = int(min(max(0.0, float(timeout_s)), timeout_limit_s) * Gst.SECOND)
-        pipeline = None
-        try:
-            pipeline = Gst.parse_launch(desc)
-            sink = pipeline.get_by_name("still_sink")
-            if sink is None:
-                sink = self._find_element(pipeline, "appsink")
-            if sink is None:
-                raise GstError(f"Still source for '{self.config.name}' has no appsink")
-            pipeline.set_state(Gst.State.PLAYING)
-            sample = sink.emit("try-pull-sample", timeout_ns)
-            pulled_monotonic_ts = time.monotonic()
-            if sample is None:
-                raise TimeoutError(f"No still-source frame available for '{self.config.name}'")
+        self._snapshot_cache_thread.start()
 
-            buf = sample.get_buffer()
-            if buf is None:
-                raise GstError(f"Still-source sample for '{self.config.name}' had no buffer")
-            source_pts_ns = _gst_time_to_ns(getattr(buf, "pts", None))
-            source_dts_ns = _gst_time_to_ns(getattr(buf, "dts", None))
-            source_duration_ns = _gst_time_to_ns(getattr(buf, "duration", None))
-            size = int(buf.get_size())
-            if size <= 0:
-                raise GstError(f"Still-source sample for '{self.config.name}' was empty")
-            data = bytes(buf.extract_dup(0, size))
-            if not data:
-                raise GstError(f"Still-source sample for '{self.config.name}' copied no bytes")
-            caps = sample.get_caps()
-            caps_text = caps.to_string() if caps is not None else ""
-            with self._snapshot_lock:
-                self._snapshot_seq += 1
-                seq = self._snapshot_seq
-            return SnapshotFrame(
-                stream=self.config.name,
-                data=data,
-                mime_type=mime_type,
-                caps=caps_text,
-                wall_ts=time.time(),
-                monotonic_ts=pulled_monotonic_ts,
-                seq=seq,
-                source_pts_ns=source_pts_ns,
-                source_dts_ns=source_dts_ns,
-                source_duration_ns=source_duration_ns,
-                extension=extension,
-                capture_source=capture_source,
-            )
-        except Exception as exc:
-            if isinstance(exc, (GstError, TimeoutError, ValueError)):
-                raise
-            raise GstError(f"Still source capture failed for '{self.config.name}': {exc}") from exc
-        finally:
-            if pipeline is not None:
-                try:
-                    pipeline.set_state(Gst.State.NULL)
-                except Exception:
-                    pass
+    def _stop_snapshot_cache(self) -> None:
+        thread = self._snapshot_cache_thread
+        self._snapshot_cache_thread = None
+        with self._snapshot_cache_cond:
+            self._snapshot_cache_cond.notify_all()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.75)
+
+    def _snapshot_cache_loop(self) -> None:
+        sink = self._snapshot_sink()
+        if sink is None:
+            return
+        timeout_ns = int(0.2 * Gst.SECOND)
+        while not self._stop_event.is_set():
+            try:
+                sample = sink.emit("try-pull-sample", timeout_ns)
+                if sample is None:
+                    continue
+                pulled_monotonic_ts = time.monotonic()
+                frame = self._snapshot_frame_from_sample(
+                    sample,
+                    pulled_monotonic_ts=pulled_monotonic_ts,
+                    capture_source="rov_snapshot_cache",
+                )
+            except Exception as exc:
+                if not self._stop_event.is_set():
+                    logger.warning("Snapshot cache pull failed for '%s': %s", self.config.name, exc)
+                time.sleep(0.05)
+                continue
+            with self._snapshot_cache_cond:
+                self._snapshot_cache_frames.append(frame)
+                self._snapshot_cache_cond.notify_all()
+
+    def snapshot_cache_frames(self) -> list[SnapshotFrame]:
+        with self._snapshot_cache_cond:
+            return list(self._snapshot_cache_frames)
+
+    def capture_cached_snapshot(
+        self,
+        *,
+        timeout_s: float = 1.5,
+        after_monotonic_ts: float | None = None,
+    ) -> SnapshotFrame:
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        with self._snapshot_cache_cond:
+            while True:
+                frames = list(self._snapshot_cache_frames)
+                if after_monotonic_ts is not None:
+                    frames = [frame for frame in frames if float(frame.monotonic_ts) >= float(after_monotonic_ts)]
+                if frames:
+                    return frames[-1]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                self._snapshot_cache_cond.wait(timeout=min(remaining, 0.1))
+        raise TimeoutError(f"No cached onboard snapshot frame available for '{self.config.name}'")
 
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
@@ -1145,6 +1068,82 @@ class StreamManager:
             raise TimeoutError("Stereo snapshot workers returned no pair")
         return results["left"], results["right"]
 
+    @staticmethod
+    def _frame_pair_time(frame: SnapshotFrame) -> tuple[float, str]:
+        source_ts = getattr(frame, "source_monotonic_ts", None)
+        if source_ts is not None:
+            try:
+                return float(source_ts), "source_monotonic"
+            except Exception:
+                pass
+        return float(frame.monotonic_ts), "pull_monotonic"
+
+    @classmethod
+    def _pair_delta_ms(cls, left_frame: SnapshotFrame, right_frame: SnapshotFrame) -> tuple[float, str]:
+        left_ts, left_source = cls._frame_pair_time(left_frame)
+        right_ts, right_source = cls._frame_pair_time(right_frame)
+        source = "source_monotonic" if left_source == right_source == "source_monotonic" else "pull_monotonic"
+        return abs(left_ts - right_ts) * 1000.0, source
+
+    @classmethod
+    def _best_frame_pair(
+        cls,
+        left_frames: list[SnapshotFrame],
+        right_frames: list[SnapshotFrame],
+    ) -> tuple[float, str, SnapshotFrame, SnapshotFrame] | None:
+        best: tuple[float, str, SnapshotFrame, SnapshotFrame] | None = None
+        for left_frame in left_frames:
+            for right_frame in right_frames:
+                delta_ms, source = cls._pair_delta_ms(left_frame, right_frame)
+                if best is None or delta_ms < best[0]:
+                    best = (delta_ms, source, left_frame, right_frame)
+        return best
+
+    @classmethod
+    def _capture_cached_snapshot_pair(
+        cls,
+        left_stream: GstStream,
+        right_stream: GstStream,
+        *,
+        timeout_s: float,
+        max_pair_delta_ms: float,
+    ) -> StereoSnapshotPair:
+        request_ts = time.monotonic()
+        deadline = request_ts + max(0.0, float(timeout_s))
+        max_delta_ms = max(0.0, float(max_pair_delta_ms))
+        best: tuple[float, str, SnapshotFrame, SnapshotFrame] | None = None
+        attempts = 0
+        while True:
+            attempts += 1
+            left_frames = [frame for frame in left_stream.snapshot_cache_frames() if frame.monotonic_ts >= request_ts]
+            right_frames = [frame for frame in right_stream.snapshot_cache_frames() if frame.monotonic_ts >= request_ts]
+            current = cls._best_frame_pair(left_frames, right_frames)
+            if current is not None:
+                if best is None or current[0] < best[0]:
+                    best = current
+                if current[0] <= max_delta_ms:
+                    delta_ms, source, left_frame, right_frame = current
+                    return StereoSnapshotPair(
+                        left=left_frame,
+                        right=right_frame,
+                        pair_delta_ms=delta_ms,
+                        timestamp_source=f"rov_snapshot_cache_{source}",
+                        attempts=attempts,
+                    )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.01, remaining))
+
+        if best is not None:
+            delta_ms, source, left_frame, right_frame = best
+            raise TimeoutError(
+                f"Could not capture cached stereo pair within {max_delta_ms:.1f} ms "
+                f"(best delta {delta_ms:.1f} ms across {attempts} attempt(s); "
+                f"source={source}; left_seq={left_frame.seq} right_seq={right_frame.seq})"
+            )
+        raise TimeoutError(f"No cached stereo frames arrived within {max(0.0, float(timeout_s)):.2f} s")
+
     def capture_stereo_pair(
         self,
         left: str,
@@ -1169,10 +1168,20 @@ class StreamManager:
         if right_stream is None:
             raise KeyError(f"No such stream: {right_name}")
 
+        left_cfg = getattr(left_stream, "config", None)
+        right_cfg = getattr(right_stream, "config", None)
+        if left_cfg is not None and right_cfg is not None and _snapshot_cache_enabled(left_cfg) and _snapshot_cache_enabled(right_cfg):
+            return self._capture_cached_snapshot_pair(
+                left_stream,
+                right_stream,
+                timeout_s=timeout_s,
+                max_pair_delta_ms=max_pair_delta_ms,
+            )
+
         deadline = time.monotonic() + max(0.0, float(timeout_s))
         max_delta_ms = max(0.0, float(max_pair_delta_ms))
         attempts = 0
-        best: tuple[float, SnapshotFrame, SnapshotFrame] | None = None
+        best: tuple[float, str, SnapshotFrame, SnapshotFrame] | None = None
         last_error: BaseException | None = None
         while True:
             remaining_s = deadline - time.monotonic()
@@ -1188,33 +1197,26 @@ class StreamManager:
             except BaseException as exc:
                 last_error = exc
                 break
-            delta_ms = abs(float(left_frame.monotonic_ts) - float(right_frame.monotonic_ts)) * 1000.0
+            delta_ms, pair_time_source = self._pair_delta_ms(left_frame, right_frame)
             if best is None or delta_ms < best[0]:
-                best = (delta_ms, left_frame, right_frame)
+                best = (delta_ms, pair_time_source, left_frame, right_frame)
             if delta_ms <= max_delta_ms:
-                left_source = str(getattr(left_frame, "capture_source", "") or "")
-                right_source = str(getattr(right_frame, "capture_source", "") or "")
-                timestamp_source = (
-                    "rov_still_source_parallel_monotonic"
-                    if left_source.startswith("rov_still_source") and right_source.startswith("rov_still_source")
-                    else "rov_snapshot_appsink_fresh_monotonic"
-                )
                 return StereoSnapshotPair(
                     left=left_frame,
                     right=right_frame,
                     pair_delta_ms=delta_ms,
-                    timestamp_source=timestamp_source,
+                    timestamp_source=f"rov_snapshot_appsink_fresh_{pair_time_source}",
                     attempts=attempts,
                 )
 
         if best is not None:
-            delta_ms, left_frame, right_frame = best
+            delta_ms, pair_time_source, left_frame, right_frame = best
             left_source = str(getattr(left_frame, "capture_source", "") or "unknown")
             right_source = str(getattr(right_frame, "capture_source", "") or "unknown")
             raise TimeoutError(
                 f"Could not capture stereo pair within {max_delta_ms:.1f} ms "
                 f"(best delta {delta_ms:.1f} ms across {attempts} attempt(s); "
-                f"sources left={left_source} right={right_source})"
+                f"time_source={pair_time_source}; sources left={left_source} right={right_source})"
             )
         if last_error is not None:
             raise TimeoutError(f"Could not capture stereo pair: {last_error}") from last_error

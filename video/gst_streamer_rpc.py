@@ -52,6 +52,7 @@ def _snapshot_frame_payload(frame) -> dict:
         "source_pts_ns": getattr(frame, "source_pts_ns", None),
         "source_dts_ns": getattr(frame, "source_dts_ns", None),
         "source_duration_ns": getattr(frame, "source_duration_ns", None),
+        "source_monotonic_ts": getattr(frame, "source_monotonic_ts", None),
         "capture_source": str(getattr(frame, "capture_source", "") or ""),
     }
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
