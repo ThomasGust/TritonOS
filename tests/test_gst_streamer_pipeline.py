@@ -73,8 +73,34 @@ def test_h264_pipeline_defaults_to_stable_nonleaky_sender_path(monkeypatch):
     assert "clients=192.168.1.1:5000" in desc
     assert "tee name=snapshot_tee" in desc
     assert "appsink name=snapshot_sink" in desc
-    assert "decodebin" in desc
+    # Snapshot decode is pinned to openh264dec; decodebin selected a corrupting
+    # H.264 decoder on the Pi (chroma speckle), mirroring the topside fix.
+    assert "openh264dec" in desc
+    assert "decodebin" not in desc
     assert "jpegenc quality=90" in desc
+
+
+def test_h264_snapshot_ondemand_branch_uses_compressed_au_ring(monkeypatch):
+    gst_streamer = _load_gst_streamer(monkeypatch)
+    cfg = gst_streamer.StreamConfig(
+        name="Primary Camera",
+        device="/dev/video2",
+        width=1920,
+        height=1080,
+        fps=30,
+        video_format="h264",
+        host="192.168.1.1",
+        extra={"rov_snapshot_ondemand": True},
+    )
+
+    desc = _build_description(gst_streamer, monkeypatch, cfg)
+
+    # On-demand path stores compressed access units (no in-pipeline decode/encode).
+    assert "tee name=snapshot_tee" in desc
+    assert "appsink name=snapshot_sink" in desc
+    assert "video/x-h264,alignment=au,stream-format=byte-stream" in desc
+    assert "openh264dec" not in desc
+    assert "jpegenc" not in desc
 
 
 def test_sender_low_latency_options_can_enable_leaky_queues(monkeypatch):

@@ -140,6 +140,7 @@ class SnapshotFrame:
     source_dts_ns: int | None = None
     source_duration_ns: int | None = None
     source_monotonic_ts: float | None = None
+    source_clock_ns: int | None = None
     extension: str = "jpg"
     capture_source: str = "rov_snapshot_appsink"
 
@@ -153,6 +154,24 @@ class StereoSnapshotPair:
     pair_delta_ms: float
     timestamp_source: str
     attempts: int = 1
+
+
+@dataclass(frozen=True)
+class _CompressedAU:
+    """One stored H.264 access unit for the on-demand snapshot ring.
+
+    Storing compressed access units is cheap (a byte copy, no decode) so the ring
+    can hold every source frame at full rate without loading the Pi or
+    back-pressuring the display tee. Frames are decoded on demand only at capture
+    time, starting from the most recent keyframe so references are intact.
+    """
+
+    data: bytes
+    pts_ns: int | None
+    clock_ns: int | None  # base_time + pts: comparable across pipelines
+    keyframe: bool
+    wall_ts: float
+    seq: int
 
 
 def _candidate_h264_sibling_patterns(dev_or_pattern: str) -> list[str]:
@@ -374,6 +393,29 @@ def _snapshot_cache_frames(cfg: StreamConfig) -> int:
     return _extra_int(cfg.extra, "rov_snapshot_cache_frames", "snapshot_cache_frames", default=16, minimum=2)
 
 
+def _snapshot_ondemand(cfg: StreamConfig) -> bool:
+    """On-demand compressed-GOP snapshot path (decode only at capture time)."""
+    return _extra_bool(cfg.extra, "rov_snapshot_ondemand", "snapshot_ondemand", default=False)
+
+
+def _snapshot_ring_aus(cfg: StreamConfig) -> int:
+    """Number of compressed access units to retain (~3s at source fps)."""
+    return _extra_int(cfg.extra, "rov_snapshot_ring_aus", "snapshot_ring_aus", default=120, minimum=16)
+
+
+def _snapshot_decoder(cfg: StreamConfig) -> str:
+    """GStreamer decoder element for the isolated on-demand decode pipeline.
+
+    Independent of the display path, so it can be tuned for capture latency
+    without affecting live video. ``avdec_h264 max-threads=N`` uses libav's
+    multi-threaded software decode (the Pi5 has no HW H.264 decode), which can
+    decode a 1080p GOP much faster than single-threaded openh264dec.
+    """
+    return _extra_str(
+        cfg.extra, "rov_snapshot_decoder", "snapshot_decoder", default="openh264dec"
+    ) or "openh264dec"
+
+
 def _snapshot_appsink_part() -> str:
     return "appsink name=snapshot_sink emit-signals=false sync=false max-buffers=1 drop=true"
 
@@ -390,16 +432,42 @@ def _snapshot_raw_to_jpeg_parts(cfg: StreamConfig) -> list[str]:
     ]
 
 
+def _snapshot_au_branch_parts(cfg: StreamConfig) -> list[str]:
+    """Compressed-AU ring branch: copy H.264 access units, no in-pipeline decode.
+
+    The queue and appsink both stay leaky/drop so this branch can never
+    back-pressure the tee and stall the display, even under heavy capture load.
+    Byte copies keep up trivially, so drops are effectively never hit.
+    """
+    ring = _snapshot_ring_aus(cfg)
+    max_buffers = max(16, ring + 16)
+    return [
+        "queue max-size-buffers=16 max-size-bytes=0 max-size-time=0 leaky=downstream",
+        "h264parse config-interval=-1",
+        "video/x-h264,alignment=au,stream-format=byte-stream",
+        f"appsink name=snapshot_sink emit-signals=false sync=false max-buffers={max_buffers} drop=true",
+    ]
+
+
 def _snapshot_branch_parts(cfg: StreamConfig) -> list[str]:
     vf = cfg.video_format.lower()
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
     if vf == "mjpeg":
         return [queue, _snapshot_appsink_part()]
+    if vf == "h264" and _snapshot_ondemand(cfg):
+        return _snapshot_au_branch_parts(cfg)
     if vf == "h264":
+        # Interim (display-safe) snapshot branch: pinned openh264dec gives clean
+        # frames (decodebin selected a corrupting decoder on this Pi). The queue
+        # stays leaky so a slow decode never back-pressures the tee / display.
+        # NOTE: leaking compressed access units starves openh264dec of references
+        # so it only emits clean frames near keyframe rate (~1 fps) -- fine for
+        # single stills, too slow for tight stereo pairing. The production fix is
+        # the on-demand compressed-GOP decode path (decode only at capture time).
         return [
             queue,
             "h264parse config-interval=-1 disable-passthrough=true",
-            "decodebin",
+            "openh264dec",
             *_snapshot_raw_to_jpeg_parts(cfg),
         ]
     if vf == "raw":
@@ -442,6 +510,20 @@ class GstStream:
         self._snapshot_cache_cond = threading.Condition()
         self._snapshot_cache_frames = deque(maxlen=_snapshot_cache_frames(config))
         self._snapshot_cache_thread: threading.Thread | None = None
+        self._ondemand = _snapshot_ondemand(config)
+        self._au_ring: deque[_CompressedAU] = deque(maxlen=_snapshot_ring_aus(config))
+        # Persistent on-demand decode + encode pipelines (built lazily, reused).
+        # Decode emits raw frames; only the single target frame is JPEG-encoded,
+        # so we never waste an encode on the other GOP frames we decode for refs.
+        self._decode_pipeline: Optional[Gst.Pipeline] = None
+        self._decode_src: Optional[Gst.Element] = None
+        self._decode_out: Optional[Gst.Element] = None
+        self._encode_pipeline: Optional[Gst.Pipeline] = None
+        self._encode_src: Optional[Gst.Element] = None
+        self._encode_out: Optional[Gst.Element] = None
+        self._decode_lock = threading.Lock()
+        self._decode_pts_ns = 0
+        self._encode_pts_ns = 0
 
     # ------------- Public ------------- #
     def start(self) -> None:
@@ -468,6 +550,7 @@ class GstStream:
             logger.info("Stopping stream '%s'", self.config.name)
             self._stop_event.set()
             self._stop_snapshot_cache()
+            self._stop_decode_pipeline()
             try:
                 self._send_eos(timeout=1.0)
             except Exception:
@@ -522,10 +605,15 @@ class GstStream:
             "snapshot_ready": self._snapshot_sink() is not None,
             "snapshot_cache_enabled": _snapshot_cache_enabled(self.config),
             "snapshot_cache_frames": len(self.snapshot_cache_frames()),
+            "snapshot_ondemand": self._ondemand,
+            "snapshot_ring_aus": len(self.au_ring_frames()),
         }
 
     def capture_snapshot(self, *, timeout_s: float = 1.5, fresh: bool = False) -> SnapshotFrame:
         """Return one still image from the configured ROV capture path."""
+
+        if self._ondemand:
+            return self.capture_ondemand_snapshot(timeout_s=timeout_s)
 
         if _snapshot_cache_enabled(self.config):
             after_ts = time.monotonic() if fresh else None
@@ -574,6 +662,15 @@ class GstStream:
         source_monotonic_ts: float | None = None
         if source_pts_ns is not None and self._started_monotonic_ts is not None:
             source_monotonic_ts = float(self._started_monotonic_ts) + (float(source_pts_ns) / float(Gst.SECOND))
+        # Absolute capture instant on the shared GstSystemClock: base_time + PTS.
+        # Unlike started_monotonic_ts (a time.monotonic() snapshot taken after
+        # set_state(PLAYING) returns), base_time is the real clock origin the
+        # buffer PTS is measured against, so it is directly comparable across the
+        # left/right pipelines and removes the per-stream startup-latency bias.
+        source_clock_ns: int | None = None
+        base_time_ns = self._pipeline_base_time_ns()
+        if source_pts_ns is not None and base_time_ns is not None:
+            source_clock_ns = base_time_ns + source_pts_ns
         size = int(buf.get_size())
         if size <= 0:
             raise GstError(f"Snapshot sample for '{self.config.name}' was empty")
@@ -600,11 +697,15 @@ class GstStream:
             source_dts_ns=source_dts_ns,
             source_duration_ns=source_duration_ns,
             source_monotonic_ts=source_monotonic_ts,
+            source_clock_ns=source_clock_ns,
             extension=extension,
             capture_source=capture_source,
         )
 
     def _start_snapshot_cache(self) -> None:
+        if self._ondemand:
+            self._start_au_ring()
+            return
         if not _snapshot_cache_enabled(self.config):
             return
         sink = self._snapshot_sink()
@@ -617,6 +718,21 @@ class GstStream:
         self._snapshot_cache_thread = threading.Thread(
             target=self._snapshot_cache_loop,
             name=f"snapshot-cache-{self.config.name}",
+            daemon=True,
+        )
+        self._snapshot_cache_thread.start()
+
+    def _start_au_ring(self) -> None:
+        sink = self._snapshot_sink()
+        if sink is None:
+            logger.warning("On-demand snapshot ring requested for '%s' but no snapshot sink is ready", self.config.name)
+            return
+        with self._snapshot_cache_cond:
+            self._au_ring = deque(maxlen=_snapshot_ring_aus(self.config))
+            self._snapshot_cache_cond.notify_all()
+        self._snapshot_cache_thread = threading.Thread(
+            target=self._au_ring_loop,
+            name=f"snapshot-au-{self.config.name}",
             daemon=True,
         )
         self._snapshot_cache_thread.start()
@@ -678,6 +794,285 @@ class GstStream:
                 self._snapshot_cache_cond.wait(timeout=min(remaining, 0.1))
         raise TimeoutError(f"No cached onboard snapshot frame available for '{self.config.name}'")
 
+    # ------------- On-demand compressed-GOP snapshot path ------------- #
+    def _au_from_sample(self, sample) -> "_CompressedAU | None":
+        buf = sample.get_buffer()
+        if buf is None:
+            return None
+        size = int(buf.get_size())
+        if size <= 0:
+            return None
+        try:
+            data = bytes(buf.extract_dup(0, size))
+        except Exception:
+            return None
+        if not data:
+            return None
+        pts_ns = _gst_time_to_ns(getattr(buf, "pts", None))
+        base_ns = self._pipeline_base_time_ns()
+        clock_ns = (base_ns + pts_ns) if (base_ns is not None and pts_ns is not None) else None
+        try:
+            keyframe = not bool(buf.has_flags(Gst.BufferFlags.DELTA_UNIT))
+        except Exception:
+            keyframe = False
+        with self._snapshot_lock:
+            self._snapshot_seq += 1
+            seq = self._snapshot_seq
+        return _CompressedAU(
+            data=data,
+            pts_ns=pts_ns,
+            clock_ns=clock_ns,
+            keyframe=keyframe,
+            wall_ts=time.time(),
+            seq=seq,
+        )
+
+    def _au_ring_loop(self) -> None:
+        sink = self._snapshot_sink()
+        if sink is None:
+            return
+        timeout_ns = int(0.2 * Gst.SECOND)
+        while not self._stop_event.is_set():
+            try:
+                sample = sink.emit("try-pull-sample", timeout_ns)
+                if sample is None:
+                    continue
+                au = self._au_from_sample(sample)
+            except Exception as exc:
+                if not self._stop_event.is_set():
+                    logger.warning("Snapshot AU pull failed for '%s': %s", self.config.name, exc)
+                time.sleep(0.05)
+                continue
+            if au is None:
+                continue
+            with self._snapshot_cache_cond:
+                self._au_ring.append(au)
+                self._snapshot_cache_cond.notify_all()
+
+    def au_ring_frames(self) -> list["_CompressedAU"]:
+        with self._snapshot_cache_cond:
+            return list(self._au_ring)
+
+    @staticmethod
+    def _gop_segment(aus: list["_CompressedAU"], target_idx: int) -> "list[_CompressedAU] | None":
+        """Return the contiguous run from the latest keyframe up to target_idx.
+
+        Walks back from the target; the first keyframe reached is the latest one
+        at/under the target. Returns None if a ring gap (non-consecutive seq) is
+        hit before a keyframe, so a partial/broken GOP is never decoded.
+        """
+        if not aus or not (0 <= target_idx < len(aus)):
+            return None
+        i = target_idx
+        while True:
+            if aus[i].keyframe:
+                return aus[i:target_idx + 1]
+            if i == 0 or aus[i].seq != aus[i - 1].seq + 1:
+                return None
+            i -= 1
+
+    def _ensure_decode_pipeline(self) -> None:
+        """Build the persistent on-demand H.264->raw decode pipeline (kept PLAYING)."""
+        if self._decode_pipeline is not None:
+            return
+        decoder = _snapshot_decoder(self.config)
+        desc = (
+            "appsrc name=src is-live=false format=time block=false max-bytes=0 "
+            "caps=video/x-h264,stream-format=byte-stream,alignment=au ! "
+            f"h264parse config-interval=-1 ! {decoder} ! "
+            "appsink name=out emit-signals=false sync=false max-buffers=16 drop=false"
+        )
+        pipeline = Gst.parse_launch(desc)
+        if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            pipeline.set_state(Gst.State.NULL)
+            raise GstError(f"on-demand decode pipeline failed to start for '{self.config.name}'")
+        self._decode_pipeline = pipeline
+        self._decode_src = pipeline.get_by_name("src")
+        self._decode_out = pipeline.get_by_name("out")
+
+    def _ensure_encode_pipeline(self, caps) -> None:
+        """Build the persistent raw->JPEG encode pipeline once (target frame only)."""
+        if self._encode_pipeline is not None:
+            return
+        q = min(100, max(1, _snapshot_quality(self.config)))
+        desc = (
+            "appsrc name=esrc is-live=false format=time block=true max-bytes=0 ! "
+            "videoconvert ! "
+            f"jpegenc quality={q} ! "
+            "appsink name=eout emit-signals=false sync=false max-buffers=4 drop=false"
+        )
+        pipeline = Gst.parse_launch(desc)
+        esrc = pipeline.get_by_name("esrc")
+        try:
+            esrc.set_property("caps", caps)
+        except Exception:
+            pass
+        if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            pipeline.set_state(Gst.State.NULL)
+            raise GstError(f"on-demand encode pipeline failed to start for '{self.config.name}'")
+        self._encode_pipeline = pipeline
+        self._encode_src = esrc
+        self._encode_out = pipeline.get_by_name("eout")
+
+    def _stop_decode_pipeline(self) -> None:
+        with self._decode_lock:
+            pipelines = [self._decode_pipeline, self._encode_pipeline]
+            self._decode_pipeline = None
+            self._decode_src = None
+            self._decode_out = None
+            self._encode_pipeline = None
+            self._encode_src = None
+            self._encode_out = None
+        for pipeline in pipelines:
+            if pipeline is not None:
+                try:
+                    pipeline.set_state(Gst.State.NULL)
+                except Exception:
+                    pass
+
+    def _encode_raw_sample_to_jpeg(self, sample, *, timeout_s: float = 2.0) -> bytes:
+        self._ensure_encode_pipeline(sample.get_caps())
+        esrc = self._encode_src
+        eout = self._encode_out
+        if esrc is None or eout is None:
+            raise GstError("on-demand encode pipeline unavailable")
+        while eout.emit("try-pull-sample", 0) is not None:
+            pass
+        # Copy (not extract_dup): copy() preserves GstVideoMeta so the encoder
+        # reads the correct chroma plane strides. A raw byte copy loses the meta
+        # and videoconvert then mis-strides the planes -> chroma speckle.
+        gbuf = sample.get_buffer().copy()
+        gbuf.pts = self._encode_pts_ns
+        gbuf.dts = self._encode_pts_ns
+        self._encode_pts_ns += 33_333_333
+        if esrc.emit("push-buffer", gbuf) != Gst.FlowReturn.OK:
+            raise GstError("encode push-buffer failed")
+        deadline = time.monotonic() + max(0.5, float(timeout_s))
+        while time.monotonic() < deadline:
+            jpeg = eout.emit("try-pull-sample", int(0.2 * Gst.SECOND))
+            if jpeg is None:
+                continue
+            jbuf = jpeg.get_buffer()
+            data = bytes(jbuf.extract_dup(0, int(jbuf.get_size())))
+            if not data:
+                raise GstError("on-demand encode produced an empty frame")
+            return data
+        raise GstError("on-demand encode produced no frame")
+
+    def _decode_aus_to_jpeg(self, aus: list["_CompressedAU"], *, quality: int, timeout_s: float = 3.0) -> bytes:
+        """Decode a [keyframe..target] H.264 segment via the persistent per-stream
+        decoder and JPEG-encode only the final (target) frame.
+
+        Each segment starts with an IDR, which resets the decoder's references, so
+        reusing the pipeline across captures is clean and avoids rebuilding
+        openh264dec every time. Only the target frame is encoded, so the GOP
+        frames decoded purely for references never pay an encode cost."""
+        if not aus:
+            raise GstError("no access units to decode")
+        with self._decode_lock:
+            self._ensure_decode_pipeline()
+            src = self._decode_src
+            out = self._decode_out
+            if src is None or out is None:
+                raise GstError("on-demand decode pipeline unavailable")
+            # Drop any stale decoded frames from a previous capture.
+            while out.emit("try-pull-sample", 0) is not None:
+                pass
+            for au in aus:
+                gbuf = Gst.Buffer.new_allocate(None, len(au.data), None)
+                gbuf.fill(0, au.data)
+                # Monotonic synthetic PTS so the appsrc segment never goes
+                # backward across captures (real AU order is preserved anyway).
+                gbuf.pts = self._decode_pts_ns
+                gbuf.dts = self._decode_pts_ns
+                self._decode_pts_ns += 33_333_333
+                if src.emit("push-buffer", gbuf) != Gst.FlowReturn.OK:
+                    break
+            expected = len(aus)
+            pulled = 0
+            last = None
+            deadline = time.monotonic() + max(0.5, float(timeout_s))
+            while pulled < expected and time.monotonic() < deadline:
+                sample = out.emit("try-pull-sample", int(0.2 * Gst.SECOND))
+                if sample is None:
+                    continue
+                last = sample
+                pulled += 1
+            if last is None:
+                raise GstError("on-demand decode produced no frame")
+            return self._encode_raw_sample_to_jpeg(last)
+
+    def _frame_from_au(self, aus: list["_CompressedAU"], idx: int, *, quality: int) -> SnapshotFrame:
+        segment = self._gop_segment(aus, idx)
+        if segment is None:
+            raise GstError(f"target access unit for '{self.config.name}' is not GOP-decodable yet")
+        target = aus[idx]
+        jpeg = self._decode_aus_to_jpeg(segment, quality=quality)
+        with self._snapshot_lock:
+            self._snapshot_seq += 1
+            seq = self._snapshot_seq
+        source_monotonic_ts: float | None = None
+        if target.pts_ns is not None and self._started_monotonic_ts is not None:
+            source_monotonic_ts = float(self._started_monotonic_ts) + (float(target.pts_ns) / float(Gst.SECOND))
+        return SnapshotFrame(
+            stream=self.config.name,
+            data=jpeg,
+            mime_type="image/jpeg",
+            caps="",
+            wall_ts=time.time(),
+            monotonic_ts=time.monotonic(),
+            seq=seq,
+            source_pts_ns=target.pts_ns,
+            source_dts_ns=None,
+            source_duration_ns=None,
+            source_monotonic_ts=source_monotonic_ts,
+            source_clock_ns=target.clock_ns,
+            extension="jpg",
+            capture_source="rov_snapshot_ondemand",
+        )
+
+    @staticmethod
+    def _select_target_index(aus: list["_CompressedAU"], target_clock_ns: int | None) -> int:
+        if target_clock_ns is None:
+            return len(aus) - 1
+        best_i = len(aus) - 1
+        best_d: int | None = None
+        for i, au in enumerate(aus):
+            if au.clock_ns is None:
+                continue
+            d = abs(int(au.clock_ns) - int(target_clock_ns))
+            if best_d is None or d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
+
+    def capture_ondemand_snapshot(self, *, timeout_s: float = 1.5, target_clock_ns: int | None = None) -> SnapshotFrame:
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        quality = min(100, _snapshot_quality(self.config))
+        while True:
+            aus = self.au_ring_frames()
+            if aus:
+                idx: int | None
+                if target_clock_ns is None:
+                    # Newest *decodable* frame (the bleeding edge may have a tail gap).
+                    idx = None
+                    for i in range(len(aus) - 1, -1, -1):
+                        if aus[i].clock_ns is not None and self._gop_segment(aus, i) is not None:
+                            idx = i
+                            break
+                else:
+                    idx = self._select_target_index(aus, target_clock_ns)
+                    if idx is not None and self._gop_segment(aus, idx) is None:
+                        idx = None
+                if idx is not None:
+                    return self._frame_from_au(aus, idx, quality=quality)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            with self._snapshot_cache_cond:
+                self._snapshot_cache_cond.wait(timeout=min(remaining, 0.1))
+        raise TimeoutError(f"No on-demand snapshot frame available for '{self.config.name}'")
+
     # ------------- Internals ------------- #
     def _start_bus_watcher(self):
         self._stop_event.clear()
@@ -733,6 +1128,17 @@ class GstStream:
         ret = self._pipeline.set_state(state)
         if ret == Gst.StateChangeReturn.FAILURE:
             raise GstError(f"Failed to set pipeline state to {state}")
+
+    def _pipeline_base_time_ns(self) -> int | None:
+        """Return the pipeline's GstClock base time in ns (shared across streams)."""
+        pipeline = self._pipeline
+        if pipeline is None:
+            return None
+        try:
+            base_time = pipeline.get_base_time()
+        except Exception:
+            return None
+        return _gst_time_to_ns(base_time)
 
     def _snapshot_sink(self) -> Optional[Gst.Element]:
         pipeline = self._pipeline
@@ -1070,6 +1476,14 @@ class StreamManager:
 
     @staticmethod
     def _frame_pair_time(frame: SnapshotFrame) -> tuple[float, str]:
+        # Prefer the shared-clock capture instant (base_time + PTS); it is the
+        # only timestamp directly comparable across the two pipelines.
+        clock_ns = getattr(frame, "source_clock_ns", None)
+        if clock_ns is not None:
+            try:
+                return float(clock_ns) / 1e9, "source_clock"
+            except Exception:
+                pass
         source_ts = getattr(frame, "source_monotonic_ts", None)
         if source_ts is not None:
             try:
@@ -1144,6 +1558,131 @@ class StreamManager:
             )
         raise TimeoutError(f"No cached stereo frames arrived within {max(0.0, float(timeout_s)):.2f} s")
 
+    @staticmethod
+    def _newest_decodable_index(stream: "GstStream", aus: list["_CompressedAU"]) -> int | None:
+        """Newest AU (with a clock) whose GOP is complete in the ring.
+
+        The bleeding-edge AU is where the leaky ring occasionally drops a frame
+        (seq gap) under load, so the very newest is sometimes not yet
+        GOP-decodable. Backing off to the newest decodable AU avoids spinning
+        while a fresh keyframe settles the tail.
+        """
+        for i in range(len(aus) - 1, -1, -1):
+            if aus[i].clock_ns is not None and stream._gop_segment(aus, i) is not None:
+                return i
+        return None
+
+    @staticmethod
+    def _closest_decodable_index(stream: "GstStream", aus: list["_CompressedAU"], target_clock_ns: int) -> int | None:
+        best_i = None
+        best_d: int | None = None
+        for i, au in enumerate(aus):
+            if au.clock_ns is None:
+                continue
+            if stream._gop_segment(aus, i) is None:
+                continue
+            d = abs(int(au.clock_ns) - int(target_clock_ns))
+            if best_d is None or d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
+
+    @classmethod
+    def _pick_decodable_au_pair(
+        cls,
+        left_stream: "GstStream",
+        right_stream: "GstStream",
+        left_aus: list["_CompressedAU"],
+        right_aus: list["_CompressedAU"],
+    ) -> "tuple[float, int, int] | None":
+        """Pick the most recent shared instant where BOTH sides are decodable.
+
+        Targets ``min(newest_decodable_left, newest_decodable_right)`` then takes
+        the closest decodable AU on each side. Both returned indices are
+        guaranteed GOP-decodable, so the caller never decodes a frame that isn't
+        ready (which previously caused a ~400ms retry spin). Returns
+        ``(delta_ms, left_idx, right_idx)`` or None.
+        """
+        li0 = cls._newest_decodable_index(left_stream, left_aus)
+        ri0 = cls._newest_decodable_index(right_stream, right_aus)
+        if li0 is None or ri0 is None:
+            return None
+        lc0 = left_aus[li0].clock_ns
+        rc0 = right_aus[ri0].clock_ns
+        if lc0 is None or rc0 is None:
+            return None
+        target = min(int(lc0), int(rc0))
+        li = cls._closest_decodable_index(left_stream, left_aus, target)
+        ri = cls._closest_decodable_index(right_stream, right_aus, target)
+        if li is None or ri is None:
+            return None
+        lc = left_aus[li].clock_ns
+        rc = right_aus[ri].clock_ns
+        if lc is None or rc is None:
+            return None
+        return abs(int(lc) - int(rc)) / 1e6, li, ri
+
+    @classmethod
+    def _capture_ondemand_pair(
+        cls,
+        left_stream: GstStream,
+        right_stream: GstStream,
+        *,
+        timeout_s: float,
+        max_pair_delta_ms: float,
+    ) -> StereoSnapshotPair:
+        """Pair two compressed-AU rings on the shared clock and decode on demand."""
+        quality_l = min(100, _snapshot_quality(left_stream.config))
+        quality_r = min(100, _snapshot_quality(right_stream.config))
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        max_delta_ms = max(0.0, float(max_pair_delta_ms))
+        attempts = 0
+        best_delta: float | None = None
+
+        def _decode_pair(li, ri, left_aus, right_aus) -> "tuple[SnapshotFrame, SnapshotFrame] | None":
+            # Decode sequentially: software openh264dec saturates the Pi's cores,
+            # so two concurrent 1080p decodes contend and run far slower than the
+            # sum of two sequential decodes. The frames were already selected by
+            # shared clock, so pairing accuracy does not depend on decode timing.
+            try:
+                left_frame = left_stream._frame_from_au(left_aus, li, quality=quality_l)
+                right_frame = right_stream._frame_from_au(right_aus, ri, quality=quality_r)
+            except GstError:
+                return None
+            return left_frame, right_frame
+
+        while True:
+            attempts += 1
+            left_aus = left_stream.au_ring_frames()
+            right_aus = right_stream.au_ring_frames()
+            pick = cls._pick_decodable_au_pair(left_stream, right_stream, left_aus, right_aus)
+            if pick is not None:
+                delta_ms, li, ri = pick
+                if best_delta is None or delta_ms < best_delta:
+                    best_delta = delta_ms
+                if delta_ms <= max_delta_ms:
+                    # Both indices are already guaranteed decodable by the picker.
+                    decoded = _decode_pair(li, ri, left_aus, right_aus)
+                    if decoded is not None:
+                        left_frame, right_frame = decoded
+                        return StereoSnapshotPair(
+                            left=left_frame,
+                            right=right_frame,
+                            pair_delta_ms=delta_ms,
+                            timestamp_source="rov_snapshot_ondemand_source_clock",
+                            attempts=attempts,
+                        )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.01, remaining))
+
+        best_txt = f"{best_delta:.1f} ms" if best_delta is not None else "n/a"
+        raise TimeoutError(
+            f"Could not capture on-demand stereo pair within {max_delta_ms:.1f} ms "
+            f"(best delta {best_txt} across {attempts} attempt(s))"
+        )
+
     def capture_stereo_pair(
         self,
         left: str,
@@ -1170,6 +1709,13 @@ class StreamManager:
 
         left_cfg = getattr(left_stream, "config", None)
         right_cfg = getattr(right_stream, "config", None)
+        if left_cfg is not None and right_cfg is not None and _snapshot_ondemand(left_cfg) and _snapshot_ondemand(right_cfg):
+            return self._capture_ondemand_pair(
+                left_stream,
+                right_stream,
+                timeout_s=timeout_s,
+                max_pair_delta_ms=max_pair_delta_ms,
+            )
         if left_cfg is not None and right_cfg is not None and _snapshot_cache_enabled(left_cfg) and _snapshot_cache_enabled(right_cfg):
             return self._capture_cached_snapshot_pair(
                 left_stream,
