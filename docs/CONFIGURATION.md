@@ -128,17 +128,24 @@ AXIS_ROLL = "dpad_x"
 
 Set an axis to `"none"` if it should be disabled.
 
-Manipulator runtime gains:
+Manipulator geometry / calibration (the differential wrist/arm is degree-based —
+see [MANIPULATOR_ARM.md](MANIPULATOR_ARM.md)):
 
 ```python
-WRIST_ROTATE_SPEED = 0.50
-GRIPPER_PITCH_SCALE = 0.5
-GRIPPER_YAW_SCALE = 1.0
+WRIST_ROTATE_SPEED = 0.50          # continuous-rotation T200 wrist (separate)
+GRIPPER_SERVO_RANGE_DEG = 70.0     # 100.0 after the servos are reprogrammed
+GRIPPER_PITCH_SPAN_DEG = 90.0
+GRIPPER_WRIST_SPAN_DEG = 90.0
+GRIPPER_PITCH_NEUTRAL_DEG = 45.0   # slides the full-wrist band along the pitch arc
+GRIPPER_US_PER_DEG = 1000.0 / 70.0 # set by tools.gripper_calibrate
+GRIPPER_SERVO_CENTER_US = 1500
+GRIPPER_SLEW_NORM_PER_S = 3.0      # servo-output smoothing
 ```
 
 TritonPilot sends `PilotFrame.modes["back_gripper_gain"]` and
-`PilotFrame.modes["arm_gain"]` at runtime. TritonOS clamps those values and
-applies them on top of the fixed wrist/arm calibration values above.
+`PilotFrame.modes["arm_gain"]` at runtime. `back_gripper_gain` scales the
+continuous wrist speed; `arm_gain` scales the pilot-side arm-motion *speed* (it no
+longer caps the reachable range).
 
 ## Arming Safety
 

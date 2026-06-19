@@ -623,6 +623,12 @@ class AuxOutputConfig:
     # parked position even while thrusters are forced to neutral.
     hold_pwm_on_disarm: bool = False
 
+    # Optional slew-rate limit on this output's normalized command (units/sec).
+    # 0 disables (snap to target). Smooths positional servos against per-frame
+    # jitter and step changes; set high enough to feel instant (e.g. 3.0 ~=
+    # full normalized travel in ~0.33 s).
+    slew_norm_per_s: float = 0.0
+
 class ThrustWriter:
     """Map mixer outputs to Navigator PWM channels.
 
@@ -825,6 +831,10 @@ class ThrustWriter:
 
         # Track last aux counts so disarm can keep lights etc. stable if desired.
         self._last_aux_counts: List[int] = self._aux_default_counts()
+        # Slew-limiter state for aux outputs (normalized command + last write time).
+        # None means "no previous sample" -> the next command snaps without limiting.
+        self._last_aux_norm: List[Optional[float]] = [None for _ in self._aux_order]
+        self._last_aux_write_t: Optional[float] = None
 
         if self.debug:
             mode = "enum" if use_enum else "int"
@@ -884,6 +894,7 @@ class ThrustWriter:
             # Hold neutral thrusters (keep current aux outputs stable).
             try:
                 self._reset_slew_state()
+                self._reset_aux_slew()
                 self._apply_outputs(self._neutral_thruster_counts(), list(self._last_aux_counts))
             except Exception:
                 pass
@@ -909,6 +920,7 @@ class ThrustWriter:
 
             try:
                 self._reset_slew_state()
+                self._reset_aux_slew()
                 self._apply_outputs(self._neutral_thruster_counts(), aux_counts)
             except Exception:
                 pass
@@ -1111,7 +1123,26 @@ class ThrustWriter:
         pulse = _clamp(pulse, lo, hi)
         return us_to_count(pulse, self.cfg.freq_hz)
 
-    def _extract_aux_counts(self, cmd: Mapping[Any, float]) -> List[int]:
+    def _reset_aux_slew(self) -> None:
+        """Drop aux slew-limiter history so the next command snaps to target.
+
+        Called on arm/disarm so a deliberate park/neutral move is not fought by the
+        rate limiter and the first live command after arming starts cleanly.
+        """
+        self._last_aux_norm = [None for _ in self._aux_order]
+        self._last_aux_write_t = None
+
+    def _extract_aux_counts(self, cmd: Mapping[Any, float], now: Optional[float] = None) -> List[int]:
+        if now is None:
+            now = time.time()
+        dt = 0.0
+        if self._last_aux_write_t is not None:
+            dt = max(0.0, float(now) - float(self._last_aux_write_t))
+            dt_cap = float(getattr(self.cfg, "slew_dt_max_s", 0.10) or 0.10)
+            if dt_cap > 0.0:
+                dt = min(dt, dt_cap)
+        self._last_aux_write_t = float(now)
+
         counts: List[int] = []
         for i, name in enumerate(self._aux_order):
             v = None
@@ -1126,6 +1157,17 @@ class ThrustWriter:
                 counts.append(self._last_aux_counts[i])
                 continue
 
+            # Optional slew-rate limit (normalized units/sec) to smooth servo motion.
+            cfg = self.aux_cfg.get(name, AuxOutputConfig())
+            slew = float(getattr(cfg, "slew_norm_per_s", 0.0) or 0.0)
+            prev = self._last_aux_norm[i]
+            if slew > 0.0 and prev is not None and dt > 0.0:
+                max_delta = slew * dt
+                if v > prev + max_delta:
+                    v = prev + max_delta
+                elif v < prev - max_delta:
+                    v = prev - max_delta
+            self._last_aux_norm[i] = v
             counts.append(self._aux_norm_to_count(name, v))
         return counts
 
@@ -1144,7 +1186,7 @@ class ThrustWriter:
             # Aux outputs: compute first
             aux_counts = list(self._last_aux_counts)
             if self._aux_order:
-                new_aux_counts = self._extract_aux_counts(cmd)
+                new_aux_counts = self._extract_aux_counts(cmd, now)
 
                 # If disarmed and aux disallowed, keep last (or defaults).
                 if not self._armed:

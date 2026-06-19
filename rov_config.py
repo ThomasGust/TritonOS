@@ -591,30 +591,58 @@ LIGHTS_TRIM_US = 0
 WRIST_ROTATE_ENABLE = True
 WRIST_ROTATE_CMD_KEY = "wrist_rotate"
 
-# 9) Differential-servo gripper head (pitch/yaw servos on channels 11/12)
-# Topside sends keyboard-derived normalized commands in PilotFrame.aux:
-#   W/S -> gripper_pitch in [-1..1]
-#   A/D -> gripper_yaw   in [-1..1]
-# The ROV mixes those into two signed servo outputs:
-#   left  = pitch + yaw
-#   right = pitch - yaw
-# Then main_rov configures those outputs as bidirectional servos centered at 1500 us.
-# TritonPilot can additionally scale live WASD commands with
-# PilotFrame.modes["arm_gain"] (keys 6/7 by default).
+# 9) Differential-servo wrist/arm (two servos on channels 12/13)
+# Topside sends normalized POSITION commands in PilotFrame.aux:
+#   gripper_pitch in [-1..1]  -> arm pitch  (-1 = flat/folded, +1 = straight down)
+#   gripper_yaw   in [-1..1]  -> wrist roll (-1 .. +1 across the wrist span)
+# The two servos form a 1:1 differential: each servo travels (pitch +/- wrist)
+# degrees and is limited to +/- GRIPPER_SERVO_RANGE_DEG. The ROV converts the
+# normalized commands to degrees, applies a PITCH-PRIORITY clip (preserve pitch,
+# taper wrist near the travel limit), and emits two signed servo outputs.
+# Reachable region is the diamond  |dPitch| + |dWrist| <= range.
+# See docs/MANIPULATOR_ARM.md for the kinematics and calibration procedure.
+# TritonPilot scales the *speed* of motion with PilotFrame.modes["arm_gain"]
+# (keys 6/7); it no longer caps reachable range.
 GRIPPER_ENABLE = True
 GRIPPER_PITCH_CMD_KEY = "gripper_pitch"
 GRIPPER_YAW_CMD_KEY = "gripper_yaw"
 GRIPPER_LEFT_CMD_KEY = "gripper_left"
 GRIPPER_RIGHT_CMD_KEY = "gripper_right"
-GRIPPER_PITCH_SCALE = 0.5
-GRIPPER_YAW_SCALE = 1.0
+
+# --- Differential geometry / range of motion (degrees) ---------------------
+GRIPPER_SERVO_RANGE_DEG = 70.0   # BlueTrail set to +/-70 now; set 100.0 after reprogramming
+GRIPPER_PITCH_SPAN_DEG = 90.0    # gripper_pitch -1..+1 spans this many degrees of pitch
+GRIPPER_WRIST_SPAN_DEG = 90.0    # gripper_yaw   -1..+1 spans this many degrees of wrist roll
+# Pose at servo-center -- slides the ~50 deg full-wrist band along the pitch arc.
+# This build: 25 -> full wrist over pitch 0..50 deg (flat .. mid, the shallow /
+# reaching-out half); still reaches straight-down (90 deg) with little wrist there.
+# The connector MUST be mounted so the centered-servo arm sits at this pitch.
+GRIPPER_PITCH_NEUTRAL_DEG = 25.0
+GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0
 GRIPPER_DEADBAND = 0.01
 GRIPPER_HOLD_LAST_POSITION = True
-GRIPPER_SERVO_MIN_US = 500
-GRIPPER_SERVO_MAX_US = 2500
+
+# --- Servo pulse calibration -----------------------------------------------
+# Symmetric about center: a normalized left/right of +/-1 == +/-RANGE_DEG.
+#   us = CENTER_US + servo_deg * US_PER_DEG     (servo_deg in [-RANGE, +RANGE])
+# BlueTrail SER-2010 = Hitec D954SW programmed to +/-70 deg on the standard R/C
+# band (1500us center, ~1100..1900us = +/-70 deg => 400/70 us/deg). If the arm
+# does not reach a full 90 deg pitch at full stick, raise GRIPPER_US_PER_DEG
+# (widens the endpoints); confirm precisely with `tools.gripper_calibrate`.
 GRIPPER_SERVO_CENTER_US = 1500
+GRIPPER_US_PER_DEG = 400.0 / 70.0   # ~5.714 us/deg -> 1100..1900us spans +/-70 deg
+GRIPPER_TRIM_US = 0
+# Derived endpoints (kept explicit so the ThrustWriter aux mapping is unchanged).
+GRIPPER_SERVO_MIN_US = int(round(GRIPPER_SERVO_CENTER_US - GRIPPER_SERVO_RANGE_DEG * GRIPPER_US_PER_DEG))
+GRIPPER_SERVO_MAX_US = int(round(GRIPPER_SERVO_CENTER_US + GRIPPER_SERVO_RANGE_DEG * GRIPPER_US_PER_DEG))
+
+# --- Output smoothing (anti-sputter) ---------------------------------------
+# Slew-rate limit on the servo outputs, normalized units/sec. High enough to feel
+# instant (3.0 ~= full travel in 0.33s) but absorbs frame jitter and park jumps.
+GRIPPER_SLEW_NORM_PER_S = 3.0
+
 GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Keep the differential wrist servos powered on disarm so the arm stays folded in.
@@ -622,10 +650,10 @@ GRIPPER_HOLD_PWM_ON_DISARM = False # if False, the servos will be unpowered on d
 # Explicitly command the folded pose when arming and right before disarming.
 GRIPPER_PARK_ON_ARM_DISARM = True
 GRIPPER_PARK_SETTLE_S = 0.50
-# Park the differential wrist on transitions. Pitch is preserved first; yaw is
-# limited if the requested pitch+yaw pose exceeds the two-servo range.
-GRIPPER_DISARM_PITCH = 0.20
-GRIPPER_DISARM_YAW = -1.0
+# Park pose as normalized POSITION (same -1..1 mapping as live commands):
+#   pitch -1 = flat/folded against the ROV, yaw 0 = wrist centered.
+GRIPPER_DISARM_PITCH = -1.0
+GRIPPER_DISARM_YAW = 0.0
 # On arm, default back to the same tucked pose instead of reviving the last live command.
 GRIPPER_ARM_PITCH = GRIPPER_DISARM_PITCH
 GRIPPER_ARM_YAW = GRIPPER_DISARM_YAW

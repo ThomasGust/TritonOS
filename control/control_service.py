@@ -374,15 +374,20 @@ class ControlService:
         self._gripper_yaw_key = str(getattr(cfg, "GRIPPER_YAW_CMD_KEY", "gripper_yaw"))
         self._gripper_left_key = str(getattr(cfg, "GRIPPER_LEFT_CMD_KEY", "gripper_left"))
         self._gripper_right_key = str(getattr(cfg, "GRIPPER_RIGHT_CMD_KEY", "gripper_right"))
-        self._gripper_pitch_scale = float(getattr(cfg, "GRIPPER_PITCH_SCALE", 1.0))
-        self._gripper_yaw_scale = float(getattr(cfg, "GRIPPER_YAW_SCALE", 1.0))
         self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
         self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
         self._gripper_deadzone = float(getattr(cfg, "GRIPPER_DEADBAND", 0.01))
+        # Differential geometry in degrees (see _diff_mix_norm / docs/MANIPULATOR_ARM.md).
+        self._gripper_servo_range_deg = max(1.0, float(getattr(cfg, "GRIPPER_SERVO_RANGE_DEG", 70.0)))
+        self._gripper_pitch_span_deg = float(getattr(cfg, "GRIPPER_PITCH_SPAN_DEG", 90.0))
+        self._gripper_wrist_span_deg = float(getattr(cfg, "GRIPPER_WRIST_SPAN_DEG", 90.0))
+        self._gripper_pitch_neutral_deg = float(getattr(cfg, "GRIPPER_PITCH_NEUTRAL_DEG", 45.0))
+        self._gripper_wrist_neutral_deg = float(getattr(cfg, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0))
         arm_pitch = float(getattr(cfg, "GRIPPER_ARM_PITCH", getattr(cfg, "GRIPPER_DISARM_PITCH", 0.0)) or 0.0)
         arm_yaw = float(getattr(cfg, "GRIPPER_ARM_YAW", getattr(cfg, "GRIPPER_DISARM_YAW", 0.0)) or 0.0)
-        self._gripper_park_pitch, self._gripper_park_yaw = self._limit_gripper_axes_preserve_pitch(arm_pitch, arm_yaw)
-        self._gripper_park_left, self._gripper_park_right = self._mix_gripper_axes(
+        self._gripper_park_pitch = max(-1.0, min(1.0, arm_pitch))
+        self._gripper_park_yaw = max(-1.0, min(1.0, arm_yaw))
+        self._gripper_park_left, self._gripper_park_right = self._diff_mix_norm(
             self._gripper_park_pitch,
             self._gripper_park_yaw,
         )
@@ -1154,59 +1159,97 @@ class ControlService:
             return self._gripper_last_left, self._gripper_last_right
 
         aux = getattr(pilot, "aux", {}) or {}
-        try:
-            pitch = float(aux.get(self._gripper_pitch_key, 0.0) or 0.0)
-        except Exception:
-            pitch = 0.0
-        try:
-            yaw = float(aux.get(self._gripper_yaw_key, 0.0) or 0.0)
-        except Exception:
-            yaw = 0.0
 
-        arm_gain = self._pilot_mode_gain(
+        # arm_gain now scales motion *speed* on the pilot side; it no longer caps the
+        # reachable range here. Keep reading it so telemetry/status stays accurate.
+        self._last_arm_gain = self._pilot_mode_gain(
             pilot,
             ("arm_gain", "gripper_gain", "servo_wrist_gain"),
             default=1.0,
             min_value=0.0,
         )
-        self._last_arm_gain = float(arm_gain)
 
-        pitch = max(-1.0, min(1.0, pitch * float(self._gripper_pitch_scale) * float(self._gripper_pitch_invert) * float(arm_gain)))
-        yaw = max(-1.0, min(1.0, yaw * float(self._gripper_yaw_scale) * float(self._gripper_yaw_invert) * float(arm_gain)))
-
-        pitch_has_input = abs(pitch) > float(self._gripper_deadzone)
-        yaw_has_input = abs(yaw) > float(self._gripper_deadzone)
-        has_input = pitch_has_input or yaw_has_input
-        if (not has_input) and self._gripper_hold_last:
+        # gripper_pitch / gripper_yaw are absolute POSITION commands in [-1..1].
+        # A *present* key (even 0.0) is applied directly so the pilot can hold any
+        # pose, including centered. An *absent* axis holds its last commanded value
+        # (safety net for a stale/older topside that omits the arm keys).
+        pitch_present = self._gripper_pitch_key in aux
+        yaw_present = self._gripper_yaw_key in aux
+        if (not pitch_present) and (not yaw_present) and self._gripper_hold_last:
             return self._gripper_last_left, self._gripper_last_right
 
         last_pitch, last_yaw = self._last_gripper_axes()
-        target_pitch = pitch if pitch_has_input else (last_pitch if self._gripper_hold_last else 0.0)
-        target_yaw = yaw if yaw_has_input else (last_yaw if self._gripper_hold_last else 0.0)
-        target_pitch, target_yaw = self._limit_gripper_axes_preserve_pitch(target_pitch, target_yaw)
-        left, right = self._mix_gripper_axes(target_pitch, target_yaw)
+        if pitch_present:
+            try:
+                pitch = max(-1.0, min(1.0, float(aux.get(self._gripper_pitch_key) or 0.0) * float(self._gripper_pitch_invert)))
+            except Exception:
+                pitch = last_pitch
+        else:
+            pitch = last_pitch if self._gripper_hold_last else 0.0
+        if yaw_present:
+            try:
+                yaw = max(-1.0, min(1.0, float(aux.get(self._gripper_yaw_key) or 0.0) * float(self._gripper_yaw_invert)))
+            except Exception:
+                yaw = last_yaw
+        else:
+            yaw = last_yaw if self._gripper_hold_last else 0.0
 
-        self._gripper_last_pitch = target_pitch
-        self._gripper_last_yaw = target_yaw
+        left, right = self._diff_mix_norm(pitch, yaw)
+
+        self._gripper_last_pitch = pitch
+        self._gripper_last_yaw = yaw
         self._gripper_last_left = left
         self._gripper_last_right = right
         return left, right
 
     @staticmethod
-    def _limit_gripper_axes_preserve_pitch(pitch: float, yaw: float) -> Tuple[float, float]:
-        pitch_v = max(-1.0, min(1.0, float(pitch)))
-        yaw_v = max(-1.0, min(1.0, float(yaw)))
-        yaw_room = max(0.0, 1.0 - abs(pitch_v))
-        yaw_v = max(-yaw_room, min(yaw_room, yaw_v))
-        return pitch_v, yaw_v
+    def _diff_mix_norm_deg(
+        pitch_norm: float,
+        yaw_norm: float,
+        *,
+        servo_range_deg: float,
+        pitch_span_deg: float,
+        wrist_span_deg: float,
+        pitch_neutral_deg: float,
+        wrist_neutral_deg: float,
+    ) -> Tuple[float, float]:
+        """Map normalized (pitch, wrist) position commands to normalized servo outputs.
 
-    @staticmethod
-    def _mix_gripper_axes(pitch: float, yaw: float) -> Tuple[float, float]:
-        pitch_v, yaw_v = ControlService._limit_gripper_axes_preserve_pitch(pitch, yaw)
-        left = pitch_v + yaw_v
-        right = pitch_v - yaw_v
+        Inputs are absolute positions in [-1..1]:
+          ``pitch_norm`` -1..+1  ->  pitch 0..``pitch_span_deg`` (flat -> straight down)
+          ``yaw_norm``   -1..+1  ->  wrist 0..``wrist_span_deg``
 
-        return (left, right)
+        A 1:1 differential gives servo angles ``s_L = dPitch + dWrist`` and
+        ``s_R = dPitch - dWrist`` as deviations from the servo-center pose. A
+        PITCH-PRIORITY clip keeps the requested pitch and tapers wrist so neither
+        servo exceeds ``+/-servo_range_deg``. Returns ``(left_norm, right_norm)``
+        where ``+/-1`` corresponds to ``+/-servo_range_deg``.
+        """
+        rng = max(1.0, float(servo_range_deg))
+        p = max(-1.0, min(1.0, float(pitch_norm)))
+        w = max(-1.0, min(1.0, float(yaw_norm)))
+        pitch_deg = (p + 1.0) * 0.5 * float(pitch_span_deg)
+        wrist_deg = (w + 1.0) * 0.5 * float(wrist_span_deg)
+        d_pitch = pitch_deg - float(pitch_neutral_deg)
+        d_wrist = wrist_deg - float(wrist_neutral_deg)
+        # Pitch priority: clip pitch to range first, then give wrist the leftover budget.
+        d_pitch = max(-rng, min(rng, d_pitch))
+        room = max(0.0, rng - abs(d_pitch))
+        d_wrist = max(-room, min(room, d_wrist))
+        left = (d_pitch + d_wrist) / rng
+        right = (d_pitch - d_wrist) / rng
+        return (max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right)))
+
+    def _diff_mix_norm(self, pitch_norm: float, yaw_norm: float) -> Tuple[float, float]:
+        return self._diff_mix_norm_deg(
+            pitch_norm,
+            yaw_norm,
+            servo_range_deg=self._gripper_servo_range_deg,
+            pitch_span_deg=self._gripper_pitch_span_deg,
+            wrist_span_deg=self._gripper_wrist_span_deg,
+            pitch_neutral_deg=self._gripper_pitch_neutral_deg,
+            wrist_neutral_deg=self._gripper_wrist_neutral_deg,
+        )
 
     def _last_gripper_axes(self) -> Tuple[float, float]:
         try:

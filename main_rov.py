@@ -450,10 +450,15 @@ def start_control_service():
                         left_disarm = None
                         right_disarm = None
                         if disarm_pitch is not None:
-                            pitch_v = float(disarm_pitch)
-                            yaw_v = float(disarm_yaw or 0.0)
-                            pitch_v, yaw_v = ControlService._limit_gripper_axes_preserve_pitch(pitch_v, yaw_v)
-                            left_disarm, right_disarm = ControlService._mix_gripper_axes(pitch_v, yaw_v)
+                            left_disarm, right_disarm = ControlService._diff_mix_norm_deg(
+                                float(disarm_pitch),
+                                float(disarm_yaw or 0.0),
+                                servo_range_deg=float(getattr(cfg, "GRIPPER_SERVO_RANGE_DEG", 70.0)),
+                                pitch_span_deg=float(getattr(cfg, "GRIPPER_PITCH_SPAN_DEG", 90.0)),
+                                wrist_span_deg=float(getattr(cfg, "GRIPPER_WRIST_SPAN_DEG", 90.0)),
+                                pitch_neutral_deg=float(getattr(cfg, "GRIPPER_PITCH_NEUTRAL_DEG", 45.0)),
+                                wrist_neutral_deg=float(getattr(cfg, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0)),
+                            )
                             left_disarm = _clamp_signed_norm(left_disarm)
                             right_disarm = _clamp_signed_norm(right_disarm)
 
@@ -469,6 +474,7 @@ def start_control_service():
                             force_off_on_disarm=bool(getattr(cfg, "GRIPPER_FORCE_OFF_ON_DISARM", False)),
                             center_on_disarm=bool(getattr(cfg, "GRIPPER_CENTER_ON_DISARM", True)),
                             hold_pwm_on_disarm=bool(getattr(cfg, "GRIPPER_HOLD_PWM_ON_DISARM", False)),
+                            slew_norm_per_s=float(getattr(cfg, "GRIPPER_SLEW_NORM_PER_S", 0.0)),
                         )
                         _register_aux_output(
                             "gripper_left",
