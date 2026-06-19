@@ -62,11 +62,13 @@ def parse_args() -> argparse.Namespace:
     left_default = DEFAULT_LEFT_CHANNEL
     right_default = DEFAULT_RIGHT_CHANNEL
     center_default = DEFAULT_CENTER_US
+    us_per_deg_default = 1000.0 / 70.0
     try:  # Prefer the live config so we calibrate the channels the ROV drives.
         from rov_config import (  # type: ignore
             GRIPPER_LEFT_PWM_CHANNEL,
             GRIPPER_RIGHT_PWM_CHANNEL,
             GRIPPER_SERVO_CENTER_US,
+            GRIPPER_US_PER_DEG,
         )
 
         if GRIPPER_LEFT_PWM_CHANNEL is not None:
@@ -74,6 +76,7 @@ def parse_args() -> argparse.Namespace:
         if GRIPPER_RIGHT_PWM_CHANNEL is not None:
             right_default = int(GRIPPER_RIGHT_PWM_CHANNEL)
         center_default = float(GRIPPER_SERVO_CENTER_US)
+        us_per_deg_default = float(GRIPPER_US_PER_DEG)
     except Exception:
         pass
 
@@ -94,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--oe-active-high", action="store_true", help="Treat OE as active-high (default active-low).")
     ap.add_argument("--no-oe", action="store_true", help="Skip OE GPIO control.")
     ap.add_argument("--servo-range-deg", type=float, default=70.0, help="Programmed servo half-range (deg).")
+    ap.add_argument("--us-per-deg", type=float, default=us_per_deg_default, help="Microseconds of pulse per degree of servo travel.")
     ap.add_argument(
         "--align",
         action="store_true",
@@ -103,6 +107,11 @@ def parse_args() -> argparse.Namespace:
         "--check-axes",
         action="store_true",
         help="Drive common-mode then differential-mode moves to learn how the differential maps pitch/roll.",
+    )
+    ap.add_argument(
+        "--jog",
+        action="store_true",
+        help="Interactive angle jog: command individual servo angles or a pitch/wrist pose to characterize the arm.",
     )
     return ap.parse_args()
 
@@ -403,6 +412,106 @@ def check_axes(ramp: "DualRamp", center_us: float) -> None:
     print("===========================================\n")
 
 
+def _load_mix_params() -> dict:
+    """Read the current differential-mix parameters from rov_config (with defaults)."""
+
+    p = dict(
+        servo_range_deg=70.0,
+        pitch_neutral=25.0,
+        wrist_neutral=45.0,
+        left_invert=1.0,
+        right_invert=1.0,
+    )
+    try:
+        import rov_config as c  # type: ignore
+
+        p.update(
+            servo_range_deg=float(getattr(c, "GRIPPER_SERVO_RANGE_DEG", 70.0)),
+            pitch_neutral=float(getattr(c, "GRIPPER_PITCH_NEUTRAL_DEG", 25.0)),
+            wrist_neutral=float(getattr(c, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0)),
+            left_invert=float(getattr(c, "GRIPPER_LEFT_INVERT", 1.0)),
+            right_invert=float(getattr(c, "GRIPPER_RIGHT_INVERT", 1.0)),
+        )
+    except Exception:
+        pass
+    return p
+
+
+def mix_pitch_wrist_to_servo_deg(pitch_deg: float, wrist_deg: float, p: dict) -> Tuple[float, float]:
+    """Current ROV mix, in degrees: (pitch, wrist) -> (servo_left, servo_right)."""
+
+    rng = float(p["servo_range_deg"])
+    d_pitch = max(-rng, min(rng, float(pitch_deg) - float(p["pitch_neutral"])))
+    room = max(0.0, rng - abs(d_pitch))
+    d_wrist = max(-room, min(room, float(wrist_deg) - float(p["wrist_neutral"])))
+    left = float(p["left_invert"]) * (d_pitch + d_wrist)
+    right = float(p["right_invert"]) * (d_pitch - d_wrist)
+    return left, right
+
+
+def jog_mode(ramp: "DualRamp", center_us: float, us_per_deg: float) -> None:
+    """Interactive angle jog to characterize the differential by direct observation."""
+
+    params = _load_mix_params()
+
+    def to_us(servo_deg: float) -> float:
+        return float(center_us) + float(servo_deg) * float(us_per_deg)
+
+    cur_l = 0.0
+    cur_r = 0.0
+
+    print("\n================ ANGLE JOG ================")
+    print("Angles are DEGREES from each servo's center (+ = longer pulse).")
+    print("Commands:")
+    print("  l <deg>            set LEFT servo angle")
+    print("  r <deg>            set RIGHT servo angle")
+    print("  b <l> <r>          set BOTH servo angles")
+    print("  p <pitch> <wrist>  command a pitch/wrist pose through the current mix")
+    print("  c                  center both servos")
+    print("  q                  quit")
+    print("To characterize: move ONE servo (l/r) and report whether the ARM pitched or")
+    print("rolled, and in which direction. That lets us build the exact mapping.")
+    print("==========================================\n")
+
+    ramp.goto(to_us(cur_l), to_us(cur_r))
+
+    while not _stop_requested:
+        try:
+            line = input("jog> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not line:
+            continue
+        parts = line.split()
+        cmd = parts[0].lower()
+        try:
+            if cmd in ("q", "quit", "exit"):
+                break
+            elif cmd in ("c", "center"):
+                cur_l = cur_r = 0.0
+                ramp.goto(to_us(cur_l), to_us(cur_r))
+            elif cmd in ("l", "left"):
+                cur_l = float(parts[1])
+                ramp.goto(to_us(cur_l), to_us(cur_r))
+            elif cmd in ("r", "right"):
+                cur_r = float(parts[1])
+                ramp.goto(to_us(cur_l), to_us(cur_r))
+            elif cmd in ("b", "both"):
+                cur_l, cur_r = float(parts[1]), float(parts[2])
+                ramp.goto(to_us(cur_l), to_us(cur_r))
+            elif cmd in ("p", "pose"):
+                pitch, wrist = float(parts[1]), float(parts[2])
+                cur_l, cur_r = mix_pitch_wrist_to_servo_deg(pitch, wrist, params)
+                ramp.goto(to_us(cur_l), to_us(cur_r))
+                print(f"  mix: pitch={pitch:+.1f} wrist={wrist:+.1f} -> servo_left={cur_l:+.1f} servo_right={cur_r:+.1f}")
+            else:
+                print("  usage: l <deg> | r <deg> | b <l> <r> | p <pitch> <wrist> | c | q")
+                continue
+            print(f"  [state] left={cur_l:+.1f} deg ({to_us(cur_l):.0f}us)   right={cur_r:+.1f} deg ({to_us(cur_r):.0f}us)")
+        except (IndexError, ValueError):
+            print("  usage: l <deg> | r <deg> | b <l> <r> | p <pitch> <wrist> | c | q")
+
+
 def main() -> int:
     """Run the guided differential-wrist calibration wizard."""
 
@@ -459,6 +568,10 @@ def main() -> int:
 
         if args.check_axes:
             check_axes(ramp, center_us)
+            return 0
+
+        if args.jog:
+            jog_mode(ramp, center_us, args.us_per_deg)
             return 0
 
         # --- Step 1: choose the neutral pose --------------------------------
