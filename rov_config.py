@@ -643,7 +643,8 @@ GRIPPER_HOLD_LAST_POSITION = True
 # 2x the standard R/C band. If the arm under/over-shoots the travel, adjust this and
 # the endpoints follow; confirm precisely with `tools.gripper_calibrate --jog`.
 GRIPPER_SERVO_CENTER_US = 1500
-GRIPPER_US_PER_DEG = 800.0 / 70.0   # ~11.43 us/deg -> 700..2300us spans +/-70 deg (measured)
+GRIPPER_SERVO_PULSE_HALFSPAN_US = 800.0  # measured 700..2300us endpoints, independent of programmed servo degrees
+GRIPPER_US_PER_DEG = GRIPPER_SERVO_PULSE_HALFSPAN_US / GRIPPER_SERVO_RANGE_DEG
 GRIPPER_TRIM_US = 0
 # Derived endpoints (kept explicit so the ThrustWriter aux mapping is unchanged).
 GRIPPER_SERVO_MIN_US = int(round(GRIPPER_SERVO_CENTER_US - GRIPPER_SERVO_RANGE_DEG * GRIPPER_US_PER_DEG))

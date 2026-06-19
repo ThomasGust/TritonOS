@@ -66,7 +66,8 @@ span used the whole servo budget for pitch and made wrist vanish at command
 endpoints.
 
 With **±100°** the whole `(pitch, wrist)` square is reachable: full wrist at full
-pitch everywhere. Set `GRIPPER_SERVO_RANGE_DEG = 100.0` after reprogramming.
+pitch everywhere. After reprogramming, set `GRIPPER_SERVO_RANGE_DEG = 100.0` and
+`GRIPPER_PITCH_NEUTRAL_DEG = 45.0`. Keep `GRIPPER_SERVO_PULSE_HALFSPAN_US` at the measured pulse half-span so the PWM endpoints stay fixed while physical degrees change.
 
 ### Mechanism & per-servo inversion (important)
 
@@ -131,9 +132,9 @@ full-wrist band for several candidate neutrals. Paste the values into
 normalized `±1` servo command into those endpoints.
 
 Servo: the SER-2010 is a Hitec **D954SW** programmed to **±70°**. This build's
-measured pulse range is about 700–2300 µs, so the config uses
-`GRIPPER_US_PER_DEG = 800/70`. If the arm can't reach the commanded endpoint,
-raise `GRIPPER_US_PER_DEG`; if the last bit of stick is dead, lower it.
+measured pulse range is about 700-2300 us, so the config keeps
+`GRIPPER_SERVO_PULSE_HALFSPAN_US = 800.0` and derives `GRIPPER_US_PER_DEG` from the programmed servo range. If the arm cannot reach the commanded endpoint,
+re-measure the pulse half-span; if the last bit of stick is dead, reduce it.
 
 ## Assembly: aligning the servos & mounting the connector
 
@@ -166,8 +167,8 @@ symmetrically about that neutral (`φ_L = Δpitch + Δwrist`, `φ_R = Δpitch �
 5. **Verify:** arm the vehicle and sweep pitch 0°→90° (should reach both ends) and
    wrist 0°→90° across the arc (full in the band, tapering near the pitch limits).
 
-If you later reprogram the servos to ±100°, set `GRIPPER_SERVO_RANGE_DEG = 100`; the
-same centered-mount procedure applies and you get full wrist at full pitch everywhere.
+If you later reprogram the servos to ±100°, set `GRIPPER_SERVO_RANGE_DEG = 100` and `GRIPPER_PITCH_NEUTRAL_DEG = 45`; the
+centered-mount procedure changes to the middle of the square: pitch 45° and wrist 45°.
 
 ## Smoothness
 

@@ -95,6 +95,29 @@ def test_current_repo_geometry_trades_extra_pitch_for_down_wrist():
     assert abs(d_wrist - 45.0) < 1e-6
 
 
+def test_servo_reprogram_keeps_pwm_endpoints_constant():
+    import rov_config as cfg
+
+    halfspan = cfg.GRIPPER_SERVO_RANGE_DEG * cfg.GRIPPER_US_PER_DEG
+    assert halfspan == cfg.GRIPPER_SERVO_PULSE_HALFSPAN_US
+    assert cfg.GRIPPER_SERVO_MIN_US == cfg.GRIPPER_SERVO_CENTER_US - cfg.GRIPPER_SERVO_PULSE_HALFSPAN_US
+    assert cfg.GRIPPER_SERVO_MAX_US == cfg.GRIPPER_SERVO_CENTER_US + cfg.GRIPPER_SERVO_PULSE_HALFSPAN_US
+
+
+def test_hundred_degree_servos_cover_full_pitch_wrist_square():
+    geo = dict(
+        servo_range_deg=100.0,
+        pitch_span_deg=90.0,
+        wrist_span_deg=90.0,
+        pitch_neutral_deg=45.0,
+        wrist_neutral_deg=45.0,
+    )
+    for pitch in (-1.0, 1.0):
+        for wrist in (-1.0, 1.0):
+            left, right = ControlService._diff_mix_norm_deg(pitch, wrist, **geo)
+            assert abs(left) <= 0.90
+            assert abs(right) <= 0.90
+
 def test_diff_mix_right_invert_unswaps_pitch_and_roll():
     # Pure pitch with no invert -> both servos move the SAME way (mixer default).
     left, right = ControlService._diff_mix_norm_deg(1.0, 0.0, **GEO)
