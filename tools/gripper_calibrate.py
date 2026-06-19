@@ -168,11 +168,76 @@ def prompt_enter(msg: str) -> bool:
     return not _stop_requested
 
 
+class PwmBackend:
+    """PWM output that prefers the same backend the ROV uses.
+
+    On the Navigator board the PWM output-enable is owned by the
+    ``bluerobotics_navigator`` library (``set_pwm_enable``), NOT the PCA9685 OE
+    GPIO. If we only toggle the OE GPIO, the chip emits the correct pulse but the
+    output stage stays gated and the servos go limp. So prefer ``NavigatorPWM``;
+    fall back to direct PCA9685 + OE GPIO only when the bindings are unavailable.
+
+    Channels are given as 1-based config/Navigator numbers (e.g. 10, 11); for the
+    Navigator integer API they are converted to the binding's base, matching
+    ``motion.pwm.ThrustWriter``.
+    """
+
+    def __init__(self, args):
+        self.name = "unknown"
+        self._nav = None
+        self._lib_base = 1
+        self._pca = None
+        self._oe = None
+
+        try:
+            from motion import pwm as motion_pwm
+
+            self._nav = motion_pwm.NavigatorPWM(freq_hz=float(args.freq))
+            self._lib_base = int(self._nav.lib_base)
+            self.name = "navigator"
+            print(f"[OK] PWM backend = navigator (lib_base={self._lib_base})")
+            return
+        except Exception as e:
+            print(f"[info] Navigator backend unavailable ({e}); using direct I2C + OE GPIO.")
+
+        OEController, PCA9685, find_pca9685 = load_pwm_helpers()
+        bus_num, addr = find_pca9685(args.bus, args.addr)
+        print(f"[OK] Found PCA9685 at /dev/i2c-{bus_num} addr 0x{addr:02X}")
+        self._pca = PCA9685(bus_num=bus_num, address=addr, freq_hz=float(args.freq), osc_hz=float(args.osc_hz))
+        self._pca.init()
+        if not args.no_oe:
+            self._oe = OEController(args.oe_gpio, active_low=not args.oe_active_high)
+            self._oe.set_enabled(False)
+        self.name = "direct_i2c"
+        print("[OK] PWM backend = direct_i2c")
+
+    def enable(self, state: bool) -> None:
+        if self._nav is not None:
+            self._nav.enable(bool(state))
+        elif self._oe is not None:
+            self._oe.set_enabled(bool(state))
+
+    def set_us(self, nav_channel_one_based: int, pulse_us: float) -> None:
+        if self._nav is not None:
+            lib_ch = int(nav_channel_one_based) - 1 + self._lib_base
+            self._nav.set_servo_us(lib_ch, float(pulse_us))
+        else:
+            self._pca.set_pulse_us_nav_channel(int(nav_channel_one_based), float(pulse_us))
+
+    def close(self) -> None:
+        for obj in (self._oe, self._pca):
+            try:
+                if obj is not None:
+                    obj.close()
+            except Exception:
+                pass
+
+
 class DualRamp:
     """Ramps two servo channels smoothly and tracks their current pulses."""
 
-    def __init__(self, pca, left_ch: int, right_ch: int, rate_us_per_sec: float, step_us: float):
-        self.pca = pca
+    def __init__(self, backend: "PwmBackend", left_ch: int, right_ch: int, rate_us_per_sec: float, step_us: float):
+        self.backend = backend
         self.left_ch = int(left_ch)
         self.right_ch = int(right_ch)
         self.rate = float(rate_us_per_sec)
@@ -181,8 +246,8 @@ class DualRamp:
         self.cur_right = DEFAULT_CENTER_US
 
     def _write(self, left_us: float, right_us: float) -> None:
-        self.pca.set_pulse_us_nav_channel(self.left_ch, float(left_us))
-        self.pca.set_pulse_us_nav_channel(self.right_ch, float(right_us))
+        self.backend.set_us(self.left_ch, float(left_us))
+        self.backend.set_us(self.right_ch, float(right_us))
         self.cur_left = float(left_us)
         self.cur_right = float(right_us)
 
@@ -283,15 +348,11 @@ def main() -> int:
     if not (SAFE_MIN_US < float(args.center_us) < SAFE_MAX_US):
         raise SystemExit("[error] --center-us must be between 500 and 2500")
 
-    OEController, PCA9685, find_pca9685 = load_pwm_helpers()
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    bus_num, addr = find_pca9685(args.bus, args.addr)
-    print(f"[OK] Found PCA9685 at /dev/i2c-{bus_num} addr 0x{addr:02X}")
+    backend = PwmBackend(args)
 
-    oe = None
-    pca = None
     center_us = float(args.center_us)
     pitch_span = 90.0
     wrist_span = 90.0
@@ -299,42 +360,32 @@ def main() -> int:
     def safe_shutdown() -> None:
         print("[SAFE] Returning servos to center and disabling outputs")
         try:
-            if pca is not None:
-                pca.set_pulse_us_nav_channel(int(args.left_channel), center_us)
-                pca.set_pulse_us_nav_channel(int(args.right_channel), center_us)
-                time.sleep(0.3)
+            backend.set_us(int(args.left_channel), center_us)
+            backend.set_us(int(args.right_channel), center_us)
+            time.sleep(0.3)
         except Exception:
             pass
-        for obj in (oe, pca):
-            try:
-                if obj is not None and hasattr(obj, "set_enabled"):
-                    obj.set_enabled(False)
-            except Exception:
-                pass
-            try:
-                if obj is not None:
-                    obj.close()
-            except Exception:
-                pass
+        try:
+            backend.enable(False)
+        except Exception:
+            pass
+        try:
+            backend.close()
+        except Exception:
+            pass
 
     try:
-        if not args.no_oe:
-            oe = OEController(args.oe_gpio, active_low=not args.oe_active_high)
-            oe.set_enabled(False)
-
-        pca = PCA9685(bus_num=bus_num, address=addr, freq_hz=args.freq, osc_hz=args.osc_hz)
-        pca.init()
-        ramp = DualRamp(pca, args.left_channel, args.right_channel, args.rate_us_per_sec, args.step_us)
+        ramp = DualRamp(backend, args.left_channel, args.right_channel, args.rate_us_per_sec, args.step_us)
         ramp.cur_left = ramp.cur_right = center_us
-        pca.set_pulse_us_nav_channel(int(args.left_channel), center_us)
-        pca.set_pulse_us_nav_channel(int(args.right_channel), center_us)
+        backend.set_us(int(args.left_channel), center_us)
+        backend.set_us(int(args.right_channel), center_us)
 
         print(f"\nChannels: servo_left=Ch{args.left_channel}  servo_right=Ch{args.right_channel}")
         print("Confirm these are the differential wrist/arm servos (not thrusters!).")
+        print("NOTE: enabling outputs enables ALL PWM channels; keep the ROV out of water.")
         if not prompt_enter("Press Enter to ENABLE outputs at center (Ctrl+C to abort)... "):
             return 0
-        if oe is not None:
-            oe.set_enabled(True)
+        backend.enable(True)
         print("[OK] Outputs enabled at center.\n")
 
         if args.align:
