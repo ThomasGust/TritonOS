@@ -120,8 +120,29 @@ action) tuples — the raw material for imitation learning / model dev. Extra
 low-level diagnostics: set `TRITON_CAPTURE_TRACE=1` for the `capture_trace`
 JSONL event log.
 
+## Pilot controls (topside, built)
+
+The operator UI already has the CV-era controls wired:
+
+- **Engage/disengage:** `Autopilot > Optical Hold (Station-Keep)` menu item or the
+  **K** key. Engaging is safe with no CV running -- the ROV stays inert (NO LOCK ->
+  manual) until a valid lock arrives. Backed by
+  `PilotService.set_station_keep_enabled` / `toggle_station_keep`, which sets
+  `modes["autopilot"]["station_keep"]` in the published pilot command.
+- **Status readout:** the drive-status bar shows `Optical Hold: OFF / ON (no data)
+  / NO LOCK / STALE / LOCK / ACTIVE`, driven by the ROV's
+  `status["station_keep"]["reason"]`.
+- **CV integration point:** the future tracker calls
+  `MainWindow.publish_visual_target(sample)` each frame (accepts a
+  `VisualTargetError`, a `StationKeepCommand`, or a raw payload dict). It calls
+  `PilotService.set_visual_target(...)` (rides the normal pilot frame) and logs the
+  sample to the capture `tracking` stream. A `NullOpticalTracker` placeholder is
+  instantiated until the real model is dropped in.
+
 ## Not done yet (next steps)
-- The CV model itself (`OpticalTracker` implementation) — topside.
-- Wiring a pilot control (button/key) to toggle `station_keep` and to start
-  publishing `visual` from the tracker into the outgoing command.
-- Pool tuning of the `STATION_KEEP_*` gains and the error→DOF policy.
+- The CV model itself (`OpticalTracker` implementation) -- topside.
+- A topside **frame source** for the tracker: the live display path is
+  gst-launch -> d3d11 (no pixel access in Python), so the CV needs its own raw
+  receiver on the transect/arm camera (e.g. a mirror-port raw pull, like the
+  recorder) before `publish_visual_target` can be driven from real frames.
+- Pool tuning of the `STATION_KEEP_*` gains and the error->DOF policy.

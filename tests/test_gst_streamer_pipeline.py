@@ -254,7 +254,7 @@ def test_capture_stereo_pair_uses_cached_frames_and_source_timing(monkeypatch):
             name="Left",
             video_format="h264",
             host="192.168.1.1",
-            extra={"rov_snapshot_cache_enabled": True},
+            extra={"rov_snapshot_cache_enabled": True, "rov_snapshot_ondemand": False},
         )
     )
     right = gst_streamer.GstStream(
@@ -262,7 +262,7 @@ def test_capture_stereo_pair_uses_cached_frames_and_source_timing(monkeypatch):
             name="Right",
             video_format="h264",
             host="192.168.1.1",
-            extra={"rov_snapshot_cache_enabled": True},
+            extra={"rov_snapshot_cache_enabled": True, "rov_snapshot_ondemand": False},
         )
     )
     left._snapshot_cache_frames.append(
