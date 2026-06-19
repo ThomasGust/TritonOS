@@ -1173,6 +1173,24 @@ class ControlService:
             min_value=0.0,
         )
 
+        # Live tuning overrides streamed from the topside in modes["arm_tune"].
+        # Any present key overrides the corresponding rov_config default for this
+        # frame, so inverts / neutral / range can be dialed in without a restart.
+        try:
+            tune = dict((getattr(pilot, "modes", None) or {}).get("arm_tune") or {})
+        except Exception:
+            tune = {}
+
+        def _tune(key: str, default: float) -> float:
+            v = tune.get(key)
+            try:
+                return float(v) if v is not None else float(default)
+            except Exception:
+                return float(default)
+
+        pitch_invert = _tune("pitch_invert", self._gripper_pitch_invert)
+        yaw_invert = _tune("yaw_invert", self._gripper_yaw_invert)
+
         # gripper_pitch / gripper_yaw are absolute POSITION commands in [-1..1].
         # A *present* key (even 0.0) is applied directly so the pilot can hold any
         # pose, including centered. An *absent* axis holds its last commanded value
@@ -1185,20 +1203,20 @@ class ControlService:
         last_pitch, last_yaw = self._last_gripper_axes()
         if pitch_present:
             try:
-                pitch = max(-1.0, min(1.0, float(aux.get(self._gripper_pitch_key) or 0.0) * float(self._gripper_pitch_invert)))
+                pitch = max(-1.0, min(1.0, float(aux.get(self._gripper_pitch_key) or 0.0) * pitch_invert))
             except Exception:
                 pitch = last_pitch
         else:
             pitch = last_pitch if self._gripper_hold_last else 0.0
         if yaw_present:
             try:
-                yaw = max(-1.0, min(1.0, float(aux.get(self._gripper_yaw_key) or 0.0) * float(self._gripper_yaw_invert)))
+                yaw = max(-1.0, min(1.0, float(aux.get(self._gripper_yaw_key) or 0.0) * yaw_invert))
             except Exception:
                 yaw = last_yaw
         else:
             yaw = last_yaw if self._gripper_hold_last else 0.0
 
-        left, right = self._diff_mix_norm(pitch, yaw)
+        left, right = self._diff_mix_norm(pitch, yaw, overrides=tune)
 
         self._gripper_last_pitch = pitch
         self._gripper_last_yaw = yaw
@@ -1248,17 +1266,28 @@ class ControlService:
         right = float(right_invert) * (d_pitch - d_wrist) / rng
         return (max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right)))
 
-    def _diff_mix_norm(self, pitch_norm: float, yaw_norm: float) -> Tuple[float, float]:
+    def _diff_mix_norm(
+        self, pitch_norm: float, yaw_norm: float, overrides: Optional[Dict[str, Any]] = None
+    ) -> Tuple[float, float]:
+        o = overrides or {}
+
+        def g(key: str, attr: str) -> float:
+            v = o.get(key)
+            try:
+                return float(v) if v is not None else float(getattr(self, attr))
+            except Exception:
+                return float(getattr(self, attr))
+
         return self._diff_mix_norm_deg(
             pitch_norm,
             yaw_norm,
-            servo_range_deg=self._gripper_servo_range_deg,
-            pitch_span_deg=self._gripper_pitch_span_deg,
-            wrist_span_deg=self._gripper_wrist_span_deg,
-            pitch_neutral_deg=self._gripper_pitch_neutral_deg,
-            wrist_neutral_deg=self._gripper_wrist_neutral_deg,
-            left_invert=self._gripper_left_invert,
-            right_invert=self._gripper_right_invert,
+            servo_range_deg=g("servo_range_deg", "_gripper_servo_range_deg"),
+            pitch_span_deg=g("pitch_span_deg", "_gripper_pitch_span_deg"),
+            wrist_span_deg=g("wrist_span_deg", "_gripper_wrist_span_deg"),
+            pitch_neutral_deg=g("pitch_neutral_deg", "_gripper_pitch_neutral_deg"),
+            wrist_neutral_deg=g("wrist_neutral_deg", "_gripper_wrist_neutral_deg"),
+            left_invert=g("left_invert", "_gripper_left_invert"),
+            right_invert=g("right_invert", "_gripper_right_invert"),
         )
 
     def _last_gripper_axes(self) -> Tuple[float, float]:

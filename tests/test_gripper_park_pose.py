@@ -121,6 +121,38 @@ def test_compute_gripper_diff_arm_gain_does_not_cap_range():
     assert abs(right - FULL_AXIS) < 1e-6
 
 
+def test_compute_gripper_diff_applies_live_right_invert_override():
+    # Without override, pure pitch drives both servos the same way.
+    base_l, base_r = ControlService._compute_gripper_diff(
+        _make_gripper_svc(), SimpleNamespace(aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0}, modes={})
+    )
+    assert abs(base_l - base_r) < 1e-9
+    # A live modes["arm_tune"] right_invert flips one servo without a restart.
+    left, right = ControlService._compute_gripper_diff(
+        _make_gripper_svc(),
+        SimpleNamespace(
+            aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0},
+            modes={"arm_tune": {"right_invert": -1.0}},
+        ),
+    )
+    assert abs(left - base_l) < 1e-9
+    assert abs(right + base_r) < 1e-9
+    assert abs(left + right) < 1e-9
+
+
+def test_compute_gripper_diff_applies_live_pitch_neutral_override():
+    # neutral override 45 -> 25 deg shifts where full pitch lands (Dpitch 45 -> 65).
+    left, right = ControlService._compute_gripper_diff(
+        _make_gripper_svc(),
+        SimpleNamespace(
+            aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0},
+            modes={"arm_tune": {"pitch_neutral_deg": 25.0}},
+        ),
+    )
+    assert abs(left - 65.0 / 70.0) < 1e-6
+    assert abs(right - 65.0 / 70.0) < 1e-6
+
+
 def test_compute_gripper_diff_holds_last_when_arm_keys_absent():
     # No arm keys on the wire -> hold the last commanded servo pose.
     svc = _make_gripper_svc(_gripper_last_left=0.3, _gripper_last_right=-0.1)
