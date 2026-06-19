@@ -31,7 +31,7 @@ RB + right stick / W A S D
 
 `gripper_pitch` / `gripper_yaw` are **absolute position** commands in `[-1, +1]`:
 
-- `gripper_pitch` −1 → `0°` (flat), +1 → `GRIPPER_PITCH_SPAN_DEG` (90° down).
+- `gripper_pitch` −1 → `0°` (flat), +1 → `GRIPPER_PITCH_SPAN_DEG` (90° down in the current config).
 - `gripper_yaw`   −1 → `0°`, +1 → `GRIPPER_WRIST_SPAN_DEG` (90° roll).
 
 `arm_gain` (pilot keys 6/7) scales the *speed* of the pilot-side integrator. It no
@@ -53,11 +53,17 @@ The pitch arc (0–90°) needs `±45°` and the wrist span (0–90°) needs `±4
 only unreachable combination is the corner (full pitch **and** full wrist at once),
 which needs `45 + 45 = 90° > 70°`.
 
-With **±70°**:
+With **±70°** and a 90° pitch span, a symmetric `N = 45°` neutral gives:
 
 - **Full 90° wrist is available wherever `|Δpitch| ≤ 25°`** — a 50°-wide pitch band.
 - Toward the pitch extremes wrist tapers to `±25°` (a 50° wrist range at the limit).
 - **Pitch can always reach 90°** (wrist sacrificed there) — the *pitch-priority* clip.
+
+The current build deliberately uses `GRIPPER_PITCH_SPAN_DEG = 90.0` and
+`GRIPPER_PITCH_NEUTRAL_DEG = 70.0`. That trades away wrist while folded, but keeps
+full wrist through the working/down part of the arm travel. The older 140° pitch
+span used the whole servo budget for pitch and made wrist vanish at command
+endpoints.
 
 With **±100°** the whole `(pitch, wrist)` square is reachable: full wrist at full
 pitch everywhere. Set `GRIPPER_SERVO_RANGE_DEG = 100.0` after reprogramming.
@@ -94,7 +100,8 @@ servo-center; set it physically with the horn index and trim it in software):
 | `GRIPPER_PITCH_NEUTRAL_DEG` | Full-wrist pitch band | Wrist at pitch 90° |
 |---|---|---|
 | 45 (symmetric)   | 20°–70° (widest) | ±25° |
-| ~62 (down-biased)| 40°–90°          | full ±45° |
+| ~65 (down-biased)| 40°–90°          | full ±45° |
+| 70 (current)     | 45°–90°          | full ±45° |
 
 Bias the neutral toward the angles where you actually need full wrist (usually
 pointing down for manipulation); accept reduced wrist where the arm is stowed.
@@ -123,10 +130,10 @@ full-wrist band for several candidate neutrals. Paste the values into
 `CENTER_US ± SERVO_RANGE_DEG · US_PER_DEG`; the ThrustWriter aux mapping turns the
 normalized `±1` servo command into those endpoints.
 
-Servo: the SER-2010 is a Hitec **D954SW** programmed to **±70°** on the standard
-R/C band (1500 µs center). The config assumes ~1100–1900 µs = ±70°
-(`GRIPPER_US_PER_DEG = 400/70`). If the arm can't reach a full 90° pitch at full
-stick, raise `GRIPPER_US_PER_DEG`; if the last bit of stick is dead, lower it.
+Servo: the SER-2010 is a Hitec **D954SW** programmed to **±70°**. This build's
+measured pulse range is about 700–2300 µs, so the config uses
+`GRIPPER_US_PER_DEG = 800/70`. If the arm can't reach the commanded endpoint,
+raise `GRIPPER_US_PER_DEG`; if the last bit of stick is dead, lower it.
 
 ## Assembly: aligning the servos & mounting the connector
 
@@ -136,10 +143,12 @@ positioning the arm at the neutral you want — then `±70°` of each servo spre
 symmetrically about that neutral (`φ_L = Δpitch + Δwrist`, `φ_R = Δpitch − Δwrist`).
 
 1. **Pick the neutral pitch `N`** (permanent mechanical choice). The full-wrist band
-   is ~50° wide for any `N` in 25°–65°; `N` just slides it along the arc:
-   - **This build uses `N = 25°`** → full wrist over pitch **0°–50°** (flat → mid, the
-     shallow / reaching-out half); still reaches straight-down with little wrist there.
-   - `N = 45°` → full wrist 20°–70°;  `N ≈ 65°` → full wrist 40°–90° (pointing down).
+   is ~50° wide for any `N` in 25°–65°; `N` just slides it along the arc. The
+   current `N = 70°` choice clips the high side at 90° so the working/down pose
+   keeps full wrist:
+   - `N = 25°` → full wrist over pitch **0°–50°** (flat → mid, the shallow / reaching-out half).
+   - `N = 45°` → full wrist 20°–70°.
+   - **This build uses `N = 70°`** → full wrist over pitch **45°–90°** (the down/working half).
    The wrist neutral is always centered (mid of its 0–90° roll).
 2. **Center and hold both servos** so you can bolt the connector on with them locked:
    ```

@@ -134,10 +134,10 @@ see [MANIPULATOR_ARM.md](MANIPULATOR_ARM.md)):
 ```python
 WRIST_ROTATE_SPEED = 0.50          # continuous-rotation T200 wrist (separate)
 GRIPPER_SERVO_RANGE_DEG = 70.0     # 100.0 after the servos are reprogrammed
-GRIPPER_PITCH_SPAN_DEG = 90.0
+GRIPPER_PITCH_SPAN_DEG = 90.0    # useful flat-to-down pitch arc
 GRIPPER_WRIST_SPAN_DEG = 90.0
-GRIPPER_PITCH_NEUTRAL_DEG = 45.0   # slides the full-wrist band along the pitch arc
-GRIPPER_US_PER_DEG = 1000.0 / 70.0 # set by tools.gripper_calibrate
+GRIPPER_PITCH_NEUTRAL_DEG = 70.0   # down-biased; full wrist near the working pose
+GRIPPER_US_PER_DEG = 800.0 / 70.0  # set by tools.gripper_calibrate
 GRIPPER_SERVO_CENTER_US = 1500
 GRIPPER_SLEW_NORM_PER_S = 3.0      # servo-output smoothing
 ```

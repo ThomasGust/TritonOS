@@ -612,12 +612,14 @@ GRIPPER_RIGHT_CMD_KEY = "gripper_right"
 # --- Differential geometry / range of motion (degrees) ---------------------
 GRIPPER_SERVO_RANGE_DEG = 70.0   # BlueTrail set to +/-70 now; set 100.0 after reprogramming
 # MEASURED on the bench: pitch is the DIFFERENTIAL axis (servos move OPPOSITE) and
-# wrist is the common axis -- see GRIPPER_RIGHT_INVERT below. To sweep the whole
-# mechanical pitch arc, gripper_pitch -1..+1 maps to the full servo differential
-# (-/+RANGE): span = 2*RANGE about a RANGE neutral. Wrist gets the leftover travel.
-GRIPPER_PITCH_SPAN_DEG = 140.0   # = 2 * SERVO_RANGE_DEG: gripper_pitch -1..+1 -> servo diff -70..+70 deg
+# wrist is the common axis -- see GRIPPER_RIGHT_INVERT below. The arm only needs
+# the useful 0..90 deg pitch arc while piloting; spending the whole +/-70 servo
+# budget on a 140 deg pitch sweep made wrist authority disappear near command
+# endpoints. Keep pitch narrower and bias the center toward the working/down pose
+# so wrist remains available when the arm is out.
+GRIPPER_PITCH_SPAN_DEG = 90.0    # gripper_pitch -1..+1 -> flat..down, not the full bench sweep
 GRIPPER_WRIST_SPAN_DEG = 90.0    # gripper_yaw   -1..+1 spans this many degrees of wrist roll
-GRIPPER_PITCH_NEUTRAL_DEG = 70.0 # = SERVO_RANGE_DEG: servos centered at the pitch-command midpoint
+GRIPPER_PITCH_NEUTRAL_DEG = 70.0 # full wrist over roughly 45..90 deg pitch; little wrist when folded
 GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0

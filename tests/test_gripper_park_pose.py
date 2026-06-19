@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from control.control_service import ControlService
 
 
-# Geometry used across the gripper tests (matches rov_config defaults).
+# Symmetric geometry used across the gripper tests for the core differential math.
 GEO = dict(
     servo_range_deg=70.0,
     pitch_span_deg=90.0,
@@ -72,6 +72,27 @@ def test_diff_mix_keeps_wrist_at_full_pitch_with_pitch_priority():
     assert abs(right - (20.0 / 70.0)) < 1e-6  # 45 - 25 deg = 20 deg
     # Wrist authority is non-zero at full pitch (the old limiter zeroed it).
     assert abs(left - right) > 1e-3
+
+
+def test_current_repo_geometry_trades_extra_pitch_for_down_wrist():
+    import rov_config as cfg
+
+    assert cfg.GRIPPER_PITCH_SPAN_DEG == 90.0
+    assert cfg.GRIPPER_PITCH_NEUTRAL_DEG == 70.0
+
+    geo = dict(
+        servo_range_deg=cfg.GRIPPER_SERVO_RANGE_DEG,
+        pitch_span_deg=cfg.GRIPPER_PITCH_SPAN_DEG,
+        wrist_span_deg=cfg.GRIPPER_WRIST_SPAN_DEG,
+        pitch_neutral_deg=cfg.GRIPPER_PITCH_NEUTRAL_DEG,
+        wrist_neutral_deg=cfg.GRIPPER_WRIST_NEUTRAL_DEG,
+    )
+    left, right = ControlService._diff_mix_norm_deg(1.0, 1.0, **geo)
+    d_pitch = (left + right) * 0.5 * cfg.GRIPPER_SERVO_RANGE_DEG
+    d_wrist = (left - right) * 0.5 * cfg.GRIPPER_SERVO_RANGE_DEG
+
+    assert abs(d_pitch - 20.0) < 1e-6
+    assert abs(d_wrist - 45.0) < 1e-6
 
 
 def test_diff_mix_right_invert_unswaps_pitch_and_roll():
