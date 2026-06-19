@@ -62,6 +62,29 @@ With **±70°**:
 With **±100°** the whole `(pitch, wrist)` square is reachable: full wrist at full
 pitch everywhere. Set `GRIPPER_SERVO_RANGE_DEG = 100.0` after reprogramming.
 
+### Mechanism & per-servo inversion (important)
+
+The drive is a **bevel-gear differential**: the two servos face each other and turn
+two side gears; a perpendicular bevel gear meshing between them is the output (the
+arm shaft). Because the servos are **mirrored**, the raw mapping is the reverse of
+the mixer's default:
+
+- both servos commanded the **same** way → output **rolls** (wrist),
+- servos commanded **opposite** → output **pitches**.
+
+So one servo must be inverted to un-swap pitch and roll. Set `GRIPPER_RIGHT_INVERT`
+(or `GRIPPER_LEFT_INVERT`) `= -1.0` for exactly one servo; then use
+`GRIPPER_PITCH_INVERT` / `GRIPPER_YAW_INVERT` for per-axis direction. Determine all
+three on the bench:
+
+```
+sudo .venv/bin/python -m tools.gripper_calibrate --check-axes
+```
+
+It drives a same-direction move then an opposite move and tells you what to set
+based on whether each pitched or rolled. Symptoms of a missing inversion: pitch and
+roll feel swapped, the arm can't reach flat, and range feels wrong.
+
 ### Choosing the neutral (range-of-motion lever)
 
 There is 140° of pitch authority (±70°) for a 90° span, so the spare 50° slides the

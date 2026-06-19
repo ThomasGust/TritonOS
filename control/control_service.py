@@ -376,6 +376,10 @@ class ControlService:
         self._gripper_right_key = str(getattr(cfg, "GRIPPER_RIGHT_CMD_KEY", "gripper_right"))
         self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
         self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
+        # Per-servo inversion for the facing-servo bevel differential (invert one
+        # servo to un-swap pitch/roll). See rov_config.GRIPPER_*_INVERT.
+        self._gripper_left_invert = float(getattr(cfg, "GRIPPER_LEFT_INVERT", 1.0))
+        self._gripper_right_invert = float(getattr(cfg, "GRIPPER_RIGHT_INVERT", 1.0))
         self._gripper_deadzone = float(getattr(cfg, "GRIPPER_DEADBAND", 0.01))
         # Differential geometry in degrees (see _diff_mix_norm / docs/MANIPULATOR_ARM.md).
         self._gripper_servo_range_deg = max(1.0, float(getattr(cfg, "GRIPPER_SERVO_RANGE_DEG", 70.0)))
@@ -1212,6 +1216,8 @@ class ControlService:
         wrist_span_deg: float,
         pitch_neutral_deg: float,
         wrist_neutral_deg: float,
+        left_invert: float = 1.0,
+        right_invert: float = 1.0,
     ) -> Tuple[float, float]:
         """Map normalized (pitch, wrist) position commands to normalized servo outputs.
 
@@ -1236,8 +1242,10 @@ class ControlService:
         d_pitch = max(-rng, min(rng, d_pitch))
         room = max(0.0, rng - abs(d_pitch))
         d_wrist = max(-room, min(room, d_wrist))
-        left = (d_pitch + d_wrist) / rng
-        right = (d_pitch - d_wrist) / rng
+        # Per-servo inversion handles the facing-servo bevel differential, where one
+        # servo is physically mirrored. Inverting one un-swaps pitch and roll.
+        left = float(left_invert) * (d_pitch + d_wrist) / rng
+        right = float(right_invert) * (d_pitch - d_wrist) / rng
         return (max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right)))
 
     def _diff_mix_norm(self, pitch_norm: float, yaw_norm: float) -> Tuple[float, float]:
@@ -1249,6 +1257,8 @@ class ControlService:
             wrist_span_deg=self._gripper_wrist_span_deg,
             pitch_neutral_deg=self._gripper_pitch_neutral_deg,
             wrist_neutral_deg=self._gripper_wrist_neutral_deg,
+            left_invert=self._gripper_left_invert,
+            right_invert=self._gripper_right_invert,
         )
 
     def _last_gripper_axes(self) -> Tuple[float, float]:

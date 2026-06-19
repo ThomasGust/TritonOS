@@ -458,6 +458,8 @@ def start_control_service():
                                 wrist_span_deg=float(getattr(cfg, "GRIPPER_WRIST_SPAN_DEG", 90.0)),
                                 pitch_neutral_deg=float(getattr(cfg, "GRIPPER_PITCH_NEUTRAL_DEG", 45.0)),
                                 wrist_neutral_deg=float(getattr(cfg, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0)),
+                                left_invert=float(getattr(cfg, "GRIPPER_LEFT_INVERT", 1.0)),
+                                right_invert=float(getattr(cfg, "GRIPPER_RIGHT_INVERT", 1.0)),
                             )
                             left_disarm = _clamp_signed_norm(left_disarm)
                             right_disarm = _clamp_signed_norm(right_disarm)

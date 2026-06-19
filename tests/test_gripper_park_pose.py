@@ -25,6 +25,8 @@ def _make_gripper_svc(**overrides):
     svc._gripper_right_key = "gripper_right"
     svc._gripper_pitch_invert = 1.0
     svc._gripper_yaw_invert = 1.0
+    svc._gripper_left_invert = 1.0
+    svc._gripper_right_invert = 1.0
     svc._gripper_deadzone = 0.01
     svc._gripper_servo_range_deg = GEO["servo_range_deg"]
     svc._gripper_pitch_span_deg = GEO["pitch_span_deg"]
@@ -70,6 +72,18 @@ def test_diff_mix_keeps_wrist_at_full_pitch_with_pitch_priority():
     assert abs(right - (20.0 / 70.0)) < 1e-6  # 45 - 25 deg = 20 deg
     # Wrist authority is non-zero at full pitch (the old limiter zeroed it).
     assert abs(left - right) > 1e-3
+
+
+def test_diff_mix_right_invert_unswaps_pitch_and_roll():
+    # Pure pitch with no invert -> both servos move the SAME way (mixer default).
+    left, right = ControlService._diff_mix_norm_deg(1.0, 0.0, **GEO)
+    assert abs(left - right) < 1e-9
+    # On a facing-servo bevel differential that mapping rolls the output, so we
+    # invert one servo. Pure pitch then drives the servos OPPOSITE, same magnitude.
+    li, ri = ControlService._diff_mix_norm_deg(1.0, 0.0, right_invert=-1.0, **GEO)
+    assert abs(li - left) < 1e-9
+    assert abs(ri + right) < 1e-9
+    assert abs(li + ri) < 1e-9
 
 
 def test_diff_mix_recovers_pitch_and_wrist_from_outputs_midband():

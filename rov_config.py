@@ -621,6 +621,15 @@ GRIPPER_PITCH_NEUTRAL_DEG = 25.0
 GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0
+# Per-servo inversion. The two servos FACE EACH OTHER across a bevel-gear
+# differential (a perpendicular output gear meshes between them). Because they are
+# mirrored, commanding both the same way ROLLS the output while opposite commands
+# PITCH it -- the reverse of the mixer's assumption. Invert exactly ONE servo to
+# un-swap pitch and roll. If pitch/roll act swapped, set GRIPPER_RIGHT_INVERT=-1.0
+# (then use GRIPPER_PITCH_INVERT / GRIPPER_YAW_INVERT to fix per-axis direction).
+# Run `tools.gripper_calibrate --check-axes` to determine these on the bench.
+GRIPPER_LEFT_INVERT = 1.0
+GRIPPER_RIGHT_INVERT = 1.0
 GRIPPER_DEADBAND = 0.01
 GRIPPER_HOLD_LAST_POSITION = True
 

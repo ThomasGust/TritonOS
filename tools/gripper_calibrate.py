@@ -99,6 +99,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Alignment mode: hold BOTH servos at center so you can mount the connector, then exit on Ctrl+C.",
     )
+    ap.add_argument(
+        "--check-axes",
+        action="store_true",
+        help="Drive common-mode then differential-mode moves to learn how the differential maps pitch/roll.",
+    )
     return ap.parse_args()
 
 
@@ -338,6 +343,66 @@ def alignment_hold(ramp: "DualRamp", center_us: float) -> None:
         sleep_interruptible(0.5)
 
 
+def ask_motion(question: str) -> str:
+    """Ask the operator whether a move PITCHed or ROLLed the arm."""
+
+    while not _stop_requested:
+        print(question)
+        try:
+            raw = input("  type 'pitch' or 'roll' (blank to skip): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return ""
+        if raw in ("p", "pitch"):
+            return "pitch"
+        if raw in ("r", "roll"):
+            return "roll"
+        if not raw:
+            return ""
+        print("  (please type pitch or roll)")
+    return ""
+
+
+def check_axes(ramp: "DualRamp", center_us: float) -> None:
+    """Drive common- then differential-mode moves and recommend the invert config.
+
+    With a facing-servo bevel differential, both servos commanded the SAME way roll
+    the output and OPPOSITE commands pitch it -- the reverse of the mixer default.
+    """
+
+    jog = 250.0
+    print("\n================ AXIS CHECK ================")
+    print("Watch the ARM. We drive two test moves so you can see how the gears map motion.")
+
+    if not prompt_enter("Press Enter to drive BOTH servos the SAME direction... "):
+        ramp.goto(center_us, center_us)
+        return
+    ramp.goto(center_us + jog, center_us + jog)
+    obs_common = ask_motion("  BOTH servos same way -> did the arm PITCH (tilt) or ROLL (twist)?")
+    ramp.goto(center_us, center_us)
+
+    if not prompt_enter("Press Enter to drive the servos OPPOSITE directions... "):
+        ramp.goto(center_us, center_us)
+        return
+    ramp.goto(center_us + jog, center_us - jog)
+    obs_diff = ask_motion("  Servos OPPOSITE -> did the arm PITCH or ROLL?")
+    ramp.goto(center_us, center_us)
+
+    print("\n--- recommendation (edit rov_config.py) ---")
+    if obs_common == "roll" and obs_diff == "pitch":
+        print("Facing-servo geometry confirmed (both-same -> ROLL). Invert ONE servo:")
+        print("    GRIPPER_RIGHT_INVERT = -1.0")
+        print("Then re-run with the arm and flip GRIPPER_PITCH_INVERT / GRIPPER_YAW_INVERT")
+        print("if pitch or roll moves the wrong direction.")
+    elif obs_common == "pitch" and obs_diff == "roll":
+        print("both-same -> PITCH: the mixer mapping is already correct (no servo invert).")
+        print("If a single axis is reversed, flip GRIPPER_PITCH_INVERT or GRIPPER_YAW_INVERT.")
+    else:
+        print(f"Observed common={obs_common or '?'} , differential={obs_diff or '?'}.")
+        print("If the two moves looked the same, the gears may not be meshing as a clean")
+        print("differential -- check the mechanism before tuning software.")
+    print("===========================================\n")
+
+
 def main() -> int:
     """Run the guided differential-wrist calibration wizard."""
 
@@ -390,6 +455,10 @@ def main() -> int:
 
         if args.align:
             alignment_hold(ramp, center_us)
+            return 0
+
+        if args.check_axes:
+            check_axes(ramp, center_us)
             return 0
 
         # --- Step 1: choose the neutral pose --------------------------------
