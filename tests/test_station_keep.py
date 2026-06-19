@@ -120,6 +120,8 @@ def test_transect_config_maps_surge_to_ey_and_adds_heave_size_trim():
         STATION_KEEP_HEAVE_ERROR_KEY = "es"
         STATION_KEEP_HEAVE_KP = 0.12
         STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
+        STATION_KEEP_YAW_ERROR_KEY = "er"
+        STATION_KEEP_YAW_KP = 0.25
 
     cfg = station_keep_config_from_module(_Mod())
     by_dof = {ax.dof: ax for ax in cfg.axes}
@@ -128,6 +130,19 @@ def test_transect_config_maps_surge_to_ey_and_adds_heave_size_trim():
     assert by_dof["heave"].error_key == "es"   # additive gentle size trim
     assert by_dof["heave"].kp == 0.12
     assert by_dof["heave"].out_limit == 0.15
+    assert by_dof["yaw"].error_key == "er"     # square-up axis
+    assert by_dof["yaw"].kp == 0.25
+
+
+def test_er_rotation_error_drives_yaw():
+    cfg = StationKeepConfig(
+        enable=True, stale_s=0.5,
+        axes=[StationKeepAxis(dof="yaw", error_key="er", kp=0.5, out_limit=0.4)],
+    )
+    c = StationKeepController(cfg)
+    out, st = c.step(enabled=True, manual_cmd={"yaw": 0.0}, visual={"valid": True, "er": 0.4}, dt=0.02)
+    assert out["yaw"] == pytest.approx(0.2)   # sign=1 * kp=0.5 * er=0.4
+    assert st["axes"]["yaw"]["active"] is True
 
 
 def test_direct_command_drives_dof_and_is_clamped():

@@ -288,6 +288,19 @@ STATION_KEEP_HEAVE_I_LIMIT = 0.05
 STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
 STATION_KEEP_HEAVE_SIGN = 1.0
 
+# yaw <- er : square the target up (rotation error -> 0). |er|=1 at the detector's
+# rotation limit (~45deg). Squaring up maximizes the see-all-blue/no-red margin
+# (~4x the centering tolerance vs a 45deg diamond). Low gain; overrides heading
+# hold while the transect hold is engaged. SIGN must be verified in water.
+STATION_KEEP_YAW_ERROR_KEY = "er"
+STATION_KEEP_YAW_KP = 0.25
+STATION_KEEP_YAW_KI = 0.0
+STATION_KEEP_YAW_KD = 0.0
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.06   # ~3deg of the ~45deg range
+STATION_KEEP_YAW_I_LIMIT = 0.05
+STATION_KEEP_YAW_OUT_LIMIT = 0.15
+STATION_KEEP_YAW_SIGN = 1.0
+
 # ---------------------------------------------------------------------------
 # 2d) arming safety
 # ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ The CV publishes, inside the pilot command, `modes["autopilot"]`:
     "ex": float,  # [-1,1] horizontal target-center error (+ = right)
     "ey": float,  # [-1,1] vertical error               (+ = below)
     "es": float,  # [-1,1] scale/size error             (+ = too close)
+    "er": float,  # [-1,1] rotation error               (+ = rotated CW; 0 = squared-on)
     "violation": float,  # 0..1 forbidden (red) content visible; 0 = none
   }
 }
@@ -110,21 +111,26 @@ that is the "good lock" indicator the pilot needs *before* engaging.
 | sway  | `ex`  | horizontal centering — PI (integral rejects steady current)     |
 | surge | `ey`  | fore/aft centering — PI (`STATION_KEEP_SURGE_ERROR_KEY="ey"`)    |
 | heave | `es`  | **gentle** size trim layered on depth hold (owns bulk altitude) |
+| yaw   | `er`  | square the target up (rotation→0) to maximize the margin        |
 
-Roll/pitch stay level and yaw stays held via attitude hold (stable camera
-geometry). The integral terms on sway/surge are what actually *hold* against a
-steady current instead of drooping downstream. Park the arm at a fixed pose
-during the hold so the camera extrinsics stay constant.
+Roll/pitch stay level via attitude hold (stable camera geometry). The integral
+terms on sway/surge are what actually *hold* against a steady current instead of
+drooping downstream. **Yaw squares the target up** — at 0° the see-all-blue/
+no-red centering tolerance is ±20 cm; at a 45° diamond it collapses to ±~5 cm, so
+aligning buys ~4× the margin (low gain; overrides heading hold while engaged; the
+square is 90°-symmetric so `er` is reported in ±45° and drives to the nearest of
+4 equivalent orientations — no spin). Park the arm at a fixed pose during the
+hold so the camera extrinsics stay constant.
 
 ## Control behaviour & tuning
 
 `StationKeepController` runs one PID per configured `StationKeepAxis`, each
 mapping one error component to one thrust DOF. Defaults (in
-`default_station_keep_axes`) provide **sway←ex**, **surge←es**, and a gentle
-**heave←es** size-trim axis, all shipping with **zero gains** — inert until
-tuned, so it is safe to enable while iterating. For the transect task the
-recommended `rov_config` block overrides surge to `ey` and gives the three axes
-their starting gains (see the mapping table above).
+`default_station_keep_axes`) provide **sway←ex**, **surge←es**, a gentle
+**heave←es** size-trim axis, and a **yaw←er** square-up axis, all shipping with
+**zero gains** — inert until tuned, so it is safe to enable while iterating. For
+the transect task the recommended `rov_config` block overrides surge to `ey` and
+gives the four axes their starting gains (see the mapping table above).
 
 Tune via `rov_config` (no code changes), e.g.:
 

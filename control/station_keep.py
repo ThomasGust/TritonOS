@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 
-_ERROR_KEYS = ("ex", "ey", "es", "violation")
+_ERROR_KEYS = ("ex", "ey", "es", "er", "violation")
 _DOF_KEYS = ("surge", "sway", "heave", "yaw", "roll", "pitch")
 
 
@@ -102,16 +102,20 @@ def default_station_keep_axes() -> List[StationKeepAxis]:
       which owns bulk altitude. It naturally yields whenever depth hold is
       actively driving heave (manual-override path) and trims only when depth is
       settled, so keep its gain/limit small.
+    - **yaw  <- er**  squares the target up (rotation error -> 0), which maximizes
+      the see-all-blue/no-red margin. Low gain; overrides heading hold while the
+      transect hold is engaged.
 
     Gains start at 0 so the controller is inert until the pilot tunes it (it
     reports "active" structurally but commands ~0 -- safe to enable while
-    tuning). Heading (yaw) and leveling (roll/pitch) stay with attitude hold; add
-    axes here to involve them.
+    tuning). Leveling (roll/pitch) stays with attitude hold; add axes here to
+    involve it.
     """
     return [
         StationKeepAxis(dof="sway", error_key="ex", kp=0.0, kd=0.0),
         StationKeepAxis(dof="surge", error_key="es", kp=0.0, kd=0.0),
         StationKeepAxis(dof="heave", error_key="es", kp=0.0, kd=0.0, out_limit=0.15),
+        StationKeepAxis(dof="yaw", error_key="er", kp=0.0, kd=0.0, out_limit=0.15),
     ]
 
 
