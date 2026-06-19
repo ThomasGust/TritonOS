@@ -235,6 +235,60 @@ AUTOPILOT_YAW_MANUAL_LATCH = True
 AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 
 # ---------------------------------------------------------------------------
+# 2c.6) visual station-keeping (optical transect hold)
+# ---------------------------------------------------------------------------
+# Holds position in current by zeroing a normalized visual error that a topside
+# CV publishes in modes["autopilot"]["visual"] (see control/station_keep.py and
+# docs/STATION_KEEPING.md). The error encodes the inscribed-square transect task:
+# keep ALL of the blue square and NONE of the red square framed by the arm cam.
+#
+#   ex  +=blue right of target  -> sway   (horizontal centering)
+#   ey  +=blue below target     -> surge  (fore/aft centering; down-looking cam)
+#   es  +=blue too big/too close-> heave  (GENTLE size trim on top of depth hold)
+#
+# SAFETY: these gains are inert until BOTH (a) the pilot engages station-keep and
+# (b) the CV reports a valid lock -- so they are harmless before the CV exists.
+# They are pool-tuning STARTING POINTS; the SIGNs in particular MUST be verified
+# in water (flip if a DOF drives the wrong way). Integral terms (KI) are what let
+# the ROV null the steady current offset and actually hold; keep them small.
+STATION_KEEP_ENABLE = True
+STATION_KEEP_STALE_S = 0.5          # drop the hold if no fresh lock for this long
+STATION_KEEP_DIRECT_LIMIT = 0.6     # cap on any direct model thrust outputs
+
+# sway <- ex : horizontal centering. PI (integral rejects steady current).
+STATION_KEEP_SWAY_ERROR_KEY = "ex"
+STATION_KEEP_SWAY_KP = 0.45
+STATION_KEEP_SWAY_KI = 0.06
+STATION_KEEP_SWAY_KD = 0.0
+STATION_KEEP_SWAY_ERROR_DEADBAND = 0.05   # ±0.05 ~= ±1 cm of the ±20 cm tolerance
+STATION_KEEP_SWAY_I_LIMIT = 0.18
+STATION_KEEP_SWAY_OUT_LIMIT = 0.30
+STATION_KEEP_SWAY_SIGN = 1.0
+STATION_KEEP_SWAY_MANUAL_DEADBAND = 0.08
+
+# surge <- ey : fore/aft centering (override the back-compat "es" default key).
+STATION_KEEP_SURGE_ERROR_KEY = "ey"
+STATION_KEEP_SURGE_KP = 0.45
+STATION_KEEP_SURGE_KI = 0.06
+STATION_KEEP_SURGE_KD = 0.0
+STATION_KEEP_SURGE_ERROR_DEADBAND = 0.05
+STATION_KEEP_SURGE_I_LIMIT = 0.18
+STATION_KEEP_SURGE_OUT_LIMIT = 0.30
+STATION_KEEP_SURGE_SIGN = 1.0
+
+# heave <- es : gentle vision size-trim. Depth hold owns bulk altitude; this only
+# nudges it when depth is settled. Keep KP/limit small; no integral (depth hold
+# already has one). Start at KP=0 and raise only if the size axis needs vision help.
+STATION_KEEP_HEAVE_ERROR_KEY = "es"
+STATION_KEEP_HEAVE_KP = 0.12
+STATION_KEEP_HEAVE_KI = 0.0
+STATION_KEEP_HEAVE_KD = 0.0
+STATION_KEEP_HEAVE_ERROR_DEADBAND = 0.08
+STATION_KEEP_HEAVE_I_LIMIT = 0.05
+STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
+STATION_KEEP_HEAVE_SIGN = 1.0
+
+# ---------------------------------------------------------------------------
 # 2d) arming safety
 # ---------------------------------------------------------------------------
 # If True, the ROV will refuse to ARM unless sticks are centered and triggers

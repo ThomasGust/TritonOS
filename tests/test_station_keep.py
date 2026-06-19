@@ -111,6 +111,25 @@ def test_config_from_module_uses_defaults_and_overrides():
     assert by_dof["surge"].error_key == "es"
 
 
+def test_transect_config_maps_surge_to_ey_and_adds_heave_size_trim():
+    """The transect policy: surge centers fore/aft (ey) and heave trims size (es)."""
+
+    class _Mod:
+        STATION_KEEP_SURGE_ERROR_KEY = "ey"
+        STATION_KEEP_SURGE_KP = 0.45
+        STATION_KEEP_HEAVE_ERROR_KEY = "es"
+        STATION_KEEP_HEAVE_KP = 0.12
+        STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
+
+    cfg = station_keep_config_from_module(_Mod())
+    by_dof = {ax.dof: ax for ax in cfg.axes}
+    assert by_dof["sway"].error_key == "ex"
+    assert by_dof["surge"].error_key == "ey"   # overridden from the "es" default
+    assert by_dof["heave"].error_key == "es"   # additive gentle size trim
+    assert by_dof["heave"].kp == 0.12
+    assert by_dof["heave"].out_limit == 0.15
+
+
 def test_direct_command_drives_dof_and_is_clamped():
     cfg = StationKeepConfig(enable=True, stale_s=0.5, direct_limit=0.6, axes=[])
     c = StationKeepController(cfg)

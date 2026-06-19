@@ -89,17 +89,29 @@ class StationKeepConfig:
 
 
 def default_station_keep_axes() -> List[StationKeepAxis]:
-    """Conservative default policy.
+    """Conservative default policy for the transect "hold position in current" task.
 
-    Controls only the two DOFs nothing else owns -- horizontal centering (sway)
-    and standoff distance (surge). Vertical (heave) is left to depth hold and
-    heading (yaw) to attitude hold; add axes here to involve them. Gains start at
-    0 so the controller is inert until the pilot tunes it (it will report
-    "active" structurally but command ~0 -- safe to enable while tuning).
+    Three translational DOFs, each tunable via ``STATION_KEEP_<DOF>_*`` config:
+
+    - **sway  <- ex**  horizontal centering of the target in frame.
+    - **surge <- es**  standoff (default error key kept for back-compat; the
+      transect policy overrides it to ``ey`` -- fore/aft centering -- via
+      ``STATION_KEEP_SURGE_ERROR_KEY = "ey"``, since for a down-looking camera
+      vertical image position maps to fore/aft).
+    - **heave <- es**  a *gentle* vision size-trim layered on top of depth hold,
+      which owns bulk altitude. It naturally yields whenever depth hold is
+      actively driving heave (manual-override path) and trims only when depth is
+      settled, so keep its gain/limit small.
+
+    Gains start at 0 so the controller is inert until the pilot tunes it (it
+    reports "active" structurally but commands ~0 -- safe to enable while
+    tuning). Heading (yaw) and leveling (roll/pitch) stay with attitude hold; add
+    axes here to involve them.
     """
     return [
         StationKeepAxis(dof="sway", error_key="ex", kp=0.0, kd=0.0),
         StationKeepAxis(dof="surge", error_key="es", kp=0.0, kd=0.0),
+        StationKeepAxis(dof="heave", error_key="es", kp=0.0, kd=0.0, out_limit=0.15),
     ]
 
 

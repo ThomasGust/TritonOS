@@ -70,13 +70,61 @@ three freely-combinable, per-DOF outputs (topside `StationKeepCommand` →
 So **dynamic depth control, full translation, and roll/pitch/yaw are all
 supported**, per-DOF, mixing direct thrust and setpoints however the model wants.
 
+## The transect model (geometry → setpoints → mapping)
+
+The "model" layer lives topside in `TritonPilot/tracking/transect_policy.py`
+(`TransectPolicy`, `TransectModel`, `TransectObservation`, `TransectEstimate`).
+It turns geometric detections of the inscribed-square target into the normalized
+`VisualTargetError` above. It does **no** vision — a future `OpticalTracker`
+detects the blue square + red presence, packs a `TransectObservation`, and calls
+`TransectPolicy.evaluate(obs)`.
+
+**Geometry (setpoints fall out of the dimensions).** Blue (50 cm) is concentric
+inside red (130 cm). Model the camera floor footprint as a window of half-size
+`s`, center offset `d` (per axis, cm): contain all blue ⇒ `s ≥ 25 + |d|`; exclude
+all red ⇒ `s ≤ 65 − |d|`. Maximizing the minimum margin gives, independent of `d`:
+
+```
+target footprint  W* = (blue + red)/2 = 90 cm
+position tol      d_max = (red − blue)/4 = 20 cm     (min margin = 20 − |d| cm)
+size  tol         (red − blue)/2 = 40 cm of footprint
+```
+
+So the loop is deliberately **forgiving** (±20 cm slack at the sweet spot) — and
+because blue is concentric in red, *keeping blue centered at the target size
+keeps red out automatically*. The primary loop is the safety mechanism;
+`violation` (red seen) is the backup/abort signal surfaced to the pilot.
+
+We regulate in **image space** (no calibration / 3-D): `|ex|`,`|ey|` reach 1.0 at
+the `d_max` position-failure boundary; `|es|` reaches 1.0 where blue fills the
+frame / red touches it. `es` is anchored to the on-station apparent blue size, so
+calibrating `target_cy` / `target_blue_fraction` for the **oblique** arm cam
+keeps `es == 0` on-station. `TransectPolicy` also smooths the centroid/size and
+runs a confidence-hysteresis lock FSM (`no_target`/`acquiring`/`lock`/`lost`) —
+that is the "good lock" indicator the pilot needs *before* engaging.
+
+**Default DOF mapping (this task), all tunable via `STATION_KEEP_*`:**
+
+| DOF   | error | role                                                            |
+|-------|-------|-----------------------------------------------------------------|
+| sway  | `ex`  | horizontal centering — PI (integral rejects steady current)     |
+| surge | `ey`  | fore/aft centering — PI (`STATION_KEEP_SURGE_ERROR_KEY="ey"`)    |
+| heave | `es`  | **gentle** size trim layered on depth hold (owns bulk altitude) |
+
+Roll/pitch stay level and yaw stays held via attitude hold (stable camera
+geometry). The integral terms on sway/surge are what actually *hold* against a
+steady current instead of drooping downstream. Park the arm at a fixed pose
+during the hold so the camera extrinsics stay constant.
+
 ## Control behaviour & tuning
 
 `StationKeepController` runs one PID per configured `StationKeepAxis`, each
 mapping one error component to one thrust DOF. Defaults (in
-`default_station_keep_axes`) control only **sway←ex** and **surge←es** (the DOFs
-not owned by depth/attitude hold) and ship with **zero gains** — inert until
-tuned, so it is safe to enable while iterating.
+`default_station_keep_axes`) provide **sway←ex**, **surge←es**, and a gentle
+**heave←es** size-trim axis, all shipping with **zero gains** — inert until
+tuned, so it is safe to enable while iterating. For the transect task the
+recommended `rov_config` block overrides surge to `ey` and gives the three axes
+their starting gains (see the mapping table above).
 
 Tune via `rov_config` (no code changes), e.g.:
 
@@ -140,9 +188,19 @@ The operator UI already has the CV-era controls wired:
   instantiated until the real model is dropped in.
 
 ## Not done yet (next steps)
-- The CV model itself (`OpticalTracker` implementation) -- topside.
+- The **CV detector** (`OpticalTracker` implementation): pixels -> blue-square
+  geometry + red presence -> `TransectObservation`. Plan: classical first
+  (HSV/Lab blue-square fit; red detection with the fixed lower-frame **gripper
+  ROI masked out**, since the gripper is the same orange-red and must not trip
+  `violation`); a learned model later via the direct-thrust path. The
+  `TransectPolicy` (geometry -> error + lock) is built and tested, so the
+  detector only has to fill a `TransectObservation`.
+- Calibrate `TransectModel.target_cy` / `target_blue_fraction` for the oblique
+  arm cam from recorded on-station frames (defaults are nadir-correct).
 - A topside **frame source** for the tracker: the live display path is
   gst-launch -> d3d11 (no pixel access in Python), so the CV needs its own raw
   receiver on the transect/arm camera (e.g. a mirror-port raw pull, like the
   recorder) before `publish_visual_target` can be driven from real frames.
-- Pool tuning of the `STATION_KEEP_*` gains and the error->DOF policy.
+- A **transect-tab overlay** (blue box, target box, margins, green lock light)
+  driven by `TransectEstimate`, so the pilot can trust the lock before engaging.
+- Pool tuning of the `STATION_KEEP_*` gains/signs (verify each DOF's direction).
