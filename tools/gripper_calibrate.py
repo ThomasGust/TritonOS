@@ -110,6 +110,17 @@ def request_stop(_signum, _frame) -> None:
     print("\n[STOP] Stop requested; returning to center and disabling outputs...")
 
 
+def sleep_interruptible(seconds: float) -> None:
+    """Sleep in short chunks so a stop request (Ctrl+C) is handled promptly."""
+
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while not _stop_requested:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.05, remaining))
+
+
 def load_pwm_helpers():
     """Import the shared direct-I2C PWM helpers (module or script execution)."""
 
