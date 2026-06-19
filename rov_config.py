@@ -611,13 +611,13 @@ GRIPPER_RIGHT_CMD_KEY = "gripper_right"
 
 # --- Differential geometry / range of motion (degrees) ---------------------
 GRIPPER_SERVO_RANGE_DEG = 70.0   # BlueTrail set to +/-70 now; set 100.0 after reprogramming
-GRIPPER_PITCH_SPAN_DEG = 90.0    # gripper_pitch -1..+1 spans this many degrees of pitch
+# MEASURED on the bench: pitch is the DIFFERENTIAL axis (servos move OPPOSITE) and
+# wrist is the common axis -- see GRIPPER_RIGHT_INVERT below. To sweep the whole
+# mechanical pitch arc, gripper_pitch -1..+1 maps to the full servo differential
+# (-/+RANGE): span = 2*RANGE about a RANGE neutral. Wrist gets the leftover travel.
+GRIPPER_PITCH_SPAN_DEG = 140.0   # = 2 * SERVO_RANGE_DEG: gripper_pitch -1..+1 -> servo diff -70..+70 deg
 GRIPPER_WRIST_SPAN_DEG = 90.0    # gripper_yaw   -1..+1 spans this many degrees of wrist roll
-# Pose at servo-center -- slides the ~50 deg full-wrist band along the pitch arc.
-# This build: 25 -> full wrist over pitch 0..50 deg (flat .. mid, the shallow /
-# reaching-out half); still reaches straight-down (90 deg) with little wrist there.
-# The connector MUST be mounted so the centered-servo arm sits at this pitch.
-GRIPPER_PITCH_NEUTRAL_DEG = 25.0
+GRIPPER_PITCH_NEUTRAL_DEG = 70.0 # = SERVO_RANGE_DEG: servos centered at the pitch-command midpoint
 GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0
@@ -629,19 +629,19 @@ GRIPPER_YAW_INVERT = 1.0
 # (then use GRIPPER_PITCH_INVERT / GRIPPER_YAW_INVERT to fix per-axis direction).
 # Run `tools.gripper_calibrate --check-axes` to determine these on the bench.
 GRIPPER_LEFT_INVERT = 1.0
-GRIPPER_RIGHT_INVERT = 1.0
+GRIPPER_RIGHT_INVERT = -1.0  # MEASURED: makes pitch differential (servos opposite), wrist common
 GRIPPER_DEADBAND = 0.01
 GRIPPER_HOLD_LAST_POSITION = True
 
 # --- Servo pulse calibration -----------------------------------------------
 # Symmetric about center: a normalized left/right of +/-1 == +/-RANGE_DEG.
 #   us = CENTER_US + servo_deg * US_PER_DEG     (servo_deg in [-RANGE, +RANGE])
-# BlueTrail SER-2010 = Hitec D954SW programmed to +/-70 deg on the standard R/C
-# band (1500us center, ~1100..1900us = +/-70 deg => 400/70 us/deg). If the arm
-# does not reach a full 90 deg pitch at full stick, raise GRIPPER_US_PER_DEG
-# (widens the endpoints); confirm precisely with `tools.gripper_calibrate`.
+# BlueTrail SER-2010 = Hitec D954SW. MEASURED on the bench: the programmed +/-70 deg
+# spans ~700..2300us (+/-800us about the 1500us center), i.e. ~11.43 us/deg -- about
+# 2x the standard R/C band. If the arm under/over-shoots the travel, adjust this and
+# the endpoints follow; confirm precisely with `tools.gripper_calibrate --jog`.
 GRIPPER_SERVO_CENTER_US = 1500
-GRIPPER_US_PER_DEG = 400.0 / 70.0   # ~5.714 us/deg -> 1100..1900us spans +/-70 deg
+GRIPPER_US_PER_DEG = 800.0 / 70.0   # ~11.43 us/deg -> 700..2300us spans +/-70 deg (measured)
 GRIPPER_TRIM_US = 0
 # Derived endpoints (kept explicit so the ThrustWriter aux mapping is unchanged).
 GRIPPER_SERVO_MIN_US = int(round(GRIPPER_SERVO_CENTER_US - GRIPPER_SERVO_RANGE_DEG * GRIPPER_US_PER_DEG))
