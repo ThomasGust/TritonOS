@@ -287,7 +287,11 @@ STATION_KEEP_SURGE_KD = 0.0
 STATION_KEEP_SURGE_ERROR_DEADBAND = 0.06
 STATION_KEEP_SURGE_I_LIMIT = 0.18
 STATION_KEEP_SURGE_OUT_LIMIT = 0.20
-STATION_KEEP_SURGE_SIGN = 1.0
+# VERIFIED FLIPPED in water (recordings/20260619-171710): with sign=+1 the surge
+# axis drove the vehicle AWAY from the target (only 35% of active surge commands
+# reduced ey; ey diverged, corr(ey,dey/dt)=+0.20). Flipped to -1. Sway tested OK
+# (64% correcting, ex converged) so SWAY_SIGN stays +1.
+STATION_KEEP_SURGE_SIGN = -1.0
 STATION_KEEP_SURGE_SLEW = 0.6
 
 # heave <- es : gentle vision size-trim. Depth hold owns bulk altitude; this only
