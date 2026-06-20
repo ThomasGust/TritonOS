@@ -111,16 +111,24 @@ that is the "good lock" indicator the pilot needs *before* engaging.
 | sway  | `ex`  | horizontal centering — PI (integral rejects steady current)     |
 | surge | `ey`  | fore/aft centering — PI (`STATION_KEEP_SURGE_ERROR_KEY="ey"`)    |
 | heave | `es`  | **gentle** size trim layered on depth hold (owns bulk altitude) |
-| yaw   | `er`  | square the target up (rotation→0) to maximize the margin        |
+| yaw   | `er`  | **DISABLED (KP=0)** — square rotation is unmeasurable; see below |
 
 Roll/pitch stay level via attitude hold (stable camera geometry). The integral
 terms on sway/surge are what actually *hold* against a steady current instead of
-drooping downstream. **Yaw squares the target up** — at 0° the see-all-blue/
-no-red centering tolerance is ±20 cm; at a 45° diamond it collapses to ±~5 cm, so
-aligning buys ~4× the margin (low gain; overrides heading hold while engaged; the
-square is 90°-symmetric so `er` is reported in ±45° and drives to the nearest of
-4 equivalent orientations — no spin). Park the arm at a fixed pose during the
-hold so the camera extrinsics stay constant.
+drooping downstream. **Yaw is left FREE.** In principle `er` squares the target up
+(at 0° the centering tolerance is ±20 cm; at a 45° diamond it collapses to ±~5 cm,
+so aligning would buy ~4× the margin). In practice a 90°-symmetric square has **no
+measurable absolute rotation** from this camera: the detector's angle wanders
+~uniformly across ±45° (std ~30°) even when the square is visibly squared up, so a
+proportional `yaw←er` loop chases phantom rotation and **rocks the vehicle back and
+forth** (recording `20260619-193838`: yaw saturated/reversed 70% of frames while the
+raw gyro showed almost no real rotation). The magnetometer and the estimator's yaw
+*rate* are also unreliable, so there is no trustworthy yaw reference today → yaw is
+free (true drift is slow, ~0.5°/s). The proper fix is a **raw-gyro (`imu.gyro.z`,
+NOT the estimator rate) yaw rate damp** for a mag-free drift-hold; re-enable `yaw←er`
+only if the rotation estimate is ever made reliable (the topside policy already
+reliability-gates `er`, so it would activate safely). Park the arm at a fixed pose
+during the hold so the camera extrinsics stay constant.
 
 ## Control behaviour & tuning
 

@@ -344,22 +344,26 @@ STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-stat
 STATION_KEEP_ALT_TARGET_ES = -0.3
 STATION_KEEP_HEAVE_SLEW = 0.4
 
-# yaw <- er : VISION-ONLY yaw hold (the magnetometer AND the estimator's yaw rate
-# are both unreliable, so the compass/gyro-estimator paths are out). er = the blue
-# square's rotation in the image (mag-independent, wrap-aware EMA-smoothed topside);
-# squares the vehicle up to the target (er -> 0). Now the SOLE yaw driver (the gyro
-# damp was removed -- it was anti-damping a garbage rate). Kept GENTLE + PURE
-# PROPORTIONAL (no integral) for a clean first sign test: if it gently squares up
-# and holds, good; if it slowly rotates the WRONG way, flip STATION_KEEP_YAW_SIGN;
-# if still violent, the er drive itself is wrong -> fall back to free yaw.
+# yaw <- er : DISABLED (free yaw). The er drive caused the "rock back and forth":
+# er is the blue square's apparent rotation, but a 90deg-symmetric square's rotation
+# is fundamentally UNMEASURABLE from this camera -- the detector's angle wanders
+# ~uniformly across +/-45deg (std ~30deg) even when the square is visibly squared up
+# (recording 20260619-193838: yaw cmd saturated/reversed 70% of frames while the raw
+# gyro showed almost no real rotation; the vehicle was already ~10deg = squared). So
+# the proportional yaw loop chased phantom rotation and rocked the thrusters. The
+# magnetometer and the estimator's yaw RATE are both unreliable too, so there is no
+# trustworthy yaw reference right now -> leave yaw FREE (the true physical drift is
+# slow, ~0.5deg/s). A proper fix is a raw-gyro (imu.gyro.z, NOT the estimator rate)
+# rate damp -- see STATION_KEEPING.md "yaw". KP=0 keeps the inert er axis harmless;
+# the topside policy still computes a reliability-gated er for diagnostics/overlay.
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.12
-STATION_KEEP_YAW_KI = 0.0                # no integral until the sign is verified (avoid windup spin)
+STATION_KEEP_YAW_KP = 0.0                # was 0.12 -- rotation is unmeasurable, don't servo it
+STATION_KEEP_YAW_KI = 0.0
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.12   # ~5deg: ignore noise near squared-up
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.12
 STATION_KEEP_YAW_I_LIMIT = 0.08
-STATION_KEEP_YAW_OUT_LIMIT = 0.12        # bounded: a wrong sign can only creep, not spin
-STATION_KEEP_YAW_SIGN = 1.0              # er->yaw direction; VERIFY in water
+STATION_KEEP_YAW_OUT_LIMIT = 0.12        # bound retained in case yaw is ever re-enabled
+STATION_KEEP_YAW_SIGN = 1.0
 STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
 STATION_KEEP_YAW_SLEW = 0.5
 
