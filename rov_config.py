@@ -222,11 +222,12 @@ AUTOPILOT_PITCH_WALK_RATE_DPS = 35.0
 AUTOPILOT_YAW_MODE_DEFAULT = "off"
 AUTOPILOT_YAW_KP = 0.011
 AUTOPILOT_YAW_KI = 0.0008
-# KD raised 0.002->0.008: station-keep arms yaw "damp" mode (u = -sign*kd*rate,
-# GYRO-based so mag-independent) to kill the physical yaw drift. At 0.008 a 16deg/s
-# spike -> ~0.13 counter-thrust; slow 1-2deg/s drift -> negligible (vision er holds
-# that). Mag heading "hold" mode is unused (bad mag), so this only affects damp.
-AUTOPILOT_YAW_KD = 0.008
+# NOTE: the autopilot yaw axis (hold AND damp modes) is UNUSED by station-keep --
+# both rely on the estimator's yaw angle/rate, which is mag-corrupted (the "damp"
+# mode read -42deg/s vs a true -0.6 from the raw gyro and anti-damped = a spin,
+# recordings/20260619-192426). Reverted KD to 0.002. A proper gyro damp would need
+# the RAW imu gyro-z plumbed in, bypassing the estimator. Yaw is vision-only for now.
+AUTOPILOT_YAW_KD = 0.002
 AUTOPILOT_YAW_ERROR_DEADBAND_DEG = 0.75
 AUTOPILOT_YAW_I_LIMIT = 0.05
 AUTOPILOT_YAW_OUT_LIMIT = 0.18
@@ -343,23 +344,23 @@ STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-stat
 STATION_KEEP_ALT_TARGET_ES = -0.3
 STATION_KEEP_HEAVE_SLEW = 0.4
 
-# yaw <- er : VISION YAW HOLD (2026-06-19). The magnetometer is unreliable, so we
-# hold yaw with VISION instead of the compass: er = the blue square's rotation in
-# the image (mag-independent, the right reference for this task), now wrap-aware
-# EMA-smoothed topside. Squares the vehicle up to the target (er -> 0). Paired with
-# a GYRO rate-damper (AUTOPILOT_YAW "damp" mode, armed on engage) that kills the
-# physical drift AND opposes any rotation a wrong er-sign would induce -- so this is
-# safe even though the er->yaw SIGN is unverified (verify: if it slowly rotates the
-# wrong way, flip STATION_KEEP_YAW_SIGN). Low gain + big deadband + slew.
+# yaw <- er : VISION-ONLY yaw hold (the magnetometer AND the estimator's yaw rate
+# are both unreliable, so the compass/gyro-estimator paths are out). er = the blue
+# square's rotation in the image (mag-independent, wrap-aware EMA-smoothed topside);
+# squares the vehicle up to the target (er -> 0). Now the SOLE yaw driver (the gyro
+# damp was removed -- it was anti-damping a garbage rate). Kept GENTLE + PURE
+# PROPORTIONAL (no integral) for a clean first sign test: if it gently squares up
+# and holds, good; if it slowly rotates the WRONG way, flip STATION_KEEP_YAW_SIGN;
+# if still violent, the er drive itself is wrong -> fall back to free yaw.
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.20
-STATION_KEEP_YAW_KI = 0.02               # null the slow rotational drift (hold, not just reduce)
+STATION_KEEP_YAW_KP = 0.12
+STATION_KEEP_YAW_KI = 0.0                # no integral until the sign is verified (avoid windup spin)
 STATION_KEEP_YAW_KD = 0.0
 STATION_KEEP_YAW_ERROR_DEADBAND = 0.12   # ~5deg: ignore noise near squared-up
 STATION_KEEP_YAW_I_LIMIT = 0.08
-STATION_KEEP_YAW_OUT_LIMIT = 0.15
+STATION_KEEP_YAW_OUT_LIMIT = 0.12        # bounded: a wrong sign can only creep, not spin
 STATION_KEEP_YAW_SIGN = 1.0              # er->yaw direction; VERIFY in water
-STATION_KEEP_YAW_MANUAL_DEADBAND = 0.25  # don't let the gyro-damp output look like pilot yaw
+STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
 STATION_KEEP_YAW_SLEW = 0.5
 
 # ---------------------------------------------------------------------------
