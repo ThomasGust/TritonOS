@@ -294,19 +294,31 @@ STATION_KEEP_SURGE_OUT_LIMIT = 0.20
 STATION_KEEP_SURGE_SIGN = -1.0
 STATION_KEEP_SURGE_SLEW = 0.6
 
-# heave <- es : gentle vision size-trim. Depth hold owns bulk altitude; this only
-# nudges it when depth is settled. Keep KP/limit small; no integral (depth hold
-# already has one). NOTE: with depth hold engaged this axis yields most of the
-# time -- es is mainly an on-station INDICATOR (es~0 = right altitude), not an
-# altitude controller. Get on-station manually before engaging.
+# heave <- es : DISABLED (KP=0). es now drives the depth-hold SETPOINT directly
+# (STATION_KEEP_ALT_* below) instead of an additive heave trim, so altitude is
+# servoed drift-free by depth hold and there is no double-counting. Leave at 0.
 STATION_KEEP_HEAVE_ERROR_KEY = "es"
-STATION_KEEP_HEAVE_KP = 0.12
+STATION_KEEP_HEAVE_KP = 0.0
 STATION_KEEP_HEAVE_KI = 0.0
 STATION_KEEP_HEAVE_KD = 0.0
 STATION_KEEP_HEAVE_ERROR_DEADBAND = 0.08
 STATION_KEEP_HEAVE_I_LIMIT = 0.05
 STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
 STATION_KEEP_HEAVE_SIGN = 1.0
+
+# Vision-servoed ALTITUDE (the real altitude control): while station-keep + depth
+# hold are engaged with a valid lock, walk the depth-hold setpoint from the size
+# error es so the vehicle settles to the on-station footprint (es -> 0), drift-free.
+# This is what gets the ROV DOWN to where red leaves the frame. 2026-06-19 data:
+# holds were pinned at es=-1 (footprint ~150cm, red peeking in) because depth hold
+# held the too-high engage depth and es had no authority -- this fixes that.
+#   es < 0 = too high/far  -> descend (deeper).   SIGN verify: engage slightly high,
+#   confirm it goes DOWN (es rises toward 0); if it climbs, flip STATION_KEEP_ALT_SIGN.
+STATION_KEEP_ALT_FROM_ES = True
+STATION_KEEP_ALT_KP = 0.15            # m/s of depth-target change per unit es
+STATION_KEEP_ALT_MAX_OFFSET_M = 0.7   # safety clamp: never walk > this from engage depth
+STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFY in water.
+STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es| below this (on-station band)
 STATION_KEEP_HEAVE_SLEW = 0.4
 
 # yaw <- er : DISABLED (KP=0). The square is 90deg-symmetric and the rotation

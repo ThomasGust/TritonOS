@@ -251,6 +251,69 @@ def test_autopilot_step_applies_station_keep():
     assert st["active"] is True
 
 
+def _alt_autopilot(**over):
+    from control.autopilot import AutopilotConfig, AttitudeAxisConfig, AutopilotController
+    from control.depth_hold import DepthHoldConfig
+
+    base = dict(
+        depth_enable=True, attitude_enable=False, attitude_stale_s=0.5,
+        depth=DepthHoldConfig(kp=0.5, ki=0.0, kd=0.0, out_limit=0.5, depth_lpf_tau_s=0.0),
+        roll=AttitudeAxisConfig(), pitch=AttitudeAxisConfig(), yaw=AttitudeAxisConfig(),
+        station_keep=StationKeepConfig(enable=True, stale_s=0.5, axes=[]),
+        alt_from_es=True, alt_kp=0.15, alt_max_offset_m=0.7, alt_sign=-1.0, alt_deadband=0.1,
+    )
+    base.update(over)
+    return AutopilotController(AutopilotConfig(**base))
+
+
+def _alt_step(ap, es, depth_m, n=1, valid=True):
+    modes = {"autopilot": {"depth": True, "station_keep": True,
+                           "visual": {"valid": valid, "es": es}}}
+    st = None
+    for _ in range(n):
+        _out, st = ap.step(modes=modes, cmd={"heave": 0.0}, depth_m=depth_m, depth_age_s=0.0,
+                           attitude={}, attitude_age_s=None, dt=0.1)
+    return st
+
+
+def test_alt_from_es_servos_depth_setpoint_down_when_too_high():
+    ap = _alt_autopilot()
+    st = _alt_step(ap, es=-1.0, depth_m=1.0, n=5)   # es<0 = too high -> descend
+    alt = st["alt_hold"]
+    assert alt["active"] is True
+    assert alt["base_m"] == pytest.approx(1.0)      # engage depth captured as base
+    assert alt["offset_m"] > 0.0                    # walked the setpoint deeper
+    assert alt["target_m"] > 1.0
+
+
+def test_alt_from_es_climbs_when_too_close():
+    ap = _alt_autopilot()
+    st = _alt_step(ap, es=1.0, depth_m=2.0, n=5)     # es>0 = too close -> climb
+    assert st["alt_hold"]["offset_m"] < 0.0
+    assert st["alt_hold"]["target_m"] < 2.0
+
+
+def test_alt_from_es_offset_is_clamped_for_safety():
+    ap = _alt_autopilot()
+    st = _alt_step(ap, es=-1.0, depth_m=1.0, n=200)
+    assert st["alt_hold"]["offset_m"] == pytest.approx(0.7)   # never beyond max offset
+
+
+def test_alt_from_es_inactive_when_disabled():
+    ap = _alt_autopilot(alt_from_es=False)
+    st = _alt_step(ap, es=-1.0, depth_m=1.0, n=3)
+    assert st["alt_hold"]["active"] is False
+    assert st["alt_hold"]["target_m"] is None
+
+
+def test_alt_from_es_holds_offset_when_es_in_deadband():
+    ap = _alt_autopilot()
+    _alt_step(ap, es=-1.0, depth_m=1.0, n=3)          # build some offset
+    off = ap._alt_offset
+    st = _alt_step(ap, es=0.03, depth_m=1.0, n=5)     # within deadband -> no change
+    assert st["alt_hold"]["offset_m"] == pytest.approx(off)
+
+
 def test_autopilot_combines_dynamic_depth_setpoint_with_direct_translation():
     """Model drives depth via the depth-hold setpoint AND translation directly."""
     from control.autopilot import AutopilotConfig, AutopilotController, AttitudeAxisConfig

@@ -98,6 +98,15 @@ class AutopilotConfig:
     station_keep: StationKeepConfig = field(
         default_factory=lambda: StationKeepConfig(axes=default_station_keep_axes())
     )
+    # Vision-servoed altitude: when station-keep is engaged, walk the depth-hold
+    # SETPOINT from the visual size error (es) so the hold settles to the
+    # on-station footprint (es -> 0) drift-free, instead of holding whatever
+    # (possibly too-high) depth the pilot engaged at. Off by default.
+    alt_from_es: bool = False
+    alt_kp: float = 0.15            # m/s of depth-target change per unit es
+    alt_max_offset_m: float = 0.7   # clamp: never walk more than this from engage depth
+    alt_sign: float = -1.0          # es<0 (too high) -> deeper (descend). Verify in water.
+    alt_deadband: float = 0.1       # ignore |es| below this
 
 
 class AttitudeAxisController:
@@ -334,6 +343,10 @@ class AutopilotController:
             "pitch": AttitudeAxisController("pitch", cfg.pitch),
             "yaw": AttitudeAxisController("yaw", cfg.yaw),
         }
+        # Vision-servoed altitude state.
+        self._alt_offset: float = 0.0
+        self._alt_base: Optional[float] = None
+        self._alt_prev_active: bool = False
 
     def reset(self) -> None:
         """Reset depth hold, attitude-axis, and station-keep controllers."""
@@ -342,6 +355,40 @@ class AutopilotController:
         self.station_keep.reset()
         for axis in self.axes.values():
             axis.reset()
+        self._alt_offset = 0.0
+        self._alt_base = None
+        self._alt_prev_active = False
+
+    def _alt_step(
+        self, active: bool, visual: Dict[str, Any], depth_m: Optional[float], dt: float
+    ) -> Dict[str, Any]:
+        """Walk the depth-hold setpoint from the visual size error (es).
+
+        Captures the depth at engage as the base, then integrates es into a
+        bounded offset so the vehicle descends/climbs until es ~ 0. Returns the
+        servoed depth target (or None to leave the existing target path).
+        """
+        st: Dict[str, Any] = {
+            "enabled": bool(self.cfg.alt_from_es), "active": False, "target_m": None,
+            "offset_m": round(self._alt_offset, 3), "base_m": self._alt_base,
+        }
+        if not (self.cfg.alt_from_es and active) or depth_m is None:
+            self._alt_prev_active = False
+            return st
+        if not self._alt_prev_active or self._alt_base is None:
+            # Engage transition: capture the current depth as the base setpoint.
+            self._alt_base = float(depth_m)
+            self._alt_offset = 0.0
+        es = _finite_float(visual.get("es")) if bool(visual.get("valid")) else None
+        if es is not None and abs(es) > float(self.cfg.alt_deadband):
+            self._alt_offset = _clamp(
+                self._alt_offset + float(self.cfg.alt_sign) * float(self.cfg.alt_kp) * es * dt,
+                -float(self.cfg.alt_max_offset_m), float(self.cfg.alt_max_offset_m),
+            )
+        self._alt_prev_active = True
+        target = float(self._alt_base) + float(self._alt_offset)
+        st.update(active=True, target_m=target, offset_m=round(self._alt_offset, 3), base_m=self._alt_base)
+        return st
 
     def step(
         self,
@@ -366,6 +413,16 @@ class AutopilotController:
         depth_enabled = bool(ap_modes.get("depth", modes.get("depth_hold", modes.get("depth_hold_enabled", False))))
         depth_target = self._target_value(targets, ap_modes, modes, "depth_m", ("depth_target_m", "target_depth_m"))
         depth_status: Dict[str, Any] = {"enabled_cmd": depth_enabled, "active": False, "reason": "disabled"}
+
+        # Vision-servoed altitude: while station-keep is engaged with depth hold,
+        # walk the depth setpoint from es so the hold settles to the on-station
+        # footprint. Overrides any explicit depth target only while active.
+        sk_enabled = bool(ap_modes.get("station_keep", modes.get("station_keep", False)))
+        visual = ap_modes.get("visual") if isinstance(ap_modes.get("visual"), dict) else {}
+        alt_status = self._alt_step(sk_enabled and depth_enabled, dict(visual or {}), depth_m, dt)
+        if alt_status.get("active") and alt_status.get("target_m") is not None:
+            depth_target = alt_status["target_m"]
+
         if self.cfg.depth_enable:
             heave_out, depth_status = self.depth_hold.step(
                 enabled=depth_enabled,
@@ -382,8 +439,7 @@ class AutopilotController:
         # Visual station-keeping (optical-tracking autopilot). The visual error is
         # supplied by a topside CV module in modes["autopilot"]["visual"]; this
         # controller folds in surge/sway corrections after attitude/depth.
-        visual = ap_modes.get("visual") if isinstance(ap_modes.get("visual"), dict) else {}
-        sk_enabled = bool(ap_modes.get("station_keep", modes.get("station_keep", False)))
+        # (sk_enabled / visual were resolved above for the altitude servo.)
         out, sk_status = self.station_keep.step(
             enabled=sk_enabled, manual_cmd=out, visual=visual, dt=dt
         )
@@ -402,6 +458,7 @@ class AutopilotController:
             "depth_hold": depth_status,
             "attitude": attitude_status,
             "station_keep": sk_status,
+            "alt_hold": alt_status,
         }
         return out, status
 
@@ -542,4 +599,9 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
         pitch=axis_config("pitch", pitch_defaults),
         yaw=axis_config("yaw", yaw_defaults),
         station_keep=station_keep_config_from_module(cfg_mod),
+        alt_from_es=bool(getattr(cfg_mod, "STATION_KEEP_ALT_FROM_ES", False)),
+        alt_kp=float(getattr(cfg_mod, "STATION_KEEP_ALT_KP", 0.15)),
+        alt_max_offset_m=float(getattr(cfg_mod, "STATION_KEEP_ALT_MAX_OFFSET_M", 0.7)),
+        alt_sign=float(getattr(cfg_mod, "STATION_KEEP_ALT_SIGN", -1.0)),
+        alt_deadband=float(getattr(cfg_mod, "STATION_KEEP_ALT_DEADBAND", 0.1)),
     )
