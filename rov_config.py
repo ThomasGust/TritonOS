@@ -222,7 +222,11 @@ AUTOPILOT_PITCH_WALK_RATE_DPS = 35.0
 AUTOPILOT_YAW_MODE_DEFAULT = "off"
 AUTOPILOT_YAW_KP = 0.011
 AUTOPILOT_YAW_KI = 0.0008
-AUTOPILOT_YAW_KD = 0.0020
+# KD raised 0.002->0.008: station-keep arms yaw "damp" mode (u = -sign*kd*rate,
+# GYRO-based so mag-independent) to kill the physical yaw drift. At 0.008 a 16deg/s
+# spike -> ~0.13 counter-thrust; slow 1-2deg/s drift -> negligible (vision er holds
+# that). Mag heading "hold" mode is unused (bad mag), so this only affects damp.
+AUTOPILOT_YAW_KD = 0.008
 AUTOPILOT_YAW_ERROR_DEADBAND_DEG = 0.75
 AUTOPILOT_YAW_I_LIMIT = 0.05
 AUTOPILOT_YAW_OUT_LIMIT = 0.18
@@ -339,19 +343,23 @@ STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-stat
 STATION_KEEP_ALT_TARGET_ES = -0.3
 STATION_KEEP_HEAVE_SLEW = 0.4
 
-# yaw <- er : DISABLED (KP=0). The square is 90deg-symmetric and the rotation
-# estimate from the underwater detector is currently noise (~22deg std); driving
-# yaw off it rotates the whole view and loses the lock. Heading hold keeps yaw.
-# Re-enable (KP~0.15-0.25) only once the detector's rotation is reliable, and add
-# a large deadband. SIGN must be verified in water if re-enabled.
+# yaw <- er : VISION YAW HOLD (2026-06-19). The magnetometer is unreliable, so we
+# hold yaw with VISION instead of the compass: er = the blue square's rotation in
+# the image (mag-independent, the right reference for this task), now wrap-aware
+# EMA-smoothed topside. Squares the vehicle up to the target (er -> 0). Paired with
+# a GYRO rate-damper (AUTOPILOT_YAW "damp" mode, armed on engage) that kills the
+# physical drift AND opposes any rotation a wrong er-sign would induce -- so this is
+# safe even though the er->yaw SIGN is unverified (verify: if it slowly rotates the
+# wrong way, flip STATION_KEEP_YAW_SIGN). Low gain + big deadband + slew.
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.0
-STATION_KEEP_YAW_KI = 0.0
+STATION_KEEP_YAW_KP = 0.20
+STATION_KEEP_YAW_KI = 0.02               # null the slow rotational drift (hold, not just reduce)
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.06   # ~3deg of the ~45deg range
-STATION_KEEP_YAW_I_LIMIT = 0.05
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.12   # ~5deg: ignore noise near squared-up
+STATION_KEEP_YAW_I_LIMIT = 0.08
 STATION_KEEP_YAW_OUT_LIMIT = 0.15
-STATION_KEEP_YAW_SIGN = 1.0
+STATION_KEEP_YAW_SIGN = 1.0              # er->yaw direction; VERIFY in water
+STATION_KEEP_YAW_MANUAL_DEADBAND = 0.25  # don't let the gyro-damp output look like pilot yaw
 STATION_KEEP_YAW_SLEW = 0.5
 
 # ---------------------------------------------------------------------------

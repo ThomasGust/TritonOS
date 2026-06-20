@@ -175,11 +175,13 @@ def test_config_from_module_reads_slew():
     assert by_dof["surge"].slew == 0.0   # unset -> axis default (unlimited)
 
 
-def test_rov_config_disables_yaw_align():
-    """Regression: yaw-align is off (its rotation input is currently noise)."""
+def test_rov_config_uses_vision_yaw_not_mag_heading():
+    """Yaw is held with VISION (er) since the magnetometer is unreliable."""
     import rov_config
 
-    assert rov_config.STATION_KEEP_YAW_KP == 0.0
+    assert rov_config.STATION_KEEP_YAW_ERROR_KEY == "er"
+    assert rov_config.STATION_KEEP_YAW_KP > 0.0          # vision yaw enabled
+    assert rov_config.STATION_KEEP_YAW_OUT_LIMIT <= 0.2  # bounded (wrong-sign safety)
 
 
 def test_direct_command_drives_dof_and_is_clamped():
