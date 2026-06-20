@@ -314,10 +314,15 @@ STATION_KEEP_HEAVE_SIGN = 1.0
 # held the too-high engage depth and es had no authority -- this fixes that.
 #   es < 0 = too high/far  -> descend (deeper).   SIGN verify: engage slightly high,
 #   confirm it goes DOWN (es rises toward 0); if it climbs, flip STATION_KEEP_ALT_SIGN.
+# SIGN VERIFIED 2026-06-19 (recordings/20260619-175903): es=-1 drove offset to
+# +0.7m and the vehicle descended (depth 0.07 -> 0.85m) -- correct direction. It
+# hit the 0.7m clamp because the hold was engaged at the SURFACE (way too high);
+# the servo is a FINE trim, so descend near on-station before engaging. Clamp
+# widened to 1.0m now that the sign is trusted.
 STATION_KEEP_ALT_FROM_ES = True
 STATION_KEEP_ALT_KP = 0.15            # m/s of depth-target change per unit es
-STATION_KEEP_ALT_MAX_OFFSET_M = 0.7   # safety clamp: never walk > this from engage depth
-STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFY in water.
+STATION_KEEP_ALT_MAX_OFFSET_M = 1.0   # safety clamp: never walk > this from engage depth
+STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFIED.
 STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es| below this (on-station band)
 STATION_KEEP_HEAVE_SLEW = 0.4
 
