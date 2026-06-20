@@ -145,6 +145,43 @@ def test_er_rotation_error_drives_yaw():
     assert st["axes"]["yaw"]["active"] is True
 
 
+def test_slew_rate_limits_the_ramp():
+    # Big error wants the full out_limit immediately; slew caps the per-step change
+    # so it ramps in instead of stepping (softens the engage lurch).
+    c = _ctrl(kp=5.0, out_limit=0.4, slew=2.0, error_deadband=0.01)
+    v = {"valid": True, "ex": 0.4}
+    out1, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=v, dt=0.1)
+    assert out1["sway"] == pytest.approx(0.2)   # 0 + slew(2.0)*dt(0.1) = 0.2, not 0.4
+    out2, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual=v, dt=0.1)
+    assert out2["sway"] == pytest.approx(0.4)   # ramps the rest of the way, capped
+
+
+def test_slew_memory_resets_on_no_lock():
+    c = _ctrl(kp=5.0, out_limit=0.4, slew=2.0, error_deadband=0.01)
+    c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.4}, dt=0.1)
+    c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": False}, dt=0.1)  # drops lock
+    # Re-acquire: ramp starts from zero again, not the held 0.2.
+    out, _ = c.step(enabled=True, manual_cmd={"sway": 0.0}, visual={"valid": True, "ex": 0.4}, dt=0.1)
+    assert out["sway"] == pytest.approx(0.2)
+
+
+def test_config_from_module_reads_slew():
+    class _Mod:
+        STATION_KEEP_SWAY_SLEW = 0.7
+
+    cfg = station_keep_config_from_module(_Mod())
+    by_dof = {ax.dof: ax for ax in cfg.axes}
+    assert by_dof["sway"].slew == 0.7
+    assert by_dof["surge"].slew == 0.0   # unset -> axis default (unlimited)
+
+
+def test_rov_config_disables_yaw_align():
+    """Regression: yaw-align is off (its rotation input is currently noise)."""
+    import rov_config
+
+    assert rov_config.STATION_KEEP_YAW_KP == 0.0
+
+
 def test_direct_command_drives_dof_and_is_clamped():
     cfg = StationKeepConfig(enable=True, stale_s=0.5, direct_limit=0.6, axes=[])
     c = StationKeepController(cfg)

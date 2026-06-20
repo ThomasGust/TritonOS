@@ -251,34 +251,50 @@ AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 # They are pool-tuning STARTING POINTS; the SIGNs in particular MUST be verified
 # in water (flip if a DOF drives the wrong way). Integral terms (KI) are what let
 # the ROV null the steady current offset and actually hold; keep them small.
+#
+# 2026-06-19 pool review (recordings/20260619-161115): the hold kept LOSING lock
+# right after engage. Root causes from the data + the fixes here:
+#  - yaw was driven by the detector's rotation estimate, which is NOISE (+/-22deg
+#    std) -> the ROV kept rotating the whole view and shook the lock loose. YAW IS
+#    NOW DISABLED (KP=0). Re-enable only once the rotation estimate is trustworthy.
+#  - surge/sway railed their out_limit and LURCHED the vehicle (which loses the
+#    target). Gentler now: KP 0.45->0.30, out_limit 0.30->0.20, + a slew-rate ramp
+#    (STATION_KEEP_*_SLEW, units/sec; 0 = unlimited) so engage/spikes ease in.
+#  - altitude: depth hold owns bulk altitude, so the size axis (es) CANNOT fix
+#    being too high. The operator must descend until the blue square ~fills the
+#    frame and the red just leaves (es~0 on the overlay) BEFORE engaging.
 STATION_KEEP_ENABLE = True
 STATION_KEEP_STALE_S = 0.5          # drop the hold if no fresh lock for this long
 STATION_KEEP_DIRECT_LIMIT = 0.6     # cap on any direct model thrust outputs
 
 # sway <- ex : horizontal centering. PI (integral rejects steady current).
 STATION_KEEP_SWAY_ERROR_KEY = "ex"
-STATION_KEEP_SWAY_KP = 0.45
+STATION_KEEP_SWAY_KP = 0.30
 STATION_KEEP_SWAY_KI = 0.06
 STATION_KEEP_SWAY_KD = 0.0
-STATION_KEEP_SWAY_ERROR_DEADBAND = 0.05   # ±0.05 ~= ±1 cm of the ±20 cm tolerance
+STATION_KEEP_SWAY_ERROR_DEADBAND = 0.06   # ±0.06 ~= ±1 cm of the ±20 cm tolerance
 STATION_KEEP_SWAY_I_LIMIT = 0.18
-STATION_KEEP_SWAY_OUT_LIMIT = 0.30
+STATION_KEEP_SWAY_OUT_LIMIT = 0.20
 STATION_KEEP_SWAY_SIGN = 1.0
 STATION_KEEP_SWAY_MANUAL_DEADBAND = 0.08
+STATION_KEEP_SWAY_SLEW = 0.6              # max |Δu|/s (ramps 0->out_limit in ~0.33s)
 
 # surge <- ey : fore/aft centering (override the back-compat "es" default key).
 STATION_KEEP_SURGE_ERROR_KEY = "ey"
-STATION_KEEP_SURGE_KP = 0.45
+STATION_KEEP_SURGE_KP = 0.30
 STATION_KEEP_SURGE_KI = 0.06
 STATION_KEEP_SURGE_KD = 0.0
-STATION_KEEP_SURGE_ERROR_DEADBAND = 0.05
+STATION_KEEP_SURGE_ERROR_DEADBAND = 0.06
 STATION_KEEP_SURGE_I_LIMIT = 0.18
-STATION_KEEP_SURGE_OUT_LIMIT = 0.30
+STATION_KEEP_SURGE_OUT_LIMIT = 0.20
 STATION_KEEP_SURGE_SIGN = 1.0
+STATION_KEEP_SURGE_SLEW = 0.6
 
 # heave <- es : gentle vision size-trim. Depth hold owns bulk altitude; this only
 # nudges it when depth is settled. Keep KP/limit small; no integral (depth hold
-# already has one). Start at KP=0 and raise only if the size axis needs vision help.
+# already has one). NOTE: with depth hold engaged this axis yields most of the
+# time -- es is mainly an on-station INDICATOR (es~0 = right altitude), not an
+# altitude controller. Get on-station manually before engaging.
 STATION_KEEP_HEAVE_ERROR_KEY = "es"
 STATION_KEEP_HEAVE_KP = 0.12
 STATION_KEEP_HEAVE_KI = 0.0
@@ -287,19 +303,22 @@ STATION_KEEP_HEAVE_ERROR_DEADBAND = 0.08
 STATION_KEEP_HEAVE_I_LIMIT = 0.05
 STATION_KEEP_HEAVE_OUT_LIMIT = 0.15
 STATION_KEEP_HEAVE_SIGN = 1.0
+STATION_KEEP_HEAVE_SLEW = 0.4
 
-# yaw <- er : square the target up (rotation error -> 0). |er|=1 at the detector's
-# rotation limit (~45deg). Squaring up maximizes the see-all-blue/no-red margin
-# (~4x the centering tolerance vs a 45deg diamond). Low gain; overrides heading
-# hold while the transect hold is engaged. SIGN must be verified in water.
+# yaw <- er : DISABLED (KP=0). The square is 90deg-symmetric and the rotation
+# estimate from the underwater detector is currently noise (~22deg std); driving
+# yaw off it rotates the whole view and loses the lock. Heading hold keeps yaw.
+# Re-enable (KP~0.15-0.25) only once the detector's rotation is reliable, and add
+# a large deadband. SIGN must be verified in water if re-enabled.
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.25
+STATION_KEEP_YAW_KP = 0.0
 STATION_KEEP_YAW_KI = 0.0
 STATION_KEEP_YAW_KD = 0.0
 STATION_KEEP_YAW_ERROR_DEADBAND = 0.06   # ~3deg of the ~45deg range
 STATION_KEEP_YAW_I_LIMIT = 0.05
 STATION_KEEP_YAW_OUT_LIMIT = 0.15
 STATION_KEEP_YAW_SIGN = 1.0
+STATION_KEEP_YAW_SLEW = 0.5
 
 # ---------------------------------------------------------------------------
 # 2d) arming safety

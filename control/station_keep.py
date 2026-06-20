@@ -75,6 +75,9 @@ class StationKeepAxis:
     out_limit: float = 0.35         # cap this axis' contribution
     sign: float = 1.0               # flip to match camera/thruster geometry
     manual_deadband: float = 0.08   # pilot input above this yields the DOF
+    slew: float = 0.0               # max |Δu| per second (0 = unlimited). Eases the
+                                    # engage transient + clips error spikes so the
+                                    # vehicle doesn't lurch and shake the lock loose.
 
 
 @dataclass
@@ -129,6 +132,7 @@ class StationKeepController:
     def reset(self) -> None:
         self._i_state: Dict[str, float] = {}
         self._last_error: Dict[str, float] = {}
+        self._last_u: Dict[str, float] = {}
         self._stale_timer: float = 0.0
         self._ever_valid: bool = False
         self._last_enabled: bool = False
@@ -137,6 +141,9 @@ class StationKeepController:
     def _clear_integrators(self) -> None:
         self._i_state.clear()
         self._last_error.clear()
+        # Drop slew memory too, so a re-acquired lock ramps up from zero rather
+        # than snapping to a stale held output.
+        self._last_u.clear()
 
     def step(
         self,
@@ -213,9 +220,11 @@ class StationKeepController:
 
             manual = manual_in.get(ax.dof, 0.0)
             if abs(manual) > float(ax.manual_deadband):
-                # Pilot is driving this DOF -- yield it and bleed the integrator.
+                # Pilot is driving this DOF -- yield it and bleed the integrator +
+                # slew memory (so it ramps from zero when the pilot releases).
                 self._i_state[key] = 0.0
                 self._last_error[key] = err
+                self._last_u[key] = 0.0
                 axes_status[ax.dof] = {
                     "active": False,
                     "reason": "manual_override",
@@ -243,6 +252,15 @@ class StationKeepController:
                     float(ax.kp) * err + float(ax.ki) * i_state + float(ax.kd) * d_err
                 )
                 u = _clamp(u_raw, -float(ax.out_limit), float(ax.out_limit))
+
+            # Slew-rate limit: cap how fast this axis' contribution can change, so a
+            # step in the visual error (or the engage transient) ramps in instead of
+            # lurching the vehicle. 0 = unlimited (legacy behavior).
+            if float(ax.slew) > 0.0:
+                prev_u = self._last_u.get(key, 0.0)
+                max_step = float(ax.slew) * dt
+                u = _clamp(u, prev_u - max_step, prev_u + max_step)
+            self._last_u[key] = u
 
             out[ax.dof] = _clamp(manual + u, -1.0, 1.0)
             any_active = any_active or abs(u) > 1e-9
@@ -303,6 +321,7 @@ def station_keep_config_from_module(cfg_mod: Any) -> StationKeepConfig:
                 out_limit=float(getattr(cfg_mod, f"{prefix}_OUT_LIMIT", ax.out_limit)),
                 sign=float(getattr(cfg_mod, f"{prefix}_SIGN", ax.sign)),
                 manual_deadband=float(getattr(cfg_mod, f"{prefix}_MANUAL_DEADBAND", ax.manual_deadband)),
+                slew=float(getattr(cfg_mod, f"{prefix}_SLEW", ax.slew)),
             )
         )
     return StationKeepConfig(

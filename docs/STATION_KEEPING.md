@@ -148,6 +148,48 @@ extend `default_station_keep_axes()` / the `STATION_KEEP_*` config. The pilot is
 expected to iterate on this policy ("what should the ROV do to hold position")
 without touching the controller code.
 
+## Pool review 2026-06-19 — why the hold lost lock, and the in-water procedure
+
+Analyzing `recordings/20260619-161115` (engaged hold) with
+`TritonPilot/tools/transect_replay.py` showed the hold kept losing lock right
+after engage for three reasons, now addressed:
+
+1. **Yaw was driven by noise.** The detector's square-rotation estimate is ~±22°
+   std (basically noise); driving `yaw←er` off it rotated the whole view and shook
+   the lock loose. **Yaw is now disabled** (`STATION_KEEP_YAW_KP = 0`). Heading
+   hold keeps yaw. Re-enable only once the rotation estimate is reliable.
+2. **Surge/sway lurched.** They railed their `out_limit` off large/noisy errors and
+   the vehicle motion lost the target. Now **gentler** (KP 0.45→0.30, out_limit
+   0.30→0.20) with a **slew-rate ramp** (`STATION_KEEP_*_SLEW`, units/s) so the
+   engage transient and error spikes ease in instead of stepping.
+3. **The ROV was flown too high.** 96% of the clip the footprint was >90 cm (the
+   whole red square in frame, blue small), so `es` railed at −1. Depth hold owns
+   bulk altitude, so the gentle `heave←es` trim **cannot** fix this — `es` is mainly
+   an **on-station indicator** (es≈0 ⇒ right altitude), not an altitude controller.
+
+Topside, the policy now **coasts** (re-emits the last good error for ~3 frames) over
+brief detection dropouts and **rejects single-frame centroid jumps**, so the hold
+stops chattering in/out (replay: valid↔invalid transitions 89→29 on the same clip).
+
+**In-water procedure (signs are still unverified — a wrong `*_SIGN` drives the
+wrong way, so verify one axis at a time):**
+
+1. **Calibrate / sanity-check** from a short clip:
+   `python -m tools.transect_replay <session_dir> --calibrate`. Confirm position is
+   nadir-centered (keep `TransectModel()` defaults) and note the on-station size.
+2. **Get on-station first.** Descend until the blue square ~fills the frame and the
+   red just leaves — the overlay/chip should read **es≈0** and **ex,ey≈0**. Only
+   then engage (**K** or the transect-tab *Engage* button).
+3. **Verify signs one axis at a time** (set the others' KP to 0 in `rov_config`):
+   nudge the ROV off-center and confirm station-keep drives it **back**; if it runs
+   away, flip that axis' `_SIGN`. Order: **sway (ex) → surge (ey) → heave (es)**.
+4. **Engage the full hold**, then run `transect_replay --proposed` on the new
+   recording to check lock% and per-axis saturation without re-flying.
+
+> Deploy note: `rov_config.py` / `control/station_keep.py` are **ROV-side**
+> (`/home/TritonOS` on the Pi) and must be deployed there to take effect. The
+> topside policy/tool/overlay changes apply on the next app launch.
+
 ## Status / diagnostics
 
 `AutopilotController.step` returns `status["station_keep"]` with `reason`
