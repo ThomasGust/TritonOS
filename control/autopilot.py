@@ -106,7 +106,9 @@ class AutopilotConfig:
     alt_kp: float = 0.15            # m/s of depth-target change per unit es
     alt_max_offset_m: float = 0.7   # clamp: never walk more than this from engage depth
     alt_sign: float = -1.0          # es<0 (too high) -> deeper (descend). Verify in water.
-    alt_deadband: float = 0.1       # ignore |es| below this
+    alt_deadband: float = 0.1       # ignore |es - alt_target_es| below this
+    alt_target_es: float = 0.0      # servo es toward this (slightly <0 keeps blue a bit
+                                    # smaller -> edges stay in frame, still no red)
 
 
 class AttitudeAxisController:
@@ -380,11 +382,13 @@ class AutopilotController:
             self._alt_base = float(depth_m)
             self._alt_offset = 0.0
         es = _finite_float(visual.get("es")) if bool(visual.get("valid")) else None
-        if es is not None and abs(es) > float(self.cfg.alt_deadband):
-            self._alt_offset = _clamp(
-                self._alt_offset + float(self.cfg.alt_sign) * float(self.cfg.alt_kp) * es * dt,
-                -float(self.cfg.alt_max_offset_m), float(self.cfg.alt_max_offset_m),
-            )
+        if es is not None:
+            err = es - float(self.cfg.alt_target_es)   # servo es toward alt_target_es
+            if abs(err) > float(self.cfg.alt_deadband):
+                self._alt_offset = _clamp(
+                    self._alt_offset + float(self.cfg.alt_sign) * float(self.cfg.alt_kp) * err * dt,
+                    -float(self.cfg.alt_max_offset_m), float(self.cfg.alt_max_offset_m),
+                )
         self._alt_prev_active = True
         target = float(self._alt_base) + float(self._alt_offset)
         st.update(active=True, target_m=target, offset_m=round(self._alt_offset, 3), base_m=self._alt_base)
@@ -604,4 +608,5 @@ def autopilot_config_from_module(cfg_mod: Any) -> AutopilotConfig:
         alt_max_offset_m=float(getattr(cfg_mod, "STATION_KEEP_ALT_MAX_OFFSET_M", 0.7)),
         alt_sign=float(getattr(cfg_mod, "STATION_KEEP_ALT_SIGN", -1.0)),
         alt_deadband=float(getattr(cfg_mod, "STATION_KEEP_ALT_DEADBAND", 0.1)),
+        alt_target_es=float(getattr(cfg_mod, "STATION_KEEP_ALT_TARGET_ES", 0.0)),
     )

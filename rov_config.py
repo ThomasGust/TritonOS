@@ -230,8 +230,13 @@ AUTOPILOT_YAW_OUT_LIMIT = 0.18
 # The current horizontal thruster/mixer convention needs the inverted sign here.
 AUTOPILOT_YAW_SIGN = -1.0
 AUTOPILOT_YAW_MANUAL_DEADBAND = 0.08
-# Manual yaw while hold is armed turns normally; release latches current yaw.
-AUTOPILOT_YAW_MANUAL_LATCH = True
+# manual_latch was the culprit in the 2026-06-19 station-keep spin: with it True,
+# any yaw stick input RE-CAPTURED the (drifting) heading as the new target, so the
+# hold never actually held and the vehicle spun. False = the hold keeps its
+# captured heading and returns to it (rigid heading hold). Yaw SIGN verified correct
+# (corr(err,u_out)=-0.77 in recordings/20260619-175903). Side effect: a manual yaw
+# nudge while yaw-hold is armed is now resisted instead of re-aiming the target.
+AUTOPILOT_YAW_MANUAL_LATCH = False
 AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 
 # ---------------------------------------------------------------------------
@@ -320,10 +325,14 @@ STATION_KEEP_HEAVE_SIGN = 1.0
 # the servo is a FINE trim, so descend near on-station before engaging. Clamp
 # widened to 1.0m now that the sign is trusted.
 STATION_KEEP_ALT_FROM_ES = True
-STATION_KEEP_ALT_KP = 0.15            # m/s of depth-target change per unit es
+STATION_KEEP_ALT_KP = 0.12            # m/s of depth-target change per unit es (a bit gentler)
 STATION_KEEP_ALT_MAX_OFFSET_M = 1.0   # safety clamp: never walk > this from engage depth
 STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFIED.
-STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es| below this (on-station band)
+STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-station band)
+# Servo es toward a SLIGHTLY NEGATIVE target (not 0): keeps the blue square a touch
+# smaller so its edges stay inside the frame (the "too low, edges drift out" issue
+# 2026-06-19) while red is still well out (footprint ~98cm < 130cm). 0 = exact W*=90.
+STATION_KEEP_ALT_TARGET_ES = -0.2
 STATION_KEEP_HEAVE_SLEW = 0.4
 
 # yaw <- er : DISABLED (KP=0). The square is 90deg-symmetric and the rotation

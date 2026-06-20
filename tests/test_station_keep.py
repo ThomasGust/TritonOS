@@ -299,6 +299,17 @@ def test_alt_from_es_offset_is_clamped_for_safety():
     assert st["alt_hold"]["offset_m"] == pytest.approx(0.7)   # never beyond max offset
 
 
+def test_alt_from_es_servos_toward_negative_target_es():
+    # Target es=-0.2 keeps blue a touch smaller (edges in frame). es above target
+    # (too low/close) -> climb; es at target -> hold.
+    ap = _alt_autopilot(alt_target_es=-0.2, alt_deadband=0.05)
+    st = _alt_step(ap, es=0.0, depth_m=2.0, n=5)
+    assert st["alt_hold"]["offset_m"] < 0.0
+    ap2 = _alt_autopilot(alt_target_es=-0.2, alt_deadband=0.05)
+    st2 = _alt_step(ap2, es=-0.2, depth_m=2.0, n=5)
+    assert st2["alt_hold"]["offset_m"] == pytest.approx(0.0)
+
+
 def test_alt_from_es_inactive_when_disabled():
     ap = _alt_autopilot(alt_from_es=False)
     st = _alt_step(ap, es=-1.0, depth_m=1.0, n=3)
