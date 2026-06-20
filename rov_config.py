@@ -338,10 +338,19 @@ STATION_KEEP_ALT_KP = 0.06            # m/s of depth-target change per unit es (
 STATION_KEEP_ALT_MAX_OFFSET_M = 0.6   # safety clamp: only a small trim from the engage depth
 STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFIED.
 STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-station band)
-# Servo es toward a NEGATIVE target (not 0): stays a bit higher so the blue square
-# is smaller (edges well inside the frame, generous margin to too-close) while red
-# is still out (footprint ~104cm < 130cm). More conservative after the overshoot.
-STATION_KEEP_ALT_TARGET_ES = -0.3
+# Servo es toward a NEGATIVE target (not 0): hold HIGHER so the blue square is
+# smaller, leaving vertical margin for the (free-yaw) slow rotation. Key geometry:
+# the frame is 16:9 but the on-station footprint (es=0 -> 90cm by WIDTH) only covers
+# 90*9/16 ~= 51cm by HEIGHT, so the 50cm blue square nearly fills the frame
+# VERTICALLY -- the binding constraint. At es=-0.3 (footprint ~102cm) blue still fills
+# ~87% of frame height, so a slow yaw drift of only ~15deg walks the rotated corners
+# off the top/bottom edges (observed: recording 20260619-201723 converged es~-0.41,
+# 83% vertical fill, edges clipping on the drift). es=-0.7 -> footprint ~118cm ->
+# blue ~75% of height (tolerates ~20-25deg rotation + centering wander) while red
+# stays out (footprint 118 < 130cm). Operator still does the bulk descent before
+# engaging; this is the fine on-station altitude.
+STATION_KEEP_ALT_TARGET_ES = -0.7     # was -0.3 (too low -> edges clipped on the yaw drift)
+STATION_KEEP_HEAVE_SLEW = 0.4
 STATION_KEEP_HEAVE_SLEW = 0.4
 
 # yaw <- er : DISABLED (free yaw). The er drive caused the "rock back and forth":
