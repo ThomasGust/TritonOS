@@ -175,16 +175,20 @@ def test_config_from_module_reads_slew():
     assert by_dof["surge"].slew == 0.0   # unset -> axis default (unlimited)
 
 
-def test_rov_config_leaves_yaw_free():
-    """Yaw is FREE: the magnetometer and the estimator's yaw rate are both unreliable,
-    and a 90deg-symmetric square's rotation (er) is unmeasurable -- servoing it rocked
-    the vehicle (recording 20260619-193838). So the yaw<-er axis is inert (KP=0) until
-    a clean raw-gyro rate damp is plumbed."""
+def test_rov_config_yaw_is_a_conservative_squaring_assist():
+    """Yaw<-er is a GENTLE squaring assist (re-enabled 2026-06-20): drive the blue
+    square's apparent rotation to 0 so the target looks square in frame. The detector
+    now measures rotation with a structure tensor (no minAreaRect flip) and the topside
+    policy sends a reliability-gated er, so the old rock is addressed -- but the gains
+    stay timid (small KP, no integrator, low out_limit, wide deadband) so an unverified
+    SIGN can only creep, not spin."""
     import rov_config
 
     assert rov_config.STATION_KEEP_YAW_ERROR_KEY == "er"
-    assert rov_config.STATION_KEEP_YAW_KP == 0.0         # vision yaw disabled (unmeasurable)
-    assert rov_config.STATION_KEEP_YAW_OUT_LIMIT <= 0.2  # bound retained if ever re-enabled
+    assert 0.0 < rov_config.STATION_KEEP_YAW_KP <= 0.12   # re-enabled, but conservative
+    assert rov_config.STATION_KEEP_YAW_KI == 0.0          # no integrator -> no windup-spin
+    assert rov_config.STATION_KEEP_YAW_OUT_LIMIT <= 0.12  # a wrong sign only creeps
+    assert rov_config.STATION_KEEP_YAW_ERROR_DEADBAND >= 0.12  # ignore small tilts
 
 
 def test_direct_command_drives_dof_and_is_clamped():

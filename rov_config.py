@@ -353,28 +353,31 @@ STATION_KEEP_ALT_TARGET_ES = -0.7     # was -0.3 (too low -> edges clipped on th
 STATION_KEEP_HEAVE_SLEW = 0.4
 STATION_KEEP_HEAVE_SLEW = 0.4
 
-# yaw <- er : DISABLED (free yaw). The er drive caused the "rock back and forth":
-# er is the blue square's apparent rotation, but a 90deg-symmetric square's rotation
-# is fundamentally UNMEASURABLE from this camera -- the detector's angle wanders
-# ~uniformly across +/-45deg (std ~30deg) even when the square is visibly squared up
-# (recording 20260619-193838: yaw cmd saturated/reversed 70% of frames while the raw
-# gyro showed almost no real rotation; the vehicle was already ~10deg = squared). So
-# the proportional yaw loop chased phantom rotation and rocked the thrusters. The
-# magnetometer and the estimator's yaw RATE are both unreliable too, so there is no
-# trustworthy yaw reference right now -> leave yaw FREE (the true physical drift is
-# slow, ~0.5deg/s). A proper fix is a raw-gyro (imu.gyro.z, NOT the estimator rate)
-# rate damp -- see STATION_KEEPING.md "yaw". KP=0 keeps the inert er axis harmless;
-# the topside policy still computes a reliability-gated er for diagnostics/overlay.
+# yaw <- er : GENTLE SQUARING ASSIST (conservative re-enable, 2026-06-20). er is the
+# blue square's apparent rotation; driving it to 0 makes the target appear square in
+# the viewport (max see-all-blue / no-red margin) -- the GOAL, regardless of vehicle
+# yaw (apparent rotation and hull yaw are separate). The old "rock" had THREE causes,
+# all now fixed: (1) the topside policy's buggy wrap-snap, (2) an anti-damping gyro bug,
+# (3) minAreaRect's degenerate +/-45 flip on a near-square. The detector now measures
+# rotation with a structure tensor (continuous, no flip) cross-checked by the white pipe,
+# and the topside policy sends a reliability-GATED, 90deg-periodic-smoothed er (it
+# collapses to ~0 when the read is untrustworthy, so the axis holds). Validated offline:
+# 0 catastrophic reversals, ~1.7deg jitter (tools/transect_review.py). So re-enable, but
+# TIMID: small KP + low out_limit + wide deadband + slew, so a wrong SIGN can only CREEP
+# (visible, recoverable, pilot-overridable) -- NOT spin. POOL: engage over a clearly
+# TILTED square; it should slowly square up (er -> 0). If it slowly rotates the WRONG way,
+# flip STATION_KEEP_YAW_SIGN. If it still oscillates, drop KP / widen deadband / KP=0.
+# SIGN is UNVERIFIED. Review every engage in tools/transect_review.py (er vs cmd_final.yaw).
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.0                # was 0.12 -- rotation is unmeasurable, don't servo it
-STATION_KEEP_YAW_KI = 0.0
+STATION_KEEP_YAW_KP = 0.08               # timid first re-enable (was 0.0 free / 0.12 pre-fix)
+STATION_KEEP_YAW_KI = 0.0                # no integrator -> no windup-spin
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.12
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.15   # ignore <~7deg tilt; only square up when clearly off
 STATION_KEEP_YAW_I_LIMIT = 0.08
-STATION_KEEP_YAW_OUT_LIMIT = 0.12        # bound retained in case yaw is ever re-enabled
-STATION_KEEP_YAW_SIGN = 1.0
+STATION_KEEP_YAW_OUT_LIMIT = 0.10        # wrong sign can only creep, not spin
+STATION_KEEP_YAW_SIGN = 1.0              # UNVERIFIED -- flip if it squares the wrong way
 STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
-STATION_KEEP_YAW_SLEW = 0.5
+STATION_KEEP_YAW_SLEW = 0.35             # ease in (~0.3s to out_limit)
 
 # ---------------------------------------------------------------------------
 # 2d) arming safety
