@@ -230,13 +230,13 @@ AUTOPILOT_YAW_OUT_LIMIT = 0.18
 # The current horizontal thruster/mixer convention needs the inverted sign here.
 AUTOPILOT_YAW_SIGN = -1.0
 AUTOPILOT_YAW_MANUAL_DEADBAND = 0.08
-# manual_latch was the culprit in the 2026-06-19 station-keep spin: with it True,
-# any yaw stick input RE-CAPTURED the (drifting) heading as the new target, so the
-# hold never actually held and the vehicle spun. False = the hold keeps its
-# captured heading and returns to it (rigid heading hold). Yaw SIGN verified correct
-# (corr(err,u_out)=-0.77 in recordings/20260619-175903). Side effect: a manual yaw
-# nudge while yaw-hold is armed is now resisted instead of re-aiming the target.
-AUTOPILOT_YAW_MANUAL_LATCH = False
+# Restored to True (original normal yaw-hold feel): station-keep heading hold is
+# DISABLED again because the magnetometer heading is unreliable (recordings/
+# 20260619-190455: mag drifted ~9deg/s while the gyro read ~0). Mag-based heading
+# hold can't work until the mag is fixed; the yaw sign itself is verified correct
+# (corr(err,u_out)=-0.84), so heading hold can be re-enabled once the mag is good
+# (then set this False again for a rigid hold) or replaced with vision (er) yaw.
+AUTOPILOT_YAW_MANUAL_LATCH = True
 AUTOPILOT_YAW_WALK_RATE_DPS = 35.0
 
 # ---------------------------------------------------------------------------
@@ -324,15 +324,19 @@ STATION_KEEP_HEAVE_SIGN = 1.0
 # hit the 0.7m clamp because the hold was engaged at the SURFACE (way too high);
 # the servo is a FINE trim, so descend near on-station before engaging. Clamp
 # widened to 1.0m now that the sign is trusted.
+# GENTLE FINE TRIM (anti-plummet, 2026-06-19 recordings/20260619-190455): the servo
+# descended ~0.9m and overshot too-close = "plummeting, rapidly too close, lose it".
+# Halved the rate and tightened the clamp so it can only SLOWLY trim a small amount;
+# the OPERATOR does the bulk descent (get blue ~filling the frame) before engaging.
 STATION_KEEP_ALT_FROM_ES = True
-STATION_KEEP_ALT_KP = 0.12            # m/s of depth-target change per unit es (a bit gentler)
-STATION_KEEP_ALT_MAX_OFFSET_M = 1.0   # safety clamp: never walk > this from engage depth
+STATION_KEEP_ALT_KP = 0.06            # m/s of depth-target change per unit es (slow = no overshoot)
+STATION_KEEP_ALT_MAX_OFFSET_M = 0.6   # safety clamp: only a small trim from the engage depth
 STATION_KEEP_ALT_SIGN = -1.0          # es<0 (too high) -> +depth (descend). VERIFIED.
 STATION_KEEP_ALT_DEADBAND = 0.1       # ignore |es - target| below this (on-station band)
-# Servo es toward a SLIGHTLY NEGATIVE target (not 0): keeps the blue square a touch
-# smaller so its edges stay inside the frame (the "too low, edges drift out" issue
-# 2026-06-19) while red is still well out (footprint ~98cm < 130cm). 0 = exact W*=90.
-STATION_KEEP_ALT_TARGET_ES = -0.2
+# Servo es toward a NEGATIVE target (not 0): stays a bit higher so the blue square
+# is smaller (edges well inside the frame, generous margin to too-close) while red
+# is still out (footprint ~104cm < 130cm). More conservative after the overshoot.
+STATION_KEEP_ALT_TARGET_ES = -0.3
 STATION_KEEP_HEAVE_SLEW = 0.4
 
 # yaw <- er : DISABLED (KP=0). The square is 90deg-symmetric and the rotation
