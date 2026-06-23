@@ -411,7 +411,7 @@ class ControlService:
         self._gripper_right_invert = float(getattr(cfg, "GRIPPER_RIGHT_INVERT", 1.0))
         self._gripper_deadzone = float(getattr(cfg, "GRIPPER_DEADBAND", 0.01))
         # Differential geometry in degrees (see _diff_mix_norm / docs/MANIPULATOR_ARM.md).
-        self._gripper_servo_range_deg = max(1.0, float(getattr(cfg, "GRIPPER_SERVO_RANGE_DEG", 70.0)))
+        self._gripper_servo_range_deg = max(1.0, float(getattr(cfg, "GRIPPER_SERVO_RANGE_DEG", 100.0)))
         self._gripper_pitch_span_deg = float(getattr(cfg, "GRIPPER_PITCH_SPAN_DEG", 90.0))
         self._gripper_wrist_span_deg = float(getattr(cfg, "GRIPPER_WRIST_SPAN_DEG", 90.0))
         self._gripper_pitch_neutral_deg = float(getattr(cfg, "GRIPPER_PITCH_NEUTRAL_DEG", 45.0))

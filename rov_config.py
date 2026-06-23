@@ -778,16 +778,17 @@ GRIPPER_LEFT_CMD_KEY = "gripper_left"
 GRIPPER_RIGHT_CMD_KEY = "gripper_right"
 
 # --- Differential geometry / range of motion (degrees) ---------------------
-GRIPPER_SERVO_RANGE_DEG = 70.0   # BlueTrail set to +/-70 now; set 100.0 after reprogramming
+GRIPPER_SERVO_RANGE_DEG = 100.0  # BlueTrail reprogrammed to +/-100 for full pitch+wrist ROM (was +/-70)
 # MEASURED on the bench: pitch is the DIFFERENTIAL axis (servos move OPPOSITE) and
 # wrist is the common axis -- see GRIPPER_RIGHT_INVERT below. The arm only needs
-# the useful 0..90 deg pitch arc while piloting; spending the whole +/-70 servo
-# budget on a 140 deg pitch sweep made wrist authority disappear near command
-# endpoints. Keep pitch narrower and bias the center toward the working/down pose
-# so wrist remains available when the arm is out.
+# the useful 0..90 deg pitch arc while piloting, so PITCH_SPAN stays 90 (not the
+# full 140 deg bench sweep). At +/-100 the whole (pitch, wrist) square fits inside
+# the servo budget (45 + 45 = 90 <= 100), so a symmetric 45 deg neutral keeps FULL
+# wrist across the entire pitch arc -- no need to bias the neutral toward the down
+# pose the way the narrower +/-70 build had to.
 GRIPPER_PITCH_SPAN_DEG = 90.0    # gripper_pitch -1..+1 -> flat..down, not the full bench sweep
 GRIPPER_WRIST_SPAN_DEG = 90.0    # gripper_yaw   -1..+1 spans this many degrees of wrist roll
-GRIPPER_PITCH_NEUTRAL_DEG = 70.0 # full wrist over roughly 45..90 deg pitch; little wrist when folded
+GRIPPER_PITCH_NEUTRAL_DEG = 45.0 # symmetric: at +/-100 full wrist is reachable across the whole 0..90 pitch arc
 GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0
@@ -806,10 +807,12 @@ GRIPPER_HOLD_LAST_POSITION = True
 # --- Servo pulse calibration -----------------------------------------------
 # Symmetric about center: a normalized left/right of +/-1 == +/-RANGE_DEG.
 #   us = CENTER_US + servo_deg * US_PER_DEG     (servo_deg in [-RANGE, +RANGE])
-# BlueTrail SER-2010 = Hitec D954SW. MEASURED on the bench: the programmed +/-70 deg
-# spans ~700..2300us (+/-800us about the 1500us center), i.e. ~11.43 us/deg -- about
-# 2x the standard R/C band. If the arm under/over-shoots the travel, adjust this and
-# the endpoints follow; confirm precisely with `tools.gripper_calibrate --jog`.
+# BlueTrail SER-2010 = Hitec D954SW. MEASURED on the bench: the ~700..2300us pulse
+# range (+/-800us about the 1500us center) is the FIXED mechanical travel. Reprogramming
+# the servo from +/-70 to +/-100 deg remaps those same pulse endpoints to more physical
+# degrees, so US_PER_DEG drops ~11.43 -> 8.0 while the PWM endpoints stay put. If the arm
+# under/over-shoots the travel, adjust the pulse half-span (the endpoints follow); confirm
+# precisely with `tools.gripper_calibrate --jog`.
 GRIPPER_SERVO_CENTER_US = 1500
 GRIPPER_SERVO_PULSE_HALFSPAN_US = 800.0  # measured 700..2300us endpoints, independent of programmed servo degrees
 GRIPPER_US_PER_DEG = GRIPPER_SERVO_PULSE_HALFSPAN_US / GRIPPER_SERVO_RANGE_DEG

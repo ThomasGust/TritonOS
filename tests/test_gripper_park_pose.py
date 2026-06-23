@@ -74,11 +74,14 @@ def test_diff_mix_keeps_wrist_at_full_pitch_with_pitch_priority():
     assert abs(left - right) > 1e-3
 
 
-def test_current_repo_geometry_trades_extra_pitch_for_down_wrist():
+def test_current_repo_geometry_reaches_full_pitch_wrist_square():
     import rov_config as cfg
 
+    # The +/-100 servos make the whole (pitch, wrist) square reachable, so the
+    # config uses a symmetric 45 deg neutral with no pitch/wrist trade-off.
+    assert cfg.GRIPPER_SERVO_RANGE_DEG == 100.0
     assert cfg.GRIPPER_PITCH_SPAN_DEG == 90.0
-    assert cfg.GRIPPER_PITCH_NEUTRAL_DEG == 70.0
+    assert cfg.GRIPPER_PITCH_NEUTRAL_DEG == 45.0
 
     geo = dict(
         servo_range_deg=cfg.GRIPPER_SERVO_RANGE_DEG,
@@ -91,7 +94,8 @@ def test_current_repo_geometry_trades_extra_pitch_for_down_wrist():
     d_pitch = (left + right) * 0.5 * cfg.GRIPPER_SERVO_RANGE_DEG
     d_wrist = (left - right) * 0.5 * cfg.GRIPPER_SERVO_RANGE_DEG
 
-    assert abs(d_pitch - 20.0) < 1e-6
+    # Full pitch AND full wrist are both delivered (45 deg each) -- no clip.
+    assert abs(d_pitch - 45.0) < 1e-6
     assert abs(d_wrist - 45.0) < 1e-6
 
 

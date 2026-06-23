@@ -332,7 +332,7 @@ def alignment_hold(ramp: "DualRamp", center_us: float) -> None:
 
     With both servos at their electrical center, the differential is at its neutral
     pose. Mount the connector + arm here so that this pose equals the chosen
-    GRIPPER_PITCH_NEUTRAL_DEG (pitch) and a centered wrist; the +/-70 deg of each
+    GRIPPER_PITCH_NEUTRAL_DEG (pitch) and a centered wrist; the +/-100 deg of each
     servo then spreads symmetrically about that neutral.
     """
 
@@ -416,7 +416,7 @@ def _load_mix_params() -> dict:
     """Read the current differential-mix parameters from rov_config (with defaults)."""
 
     p = dict(
-        servo_range_deg=70.0,
+        servo_range_deg=100.0,
         pitch_neutral=25.0,
         wrist_neutral=45.0,
         left_invert=1.0,
@@ -426,7 +426,7 @@ def _load_mix_params() -> dict:
         import rov_config as c  # type: ignore
 
         p.update(
-            servo_range_deg=float(getattr(c, "GRIPPER_SERVO_RANGE_DEG", 70.0)),
+            servo_range_deg=float(getattr(c, "GRIPPER_SERVO_RANGE_DEG", 100.0)),
             pitch_neutral=float(getattr(c, "GRIPPER_PITCH_NEUTRAL_DEG", 25.0)),
             wrist_neutral=float(getattr(c, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0)),
             left_invert=float(getattr(c, "GRIPPER_LEFT_INVERT", 1.0)),
