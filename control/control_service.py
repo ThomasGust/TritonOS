@@ -331,6 +331,35 @@ class ControlService:
         except Exception:
             pass
 
+        # --- optional feed-forward current budget (fuse protection) --------
+        # Default OFF. When disabled this is a true no-op: the model is not even
+        # loaded and _apply_current_budget() returns its input unchanged.
+        self._current_budget_enabled = bool(getattr(cfg, "CURRENT_BUDGET_ENABLE", False))
+        self._current_budget_max_a = float(getattr(cfg, "CURRENT_BUDGET_MAX_A", 22.0))
+        self._current_budget_reserve_a = float(getattr(cfg, "CURRENT_BUDGET_RESERVE_A", 0.0))
+        self._current_budget_voltage_v = float(getattr(cfg, "CURRENT_BUDGET_VOLTAGE_V", 14.0))
+        self._current_budget_min_scale = float(getattr(cfg, "CURRENT_BUDGET_MIN_SCALE", 0.0))
+        self._current_model = None
+        self._current_budget_warned = False
+        if self._current_budget_enabled:
+            try:
+                from control.current_model import T200CurrentModel
+                path = str(getattr(cfg, "CURRENT_BUDGET_MODEL_PATH", "") or "").strip()
+                self._current_model = (
+                    T200CurrentModel.from_json(path) if path else T200CurrentModel.bundled()
+                )
+                budget = max(0.0, self._current_budget_max_a - self._current_budget_reserve_a)
+                print(
+                    f"[rov/control] current budget ENABLED: budget={budget:.1f}A "
+                    f"(max={self._current_budget_max_a:.1f}A reserve={self._current_budget_reserve_a:.1f}A) "
+                    f"assumed_V={self._current_budget_voltage_v:.1f} min_scale={self._current_budget_min_scale:.2f}"
+                )
+            except Exception as e:
+                # Fail open: never let model loading break startup.
+                self._current_model = None
+                self._current_budget_enabled = False
+                print(f"[rov/control] current budget disabled (model load failed): {e}")
+
         # Optional lights (aux PWM) control. The hardware mapping is handled by the PWM sink.
         self._lights_enabled = bool(getattr(cfg, "LIGHTS_ENABLE", hasattr(cfg, "LIGHTS_PWM_CHANNEL")))
         # Modes:
@@ -885,6 +914,18 @@ class ControlService:
                     thr_limited = dict(thr)
                     mixer_diag_limited = self._mixer_diagnostics(cmd6, thr_limited)
 
+                # Optional feed-forward current budget (fuse protection). Default
+                # OFF; fail-open. Scales all thrusters together if the predicted
+                # summed current would exceed the configured budget. The pilot can
+                # toggle the active limiting live via modes["current_budget"]
+                # (absent key -> active by default when the config master is on).
+                budget_modes = fresh_pilot.modes or {}
+                budget_active = bool(budget_modes.get("current_budget", True))
+                budget_max_override = budget_modes.get("current_budget_max_a")
+                thr, current_budget_diag = self._apply_current_budget(
+                    thr, active=budget_active, max_a_override=budget_max_override
+                )
+
                 # Per-thruster deadband at the mix output (extra protection against creep)
                 base_db = float(getattr(cfg, "MIX_OUTPUT_DEADBAND", 0.05))
                 dh_db = float(getattr(cfg, "DEPTH_HOLD_MIX_DEADBAND", 0.02))
@@ -983,6 +1024,7 @@ class ControlService:
                             "raw": mixer_diag_raw,
                             "limited": mixer_diag_limited,
                         },
+                        "current_budget": current_budget_diag,
                         "gain": {
                             "base_power_scale": float(self._base_power_scale),
                             "pilot_max_gain": float(self._last_pilot_max_gain),
@@ -1102,6 +1144,75 @@ class ControlService:
             else:
                 out[k] = float(v)
         return out
+
+    def _apply_current_budget(self, thr: Dict[Any, float], *, active: bool = True, max_a_override: Any = None) -> Tuple[Dict[Any, float], Dict[str, Any]]:
+        """Scale thrusters so predicted total current stays under budget.
+
+        Feed-forward (no current sensor) and fail-open: on any problem it returns
+        ``thr`` unchanged. Only thruster keys (H_*/V_*) are considered/scaled;
+        other keys (lights, gripper, ...) pass through untouched.
+
+        ``active`` is the live pilot toggle (``modes["current_budget"]``). When
+        the model is loaded the predicted draw is *always* computed (so topside
+        can show it), but scaling is only applied when ``active`` is True. This
+        keeps a clean separation between "measure" and "limit": the config master
+        switch ``CURRENT_BUDGET_ENABLE`` loads the model; the pilot toggle decides
+        whether it actually intervenes.
+        """
+        if not self._current_budget_enabled or self._current_model is None:
+            return thr, {"enabled": False}
+        try:
+            from control.current_model import current_budget_scale
+
+            thruster_keys = [
+                k
+                for k in thr.keys()
+                if isinstance(k, str) and (k.upper().startswith("H_") or k.upper().startswith("V_"))
+            ]
+            if not thruster_keys:
+                return thr, {"enabled": True, "active": bool(active), "applied": False, "reason": "no_thruster_keys"}
+
+            norms = {k: float(thr[k]) for k in thruster_keys}
+            # The pilot can override the configured cap live (modes["current_budget_max_a"]).
+            max_a = self._current_budget_max_a
+            if max_a_override is not None:
+                try:
+                    candidate = float(max_a_override)
+                    if math.isfinite(candidate) and candidate > 0.0:
+                        max_a = candidate
+                except (TypeError, ValueError):
+                    pass
+            budget = max(0.0, max_a - self._current_budget_reserve_a)
+            scale, pred_before, pred_after = current_budget_scale(
+                norms,
+                self._current_model,
+                voltage=self._current_budget_voltage_v,
+                budget_a=budget,
+                min_scale=self._current_budget_min_scale,
+            )
+            applied = bool(active and scale < 1.0)
+            if applied:
+                out = dict(thr)
+                for k in thruster_keys:
+                    out[k] = float(thr[k]) * float(scale)
+                thr = out
+            return thr, {
+                "enabled": True,
+                "active": bool(active),
+                "applied": applied,
+                "scale": float(scale if active else 1.0),
+                "budget_a": float(budget),
+                "max_a": float(max_a),
+                "voltage_v": float(self._current_budget_voltage_v),
+                "predicted_before_a": float(pred_before),
+                "predicted_after_a": float(pred_after if active else pred_before),
+            }
+        except Exception as e:
+            # Never let the budget limiter break the control loop.
+            if not self._current_budget_warned:
+                self._current_budget_warned = True
+                print(f"[rov/control] current budget error (failing open, passthrough): {e}")
+            return thr, {"enabled": True, "active": bool(active), "applied": False, "error": str(e)}
 
     def _mixer_diagnostics(self, cmd: Mapping[str, float], thr: Mapping[str, float]) -> Dict[str, Any]:
         diag_fn = getattr(self.mixer, "diagnostics", None)

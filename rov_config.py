@@ -138,6 +138,29 @@ DEPTH_HOLD_MIX_DEADBAND = 0.01
 POWER_SCALE = 1.0
 
 # ---------------------------------------------------------------------------
+# 2b) OPTIONAL feed-forward current budget (fuse protection). DEFAULT OFF.
+# ---------------------------------------------------------------------------
+# Predicts total thruster current from the *commanded* PWM using the bundled
+# BlueRobotics T200 performance data, and if the predicted total would exceed
+# CURRENT_BUDGET_MAX_A it scales ALL thrusters down by one shared factor. This
+# is the only limiter that bounds the SUMMED current the 25 A fuse actually
+# sees (global_limit only caps the single largest thruster).
+#
+# It is feed-forward, so it needs NO current sensor and is unaffected by the
+# Power Sense Module. It fails OPEN: any error (missing model, bad value, ...)
+# disables it for that tick and passes thrust through unchanged.
+#
+# Quick kill switch: set CURRENT_BUDGET_ENABLE = False (the default). When
+# disabled it is a true no-op -- the model is not even loaded.
+CURRENT_BUDGET_ENABLE = False         # master switch (False = zero behavior change)
+CURRENT_BUDGET_MAX_A = 22.0           # total thruster-current ceiling, before reserve (A)
+CURRENT_BUDGET_RESERVE_A = 2.0        # headroom subtracted for electronics/other draw (A)
+CURRENT_BUDGET_VOLTAGE_V = 14.0       # assumed supply voltage (PSM untrusted -> fixed).
+                                      # Higher = more conservative (predicts more current).
+CURRENT_BUDGET_MIN_SCALE = 0.0        # never scale thrusters below this factor (0..1)
+CURRENT_BUDGET_MODEL_PATH = ""        # "" -> bundled control/t200_current_model.json
+
+# ---------------------------------------------------------------------------
 # 2c) depth hold (sticky manual override)
 # ---------------------------------------------------------------------------
 # Depth hold is enabled/disabled by the pilot via PilotFrame.modes["depth_hold"].
