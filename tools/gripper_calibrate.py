@@ -46,6 +46,11 @@ DEFAULT_STEP_US = 5.0
 MIN_UPDATE_S = 0.02
 SAFE_MIN_US = 500.0
 SAFE_MAX_US = 2500.0
+ALIGNMENT_POSES = {
+    "center": None,
+    "flat-wrist-90": (0.0, 90.0),
+    "flat-wrist-0": (0.0, 0.0),
+}
 
 _stop_requested = False
 
@@ -101,7 +106,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--align",
         action="store_true",
-        help="Alignment mode: hold BOTH servos at center so you can mount the connector, then exit on Ctrl+C.",
+        help="Alignment mode: hold a named pose so you can mount the connector, then exit on Ctrl+C.",
+    )
+    ap.add_argument(
+        "--align-pose",
+        choices=sorted(ALIGNMENT_POSES.keys()),
+        default="center",
+        help="'center' is the existing both-servos-centered pose; flat-wrist-* commands easier flat-pitch references.",
     )
     ap.add_argument(
         "--check-axes",
@@ -327,28 +338,46 @@ def recommend(center_us: float, us_per_deg: float, servo_range_deg: float, pitch
     print("=========================================\n")
 
 
-def alignment_hold(ramp: "DualRamp", center_us: float) -> None:
-    """Drive both servos to center and hold so the operator can mount the connector.
+def alignment_hold(
+    ramp: "DualRamp",
+    *,
+    center_us: float,
+    left_us: float,
+    right_us: float,
+    label: str,
+    pitch_deg: Optional[float],
+    wrist_deg: Optional[float],
+    left_servo_deg: float,
+    right_servo_deg: float,
+) -> None:
+    """Drive both servos to an alignment pose and hold for assembly.
 
-    With both servos at their electrical center, the differential is at its neutral
-    pose. Mount the connector + arm here so that this pose equals the chosen
-    GRIPPER_PITCH_NEUTRAL_DEG (pitch) and a centered wrist; the +/-100 deg of each
-    servo then spreads symmetrically about that neutral.
+    The default pose is the legacy electrical-center alignment. The flat poses
+    use the configured differential mix so the operator can line up against a
+    simpler physical reference without doing the servo math by hand.
     """
 
-    ramp.goto(center_us, center_us)
+    ramp.goto(left_us, right_us)
     print("\n================ ALIGNMENT HOLD ================")
-    print(f"Both servos are driven to CENTER ({center_us:.0f}us) and held.")
-    print("Mount the connector + arm so that at THIS pose the arm sits at:")
-    print("  - PITCH = your chosen neutral (GRIPPER_PITCH_NEUTRAL_DEG), e.g. 45 deg from flat")
-    print("  - WRIST = centered (mid of its 0..90 deg roll)")
-    print("Make sure GRIPPER_PITCH_NEUTRAL_DEG in rov_config.py matches the mounted pitch.")
+    print(f"Pose: {label}")
+    print(
+        f"Servo targets: left {left_servo_deg:+.1f} deg ({left_us:.0f}us), "
+        f"right {right_servo_deg:+.1f} deg ({right_us:.0f}us)"
+    )
+    if pitch_deg is None or wrist_deg is None:
+        print("Both servos are driven to electrical center and held.")
+        print("Mount the connector + arm so that at THIS pose the arm sits at:")
+        print("  - PITCH = GRIPPER_PITCH_NEUTRAL_DEG, usually 45 deg from flat")
+        print("  - WRIST = centered, usually 45 deg through the 0..90 deg roll")
+    else:
+        print(f"Mount/check the connector + arm so this pose is pitch {pitch_deg:.1f} deg, wrist {wrist_deg:.1f} deg.")
+    print("The Vehicle Setup page has matching alignment pose buttons for the live app workflow.")
     print("Press Ctrl+C when the connector is mounted to release and exit.")
     print("===============================================\n")
     while not _stop_requested:
         # The PCA9685 keeps emitting the last pulse; re-assert periodically as a
         # safety net against any transient and to keep the process responsive.
-        ramp.goto(center_us, center_us)
+        ramp.goto(left_us, right_us)
         sleep_interruptible(0.5)
 
 
@@ -417,7 +446,7 @@ def _load_mix_params() -> dict:
 
     p = dict(
         servo_range_deg=100.0,
-        pitch_neutral=25.0,
+        pitch_neutral=45.0,
         wrist_neutral=45.0,
         left_invert=1.0,
         right_invert=1.0,
@@ -563,7 +592,32 @@ def main() -> int:
         print("[OK] Outputs enabled at center.\n")
 
         if args.align:
-            alignment_hold(ramp, center_us)
+            params = _load_mix_params()
+            pose_key = str(args.align_pose or "center")
+            pose = ALIGNMENT_POSES.get(pose_key)
+            if pose is None:
+                left_servo_deg = 0.0
+                right_servo_deg = 0.0
+                pitch_deg = None
+                wrist_deg = None
+                label = "center (servo electrical center / configured neutral)"
+            else:
+                pitch_deg, wrist_deg = pose
+                left_servo_deg, right_servo_deg = mix_pitch_wrist_to_servo_deg(pitch_deg, wrist_deg, params)
+                label = pose_key
+            left_us = clamp(center_us + left_servo_deg * float(args.us_per_deg), SAFE_MIN_US, SAFE_MAX_US)
+            right_us = clamp(center_us + right_servo_deg * float(args.us_per_deg), SAFE_MIN_US, SAFE_MAX_US)
+            alignment_hold(
+                ramp,
+                center_us=center_us,
+                left_us=left_us,
+                right_us=right_us,
+                label=label,
+                pitch_deg=pitch_deg,
+                wrist_deg=wrist_deg,
+                left_servo_deg=left_servo_deg,
+                right_servo_deg=right_servo_deg,
+            )
             return 0
 
         if args.check_axes:

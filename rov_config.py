@@ -829,14 +829,14 @@ GRIPPER_SLEW_NORM_PER_S = 3.0
 GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Keep the differential wrist servos powered on disarm so the arm stays folded in.
-GRIPPER_HOLD_PWM_ON_DISARM = False # if False, the servos will be unpowered on disarm (arm will go limp)
+GRIPPER_HOLD_PWM_ON_DISARM = True # if False, the servos will be unpowered on disarm (arm will go limp)
 # Explicitly command the folded pose when arming and right before disarming.
 GRIPPER_PARK_ON_ARM_DISARM = True
 GRIPPER_PARK_SETTLE_S = 0.50
 # Park pose as normalized POSITION (same -1..1 mapping as live commands):
-#   pitch -1 = flat/folded against the ROV, yaw 0 = wrist centered.
+#   pitch -1 = flat/folded against the ROV, yaw +1 = 90 deg wrist roll.
 GRIPPER_DISARM_PITCH = -1.0
-GRIPPER_DISARM_YAW = 0.0
+GRIPPER_DISARM_YAW = 1.0
 # On arm, default back to the same tucked pose instead of reviving the last live command.
 GRIPPER_ARM_PITCH = GRIPPER_DISARM_PITCH
 GRIPPER_ARM_YAW = GRIPPER_DISARM_YAW

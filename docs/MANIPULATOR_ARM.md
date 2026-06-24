@@ -169,7 +169,14 @@ square is reachable, so there is no band to position — just center everything.
    ssh triton@tritonpi.local
    sudo .venv/bin/python -m tools.gripper_calibrate --align
    ```
-   Both servos drive to center and hold until Ctrl+C.
+   Both servos drive to center and hold until Ctrl+C. The same alignment poses
+   are now available on TritonPilot's Vehicle Setup page. The terminal tool also
+   accepts named references:
+   ```
+   sudo .venv/bin/python -m tools.gripper_calibrate --align --align-pose center
+   sudo .venv/bin/python -m tools.gripper_calibrate --align --align-pose flat-wrist-90
+   sudo .venv/bin/python -m tools.gripper_calibrate --align --align-pose flat-wrist-0
+   ```
 3. **Mount the connector + arm** so that, at this centered pose, the arm sits at
    pitch `45°` (halfway between flat and straight-down) and wrist centered. If the
    horns are splined and you can't land exactly on `45°`, get as close as possible and
@@ -184,6 +191,30 @@ square is reachable, so there is no band to position — just center everything.
 If you ever revert the servos to ±70°, set `GRIPPER_SERVO_RANGE_DEG = 70` and a
 down-biased `GRIPPER_PITCH_NEUTRAL_DEG = 70`; the centered-mount pitch then becomes
 70° and wrist tapers near the pitch limits (see "Choosing the neutral").
+
+### Flat reference alignment poses
+
+For the current +/-100 deg setup with pitch neutral 45 deg, wrist neutral 45 deg,
+servo center 1500 us, and pulse half-span 800 us:
+
+| Pose | Mechanism target | Servo angle targets before pulse trim |
+| --- | --- | --- |
+| `center` | pitch 45 deg, wrist 45 deg | left 0 deg, right 0 deg -> 1500 us / 1500 us |
+| `flat-wrist-90` | pitch 0 deg, wrist 90 deg | left 0 deg, right +90 deg with the current right-servo invert -> 1500 us / 2220 us |
+| `flat-wrist-0` | pitch 0 deg, wrist 0 deg | left -90 deg, right 0 deg with the current right-servo invert -> 780 us / 1500 us |
+
+The raw differential before the configured right-servo invert is:
+`servo_left = delta_pitch + delta_wrist`, `servo_right = delta_pitch - delta_wrist`.
+At pitch 0 / wrist 90, that is `0 deg` and `-90 deg`; the current
+`GRIPPER_RIGHT_INVERT = -1.0` turns the right command into a +90 deg pulse command.
+
+The configured arm/disarm park pose is `flat-wrist-90`
+(`GRIPPER_DISARM_PITCH = -1.0`, `GRIPPER_DISARM_YAW = 1.0`) and
+`GRIPPER_HOLD_PWM_ON_DISARM = True`, so the servos keep holding that tucked pose
+after a disarm. If wrist 0 packages better on the real hardware, switch
+`GRIPPER_DISARM_YAW` to `-1.0`; `GRIPPER_ARM_YAW` follows that value by default.
+Also set TritonPilot's `ARM_INIT_WRIST` / `TRITON_ARM_INIT_WRIST` to `-1.0` so
+the startup pilot target matches the ROV park pose.
 
 ## Smoothness
 
