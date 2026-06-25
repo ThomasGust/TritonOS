@@ -18,6 +18,8 @@ from shutil import which
 import re
 import time
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Callable
 
 
 import zmq
@@ -189,6 +191,130 @@ def usb_reset_all_cameras(port_hint: str, messages: list[str] | None = None) -> 
         ok_any = usb_rebind_port(h, messages=msgs) or ok_any
 
     return ok_any
+
+
+@dataclass
+class StartStreamDeps:
+    """Injectable hooks + tunables for :func:`start_stream_with_recovery`.
+
+    Pulled out so the recovery cascade can be unit-tested without GStreamer,
+    sysfs, or real sleeps.
+    """
+
+    rebind_port: Callable[[str, list[str]], bool] = usb_rebind_port
+    reset_all: Callable[[str, list[str]], bool] = usb_reset_all_cameras
+    sleep: Callable[[float], None] = time.sleep
+    rebind_retries: int = 2
+    rebind_delay_s: float = 0.5
+    hub_reset_enable: bool = True
+
+
+def default_start_stream_deps() -> StartStreamDeps:
+    """Build :class:`StartStreamDeps` from ``rov_config`` (with safe fallbacks)."""
+
+    return StartStreamDeps(
+        rebind_retries=int(getattr(rov_cfg, "VIDEO_USB_REBIND_RETRIES", 2)),
+        rebind_delay_s=float(getattr(rov_cfg, "VIDEO_USB_REBIND_DELAY_S", 0.5)),
+        hub_reset_enable=bool(getattr(rov_cfg, "VIDEO_USB_HUB_RESET_ENABLE", True)),
+    )
+
+
+def start_stream_with_recovery(mgr, scfg: StreamConfig, deps: StartStreamDeps) -> dict:
+    """Start one stream, recovering from a not-yet-enumerated USB camera.
+
+    Returns ``{"ok": bool, "name"/"error": ..., "messages": [...]}``.
+
+    Recovery policy (smooth multi-camera boot without disturbing live video):
+      1. Try once.
+      2. On failure, issue up to ``rebind_retries`` *narrow* per-port USB rebinds
+         (only the failing camera's hub port — safe while the others stream),
+         retrying the start after each.
+      3. Only if every prior step failed AND **no other stream is currently
+         running**, fall back to the broad parent-hub reset. A hub reset
+         re-enumerates every camera on the hub, so it must never run while a
+         camera is streaming; in that case we report failure and let the topside
+         retry once the camera finishes enumerating.
+    """
+
+    messages: list[str] = []
+
+    # Restart semantics: if a stream with this name is already registered, stop
+    # it first so the rebuild uses the new config.
+    if scfg.name in mgr.list_streams():
+        logger.warning("start_stream: stream '%s' already exists, restarting it", scfg.name)
+        try:
+            mgr.stop_stream(scfg.name)
+        except Exception:
+            logger.exception(
+                "start_stream: failed to stop existing stream '%s' before restart", scfg.name
+            )
+
+    def _try_start() -> str | None:
+        try:
+            mgr.start_stream(scfg)
+            return None
+        except Exception as exc:  # noqa: BLE001 - reported back to topside
+            return str(exc)
+
+    last_err = _try_start()
+    if last_err is None:
+        return {"ok": True, "name": scfg.name, "messages": messages}
+
+    port_hint = _extract_usb_port_hint(scfg.device)
+    if not port_hint:
+        return {"ok": False, "error": last_err, "messages": messages}
+
+    # 2) Narrow per-port rebinds. usb_rebind_port touches only this camera's hub
+    # port, so the other cameras keep streaming undisturbed.
+    retries = max(0, int(deps.rebind_retries))
+    for i in range(retries):
+        messages.append(
+            f"Video start failed for '{scfg.name}' (device={scfg.device}). "
+            f"Attempting USB rebind on port {port_hint} ({i + 1}/{retries})…"
+        )
+        deps.rebind_port(port_hint, messages)
+        deps.sleep(max(0.0, float(deps.rebind_delay_s)))
+        last_err = _try_start()
+        if last_err is None:
+            messages.append(f"Video stream '{scfg.name}' started after USB rebind")
+            return {"ok": True, "name": scfg.name, "messages": messages}
+
+    # 3) Broad hub reset — ONLY when nothing else is streaming. mgr.list_streams()
+    # here holds the other successfully-started cameras (this one is not
+    # registered because its start failed), so a non-empty set means a hub reset
+    # would interrupt live video. Never do that.
+    running = sorted(mgr.list_streams())
+    if running:
+        messages.append(
+            f"'{scfg.name}' still failed after {retries} USB rebind attempt(s). "
+            f"Skipping broad USB hub reset because {len(running)} camera(s) are live "
+            f"({', '.join(running)}) and a hub reset would interrupt them — "
+            f"will recover on the next retry once this camera enumerates."
+        )
+        return {"ok": False, "error": last_err, "messages": messages}
+
+    if not deps.hub_reset_enable:
+        messages.append(
+            f"'{scfg.name}' still failed after {retries} USB rebind attempt(s); "
+            f"broad USB hub reset is disabled (VIDEO_USB_HUB_RESET_ENABLE=False)."
+        )
+        return {"ok": False, "error": last_err, "messages": messages}
+
+    messages.append(
+        f"'{scfg.name}' still failed after {retries} USB rebind attempt(s) and no "
+        f"other cameras are running — attempting broader USB hub reset…"
+    )
+    if deps.reset_all(port_hint, messages):
+        deps.sleep(max(0.0, float(deps.rebind_delay_s)))
+        last_err = _try_start()
+        if last_err is None:
+            messages.append(f"Video stream '{scfg.name}' started after broader USB reset")
+            return {"ok": True, "name": scfg.name, "messages": messages}
+    else:
+        messages.append("Broader USB reset could not be issued (no matching sysfs devices)")
+
+    return {"ok": False, "error": last_err or "failed to start stream", "messages": messages}
+
 
 def _intervals_to_fps(interval_lines: list[str]) -> list[float]:
     """
@@ -650,77 +776,22 @@ def start_video_rpc():
             elif cmd == "start_stream":
                 scfg = streamconfig_from_dict(args)
                 scfg = _enforce_tether_for_video(scfg)
-                current = mgr.list_streams()
-                if scfg.name in current:
-                    logger.warning(
-                        "start_stream: stream '%s' already exists, restarting it", scfg.name
-                    )
-                    try:
-                        mgr.stop_stream(scfg.name)
-                    except Exception:
-                        logger.exception(
-                            "start_stream: failed to stop existing stream '%s' before restart",
-                            scfg.name,
-                        )
-
-                # Attempt start. If it fails (e.g., camera not enumerated yet),
-                # try a best-effort USB unbind/bind on the inferred hub port.
-                messages: list[str] = []
-                last_err: str | None = None
-
-                def _try_start_once() -> None:
-                    mgr.start_stream(scfg)
-
-                try:
-                    _try_start_once()
-                    sock.send_json({"ok": True, "data": {"name": scfg.name}})
-                except Exception as e:
-                    last_err = str(e)
-                    port_hint = _extract_usb_port_hint(scfg.device)
-                    if not port_hint:
-                        sock.send_json({"ok": False, "error": last_err})
-                        continue
-
-                    retries = int(getattr(rov_cfg, "VIDEO_USB_REBIND_RETRIES", 3))
-                    delay_s = float(getattr(rov_cfg, "VIDEO_USB_REBIND_DELAY_S", 1.0))
-
-                    for i in range(max(0, retries)):
-                        messages.append(
-                            f"Video start failed for '{scfg.name}' (device={scfg.device}). "
-                            f"Attempting USB rebind on port {port_hint} ({i+1}/{retries})…"
-                        )
-                        usb_rebind_port(port_hint, messages=messages)
-                        time.sleep(max(0.0, delay_s))
-                        try:
-                            _try_start_once()
-                            messages.append(f"Video stream '{scfg.name}' started after USB rebind")
-                            sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
-                            break
-                        except Exception as e2:
-                            last_err = str(e2)
-                            # try again
-                            continue
-                    else:
-                        # Rebind attempts exhausted. As a next (broader) step, try a hub-level
-                        # reset that should cause *all* downstream cameras to re-enumerate.
-                        messages.append(
-                            f"Video stream '{scfg.name}' still failed after {retries} USB rebind attempts. "
-                            f"Attempting broader USB reset…"
-                        )
-                        did_reset = usb_reset_all_cameras(port_hint, messages=messages)
-                        if did_reset:
-                            time.sleep(max(0.0, delay_s))
-                            try:
-                                _try_start_once()
-                                messages.append(f"Video stream '{scfg.name}' started after broader USB reset")
-                                sock.send_json({"ok": True, "data": {"name": scfg.name, "messages": messages}})
-                                continue
-                            except Exception as e3:
-                                last_err = str(e3)
-                        else:
-                            messages.append("Broader USB reset could not be issued (no matching sysfs devices)")
-
-                        sock.send_json({"ok": False, "error": last_err or "failed to start stream", "messages": messages})
+                # All start + USB-recovery logic lives in start_stream_with_recovery
+                # so it stays unit-testable and never resets a live camera. See
+                # that function for the recovery policy.
+                result = start_stream_with_recovery(mgr, scfg, default_start_stream_deps())
+                messages = result.get("messages") or []
+                if result.get("ok"):
+                    data = {"name": scfg.name}
+                    if messages:
+                        data["messages"] = messages
+                    sock.send_json({"ok": True, "data": data})
+                else:
+                    sock.send_json({
+                        "ok": False,
+                        "error": result.get("error") or "failed to start stream",
+                        "messages": messages,
+                    })
 
             elif cmd == "stop_stream":
                 name = args["name"]
