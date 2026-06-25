@@ -104,8 +104,8 @@ THRUSTER_GEOMETRY = {
 #   - AXIS_PITCH/AXIS_ROLL override D-pad pitch/roll when set.
 AXIS_SURGE = "ly"
 AXIS_HEAVE = "ry"
-AXIS_SWAY  = "rx"
-AXIS_YAW   = "lx"
+AXIS_SWAY  = "lx"   # 2026-06-24: now matches the "Desired mapping" above (was "rx")
+AXIS_YAW   = "rx"   # 2026-06-24: now matches the "Desired mapping" above (was "lx")
 
 # Put pitch/roll somewhere “secondary” for now:
 AXIS_PITCH = "dpad_y"   # or "none" to fully disable pitch
@@ -654,8 +654,13 @@ CHANNEL_MAP = {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
         "H_FL": 12,
         "H_FR": 2,
-        "H_RL": 3,
-        "H_RR": 14,
+        # 2026-06-24: rear pair was crossed vs hardware. Physical rear-RIGHT is on ch3,
+        # physical rear-LEFT is on ch14 (confirmed via native_motor_test). The names now
+        # match the mounting so the geometric mixer's sway/yaw allocation is correct. With
+        # the old (crossed) map a commanded SWAY came out as YAW (and vice versa) -- which
+        # is what made station-keep spin: every sway correction became a continuous yaw.
+        "H_RL": 14,
+        "H_RR": 3,
 
         # Verticals (heave/pitch/roll)
         # Your wiring (physical Navigator channels):
@@ -704,9 +709,10 @@ THRUSTER_REVERSED = {
 THRUSTER_REVERSED = {
       "H_FL": True,
     # "H_FR": True,
-      "H_RL": True,
-    # "H_RR": True,
-    # "V_FL": True,
+    # "H_RL": True,
+      "H_RR": True,  # 2026-06-24: moved from H_RL to follow the rear-pair channel swap above.
+    # "V_FL": True,  # Reversal keys by NAME (pwm.py _is_reversed), so the flag must track the
+                     # physical channel to preserve per-channel polarity (keeps surge straight).
       "V_FR": True,
       "V_RL": True,
       #"V_RR": True,
