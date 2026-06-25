@@ -416,6 +416,15 @@ class ControlService:
         self._gripper_wrist_span_deg = float(getattr(cfg, "GRIPPER_WRIST_SPAN_DEG", 90.0))
         self._gripper_pitch_neutral_deg = float(getattr(cfg, "GRIPPER_PITCH_NEUTRAL_DEG", 45.0))
         self._gripper_wrist_neutral_deg = float(getattr(cfg, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0))
+        # Per-axis normalized travel limits, applied to gripper_pitch / gripper_yaw
+        # before the differential mix. Topside (config.ARM_*) mirrors these; this is
+        # the ROV-side backstop. Live override via modes["arm_tune"] {pitch,wrist}_{min,max}.
+        self._gripper_pitch_min_norm, self._gripper_pitch_max_norm = self._ordered_norm_limits(
+            getattr(cfg, "GRIPPER_PITCH_MIN_NORM", -1.0), getattr(cfg, "GRIPPER_PITCH_MAX_NORM", 1.0)
+        )
+        self._gripper_wrist_min_norm, self._gripper_wrist_max_norm = self._ordered_norm_limits(
+            getattr(cfg, "GRIPPER_WRIST_MIN_NORM", -1.0), getattr(cfg, "GRIPPER_WRIST_MAX_NORM", 1.0)
+        )
         arm_pitch = float(getattr(cfg, "GRIPPER_ARM_PITCH", getattr(cfg, "GRIPPER_DISARM_PITCH", 0.0)) or 0.0)
         arm_yaw = float(getattr(cfg, "GRIPPER_ARM_YAW", getattr(cfg, "GRIPPER_DISARM_YAW", 0.0)) or 0.0)
         self._gripper_park_pitch = max(-1.0, min(1.0, arm_pitch))
@@ -1350,6 +1359,19 @@ class ControlService:
         pitch_invert = _tune("pitch_invert", self._gripper_pitch_invert)
         yaw_invert = _tune("yaw_invert", self._gripper_yaw_invert)
 
+        # Per-axis normalized travel limits, on the raw POSITION command (pre-invert,
+        # same units the pilot integrator clamps). Live override via arm_tune, else
+        # the rov_config GRIPPER_*_NORM defaults; getattr keeps unit tests that build
+        # a bare service object working with the full [-1, 1] range.
+        pitch_lo, pitch_hi = self._ordered_norm_limits(
+            _tune("pitch_min", getattr(self, "_gripper_pitch_min_norm", -1.0)),
+            _tune("pitch_max", getattr(self, "_gripper_pitch_max_norm", 1.0)),
+        )
+        wrist_lo, wrist_hi = self._ordered_norm_limits(
+            _tune("wrist_min", getattr(self, "_gripper_wrist_min_norm", -1.0)),
+            _tune("wrist_max", getattr(self, "_gripper_wrist_max_norm", 1.0)),
+        )
+
         # gripper_pitch / gripper_yaw are absolute POSITION commands in [-1..1].
         # A *present* key (even 0.0) is applied directly so the pilot can hold any
         # pose, including centered. An *absent* axis holds its last commanded value
@@ -1362,14 +1384,16 @@ class ControlService:
         last_pitch, last_yaw = self._last_gripper_axes()
         if pitch_present:
             try:
-                pitch = max(-1.0, min(1.0, float(aux.get(self._gripper_pitch_key) or 0.0) * pitch_invert))
+                raw_pitch = max(pitch_lo, min(pitch_hi, float(aux.get(self._gripper_pitch_key) or 0.0)))
+                pitch = max(-1.0, min(1.0, raw_pitch * pitch_invert))
             except Exception:
                 pitch = last_pitch
         else:
             pitch = last_pitch if self._gripper_hold_last else 0.0
         if yaw_present:
             try:
-                yaw = max(-1.0, min(1.0, float(aux.get(self._gripper_yaw_key) or 0.0) * yaw_invert))
+                raw_yaw = max(wrist_lo, min(wrist_hi, float(aux.get(self._gripper_yaw_key) or 0.0)))
+                yaw = max(-1.0, min(1.0, raw_yaw * yaw_invert))
             except Exception:
                 yaw = last_yaw
         else:
@@ -1382,6 +1406,19 @@ class ControlService:
         self._gripper_last_left = left
         self._gripper_last_right = right
         return left, right
+
+    @staticmethod
+    def _ordered_norm_limits(lo, hi) -> Tuple[float, float]:
+        """Return a sane (min, max) normalized limit pair clamped to [-1, 1]."""
+        try:
+            a = max(-1.0, min(1.0, float(lo)))
+        except Exception:
+            a = -1.0
+        try:
+            b = max(-1.0, min(1.0, float(hi)))
+        except Exception:
+            b = 1.0
+        return (a, b) if a <= b else (b, a)
 
     @staticmethod
     def _diff_mix_norm_deg(

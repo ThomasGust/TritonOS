@@ -830,6 +830,19 @@ GRIPPER_RIGHT_INVERT = -1.0  # MEASURED: makes pitch differential (servos opposi
 GRIPPER_DEADBAND = 0.01
 GRIPPER_HOLD_LAST_POSITION = True
 
+# --- Per-axis normalized travel limits (range of motion clamp) -------------
+# Clamp the incoming normalized POSITION commands (gripper_pitch / gripper_yaw,
+# both in [-1..1]) before the differential mix. Use these to spare the janky
+# gearbox by keeping an axis short of its hard stop, e.g. set GRIPPER_WRIST_MAX_NORM
+# = -0.8 to stop the wrist before it binds. Defaults span the full range. The pilot
+# integrator mirrors these (config.ARM_*_MIN/MAX) so the stick also stops there;
+# this is the ROV-side backstop. The park/disarm pose below is exempt -- it is the
+# safe stow and may sit outside the operating limits.
+GRIPPER_PITCH_MIN_NORM = -1.0
+GRIPPER_PITCH_MAX_NORM = 1.0
+GRIPPER_WRIST_MIN_NORM = -1.0
+GRIPPER_WRIST_MAX_NORM = 1.0
+
 # --- Servo pulse calibration -----------------------------------------------
 # Symmetric about center: a normalized left/right of +/-1 == +/-RANGE_DEG.
 #   us = CENTER_US + servo_deg * US_PER_DEG     (servo_deg in [-RANGE, +RANGE])

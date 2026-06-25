@@ -249,6 +249,51 @@ def test_compute_gripper_diff_applies_live_pitch_neutral_override():
     assert abs(right - 65.0 / 70.0) < 1e-6
 
 
+def test_compute_gripper_diff_clamps_pitch_to_config_range():
+    # rov_config GRIPPER_*_NORM caps the reachable normalized position.
+    svc = _make_gripper_svc(_gripper_pitch_min_norm=-0.5, _gripper_pitch_max_norm=0.5)
+    left, right = ControlService._compute_gripper_diff(
+        svc, SimpleNamespace(aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0}, modes={})
+    )
+    exp_l, exp_r = ControlService._diff_mix_norm_deg(0.5, 0.0, **GEO)  # full +1 clamped to +0.5
+    assert abs(left - exp_l) < 1e-6
+    assert abs(right - exp_r) < 1e-6
+
+
+def test_compute_gripper_diff_clamps_wrist_to_config_range():
+    svc = _make_gripper_svc(_gripper_wrist_min_norm=-1.0, _gripper_wrist_max_norm=-0.8)
+    left, right = ControlService._compute_gripper_diff(
+        svc, SimpleNamespace(aux={"gripper_pitch": 0.0, "gripper_yaw": 1.0}, modes={})
+    )
+    exp_l, exp_r = ControlService._diff_mix_norm_deg(0.0, -0.8, **GEO)  # +1 wrist clamped to -0.8
+    assert abs(left - exp_l) < 1e-6
+    assert abs(right - exp_r) < 1e-6
+
+
+def test_compute_gripper_diff_applies_live_range_override():
+    # A live modes["arm_tune"] pitch_max clamps the position without a restart.
+    svc = _make_gripper_svc()  # full range by default
+    left, right = ControlService._compute_gripper_diff(
+        svc,
+        SimpleNamespace(
+            aux={"gripper_pitch": 1.0, "gripper_yaw": 0.0},
+            modes={"arm_tune": {"pitch_max": 0.5}},
+        ),
+    )
+    exp_l, exp_r = ControlService._diff_mix_norm_deg(0.5, 0.0, **GEO)
+    assert abs(left - exp_l) < 1e-6
+    assert abs(right - exp_r) < 1e-6
+
+
+def test_rov_config_range_norm_defaults_are_full_range():
+    import rov_config as cfg
+
+    assert cfg.GRIPPER_PITCH_MIN_NORM == pytest.approx(-1.0)
+    assert cfg.GRIPPER_PITCH_MAX_NORM == pytest.approx(1.0)
+    assert cfg.GRIPPER_WRIST_MIN_NORM == pytest.approx(-1.0)
+    assert cfg.GRIPPER_WRIST_MAX_NORM == pytest.approx(1.0)
+
+
 def test_compute_gripper_diff_holds_last_when_arm_keys_absent():
     # No arm keys on the wire -> hold the last commanded servo pose.
     svc = _make_gripper_svc(_gripper_last_left=0.3, _gripper_last_right=-0.1)
