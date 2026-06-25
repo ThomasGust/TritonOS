@@ -390,15 +390,20 @@ STATION_KEEP_HEAVE_SLEW = 0.4
 # (visible, recoverable, pilot-overridable) -- NOT spin. POOL: engage over a clearly
 # TILTED square; it should slowly square up (er -> 0). If it slowly rotates the WRONG way,
 # flip STATION_KEEP_YAW_SIGN. If it still oscillates, drop KP / widen deadband / KP=0.
-# SIGN is UNVERIFIED. Review every engage in tools/transect_review.py (er vs cmd_final.yaw).
+# SIGN VERIFIED 2026-06-24 (recordings 20260624-220944/230723): er converges, no spin
+# (gyro +0.1 deg/s). KP 0.08->0.16 halved a steady tilt; KI 0->0.01 added to null the
+# residual. Still review engages in tools/transect_review.py (er vs cmd_final.yaw).
 STATION_KEEP_YAW_ERROR_KEY = "er"
 STATION_KEEP_YAW_KP = 0.16               # 2026-06-24: 0.08->0.16. Post rear-thruster fix, er sat at a
                                          # steady ~-0.33 (~15deg tilt), under-corrected. ~2x authority.
-STATION_KEEP_YAW_KI = 0.0                # no integrator -> no windup-spin (add small bounded KI next if a
-                                         # steady residual tilt remains after this P bump)
+STATION_KEEP_YAW_KI = 0.01               # 2026-06-24: 0->0.01. The P bump halved the tilt but left a STEADY
+                                         # residual er~-0.17 (~7.5deg, 99% one side, recording 20260624-230723);
+                                         # a small bounded integrator nulls a steady offset that P alone can't.
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.12   # 2026-06-24: 0.15->0.12, square closer to 0 (stays above er noise std ~0.10)
-STATION_KEEP_YAW_I_LIMIT = 0.08
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.10   # 2026-06-24: 0.12->0.10. Measured er noise std ~0.08 (recording
+                                         # 20260624-230723), so 0.10 still clears noise; KI settles er near this floor.
+STATION_KEEP_YAW_I_LIMIT = 0.06          # 2026-06-24: cap integral contribution at 0.06 (<< out_limit 0.16) so the
+                                         # new KI cannot wind into a spin; the axis still bleeds I on manual input.
 STATION_KEEP_YAW_OUT_LIMIT = 0.16        # 2026-06-24: 0.10->0.16, headroom for the higher KP
 STATION_KEEP_YAW_SIGN = 1.0              # VERIFIED 2026-06-24 (er converging, corr(er,der/dt)=-0.15, not spinning)
 STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
