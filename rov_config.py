@@ -392,15 +392,17 @@ STATION_KEEP_HEAVE_SLEW = 0.4
 # flip STATION_KEEP_YAW_SIGN. If it still oscillates, drop KP / widen deadband / KP=0.
 # SIGN is UNVERIFIED. Review every engage in tools/transect_review.py (er vs cmd_final.yaw).
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.08               # timid first re-enable (was 0.0 free / 0.12 pre-fix)
-STATION_KEEP_YAW_KI = 0.0                # no integrator -> no windup-spin
+STATION_KEEP_YAW_KP = 0.16               # 2026-06-24: 0.08->0.16. Post rear-thruster fix, er sat at a
+                                         # steady ~-0.33 (~15deg tilt), under-corrected. ~2x authority.
+STATION_KEEP_YAW_KI = 0.0                # no integrator -> no windup-spin (add small bounded KI next if a
+                                         # steady residual tilt remains after this P bump)
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.15   # ignore <~7deg tilt; only square up when clearly off
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.12   # 2026-06-24: 0.15->0.12, square closer to 0 (stays above er noise std ~0.10)
 STATION_KEEP_YAW_I_LIMIT = 0.08
-STATION_KEEP_YAW_OUT_LIMIT = 0.10        # wrong sign can only creep, not spin
-STATION_KEEP_YAW_SIGN = 1.0              # UNVERIFIED -- flip if it squares the wrong way
+STATION_KEEP_YAW_OUT_LIMIT = 0.16        # 2026-06-24: 0.10->0.16, headroom for the higher KP
+STATION_KEEP_YAW_SIGN = 1.0              # VERIFIED 2026-06-24 (er converging, corr(er,der/dt)=-0.15, not spinning)
 STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
-STATION_KEEP_YAW_SLEW = 0.35             # ease in (~0.3s to out_limit)
+STATION_KEEP_YAW_SLEW = 0.5              # 2026-06-24: 0.35->0.5, ease in a touch faster
 
 # ---------------------------------------------------------------------------
 # 2d) arming safety
