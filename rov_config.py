@@ -104,8 +104,8 @@ THRUSTER_GEOMETRY = {
 #   - AXIS_PITCH/AXIS_ROLL override D-pad pitch/roll when set.
 AXIS_SURGE = "ly"
 AXIS_HEAVE = "ry"
-AXIS_SWAY  = "rx"
-AXIS_YAW   = "lx"
+AXIS_SWAY  = "lx"   # 2026-06-24: now matches the "Desired mapping" above (was "rx")
+AXIS_YAW   = "rx"   # 2026-06-24: now matches the "Desired mapping" above (was "lx")
 
 # Put pitch/roll somewhere “secondary” for now:
 AXIS_PITCH = "dpad_y"   # or "none" to fully disable pitch
@@ -403,17 +403,24 @@ STATION_KEEP_HEAVE_SLEW = 0.4
 # (visible, recoverable, pilot-overridable) -- NOT spin. POOL: engage over a clearly
 # TILTED square; it should slowly square up (er -> 0). If it slowly rotates the WRONG way,
 # flip STATION_KEEP_YAW_SIGN. If it still oscillates, drop KP / widen deadband / KP=0.
-# SIGN is UNVERIFIED. Review every engage in tools/transect_review.py (er vs cmd_final.yaw).
+# SIGN VERIFIED 2026-06-24 (recordings 20260624-220944/230723): er converges, no spin
+# (gyro +0.1 deg/s). KP 0.08->0.16 halved a steady tilt; KI 0->0.01 added to null the
+# residual. Still review engages in tools/transect_review.py (er vs cmd_final.yaw).
 STATION_KEEP_YAW_ERROR_KEY = "er"
-STATION_KEEP_YAW_KP = 0.08               # timid first re-enable (was 0.0 free / 0.12 pre-fix)
-STATION_KEEP_YAW_KI = 0.0                # no integrator -> no windup-spin
+STATION_KEEP_YAW_KP = 0.16               # 2026-06-24: 0.08->0.16. Post rear-thruster fix, er sat at a
+                                         # steady ~-0.33 (~15deg tilt), under-corrected. ~2x authority.
+STATION_KEEP_YAW_KI = 0.01               # 2026-06-24: 0->0.01. The P bump halved the tilt but left a STEADY
+                                         # residual er~-0.17 (~7.5deg, 99% one side, recording 20260624-230723);
+                                         # a small bounded integrator nulls a steady offset that P alone can't.
 STATION_KEEP_YAW_KD = 0.0
-STATION_KEEP_YAW_ERROR_DEADBAND = 0.15   # ignore <~7deg tilt; only square up when clearly off
-STATION_KEEP_YAW_I_LIMIT = 0.08
-STATION_KEEP_YAW_OUT_LIMIT = 0.10        # wrong sign can only creep, not spin
-STATION_KEEP_YAW_SIGN = 1.0              # UNVERIFIED -- flip if it squares the wrong way
+STATION_KEEP_YAW_ERROR_DEADBAND = 0.10   # 2026-06-24: 0.12->0.10. Measured er noise std ~0.08 (recording
+                                         # 20260624-230723), so 0.10 still clears noise; KI settles er near this floor.
+STATION_KEEP_YAW_I_LIMIT = 0.06          # 2026-06-24: cap integral contribution at 0.06 (<< out_limit 0.16) so the
+                                         # new KI cannot wind into a spin; the axis still bleeds I on manual input.
+STATION_KEEP_YAW_OUT_LIMIT = 0.16        # 2026-06-24: 0.10->0.16, headroom for the higher KP
+STATION_KEEP_YAW_SIGN = 1.0              # VERIFIED 2026-06-24 (er converging, corr(er,der/dt)=-0.15, not spinning)
 STATION_KEEP_YAW_MANUAL_DEADBAND = 0.08
-STATION_KEEP_YAW_SLEW = 0.35             # ease in (~0.3s to out_limit)
+STATION_KEEP_YAW_SLEW = 0.5              # 2026-06-24: 0.35->0.5, ease in a touch faster
 
 # ---------------------------------------------------------------------------
 # 2d) arming safety
@@ -667,8 +674,13 @@ CHANNEL_MAP = {
         # Horizontals (surge/sway/yaw) — should be motors 7,5,1,6
         "H_FL": 12,
         "H_FR": 2,
-        "H_RL": 3,
-        "H_RR": 14,
+        # 2026-06-24: rear pair was crossed vs hardware. Physical rear-RIGHT is on ch3,
+        # physical rear-LEFT is on ch14 (confirmed via native_motor_test). The names now
+        # match the mounting so the geometric mixer's sway/yaw allocation is correct. With
+        # the old (crossed) map a commanded SWAY came out as YAW (and vice versa) -- which
+        # is what made station-keep spin: every sway correction became a continuous yaw.
+        "H_RL": 14,
+        "H_RR": 3,
 
         # Verticals (heave/pitch/roll)
         # Your wiring (physical Navigator channels):
@@ -717,9 +729,10 @@ THRUSTER_REVERSED = {
 THRUSTER_REVERSED = {
       "H_FL": True,
     # "H_FR": True,
-      "H_RL": True,
-    # "H_RR": True,
-    # "V_FL": True,
+    # "H_RL": True,
+      "H_RR": True,  # 2026-06-24: moved from H_RL to follow the rear-pair channel swap above.
+    # "V_FL": True,  # Reversal keys by NAME (pwm.py _is_reversed), so the flag must track the
+                     # physical channel to preserve per-channel polarity (keeps surge straight).
       "V_FR": True,
       "V_RL": True,
       #"V_RR": True,
@@ -842,14 +855,14 @@ GRIPPER_SLEW_NORM_PER_S = 3.0
 GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
 # Keep the differential wrist servos powered on disarm so the arm stays folded in.
-GRIPPER_HOLD_PWM_ON_DISARM = False # if False, the servos will be unpowered on disarm (arm will go limp)
+GRIPPER_HOLD_PWM_ON_DISARM = True # if False, the servos will be unpowered on disarm (arm will go limp)
 # Explicitly command the folded pose when arming and right before disarming.
 GRIPPER_PARK_ON_ARM_DISARM = True
 GRIPPER_PARK_SETTLE_S = 0.50
 # Park pose as normalized POSITION (same -1..1 mapping as live commands):
-#   pitch -1 = flat/folded against the ROV, yaw 0 = wrist centered.
+#   pitch -1 = flat/folded against the ROV, yaw +1 = 90 deg wrist roll.
 GRIPPER_DISARM_PITCH = -1.0
-GRIPPER_DISARM_YAW = 0.0
+GRIPPER_DISARM_YAW = 1.0
 # On arm, default back to the same tucked pose instead of reviving the last live command.
 GRIPPER_ARM_PITCH = GRIPPER_DISARM_PITCH
 GRIPPER_ARM_YAW = GRIPPER_DISARM_YAW

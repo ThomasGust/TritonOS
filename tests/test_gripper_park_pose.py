@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from control.control_service import ControlService
 
 
@@ -121,6 +123,52 @@ def test_hundred_degree_servos_cover_full_pitch_wrist_square():
             left, right = ControlService._diff_mix_norm_deg(pitch, wrist, **geo)
             assert abs(left) <= 0.90
             assert abs(right) <= 0.90
+
+
+def test_gripper_calibrate_flat_alignment_pose_matches_current_config():
+    import rov_config as cfg
+    from tools.gripper_calibrate import mix_pitch_wrist_to_servo_deg
+
+    params = dict(
+        servo_range_deg=float(cfg.GRIPPER_SERVO_RANGE_DEG),
+        pitch_neutral=float(cfg.GRIPPER_PITCH_NEUTRAL_DEG),
+        wrist_neutral=float(cfg.GRIPPER_WRIST_NEUTRAL_DEG),
+        left_invert=float(cfg.GRIPPER_LEFT_INVERT),
+        right_invert=float(cfg.GRIPPER_RIGHT_INVERT),
+    )
+
+    left_90, right_90 = mix_pitch_wrist_to_servo_deg(0.0, 90.0, params)
+    assert left_90 == pytest.approx(0.0)
+    assert right_90 == pytest.approx(90.0)
+
+    left_0, right_0 = mix_pitch_wrist_to_servo_deg(0.0, 0.0, params)
+    assert left_0 == pytest.approx(-90.0)
+    assert right_0 == pytest.approx(0.0)
+
+
+def test_current_repo_disarm_pose_is_flat_wrist_90_and_held():
+    import rov_config as cfg
+
+    assert cfg.GRIPPER_DISARM_PITCH == pytest.approx(-1.0)
+    assert cfg.GRIPPER_DISARM_YAW == pytest.approx(1.0)
+    assert cfg.GRIPPER_ARM_PITCH == pytest.approx(cfg.GRIPPER_DISARM_PITCH)
+    assert cfg.GRIPPER_ARM_YAW == pytest.approx(cfg.GRIPPER_DISARM_YAW)
+    assert cfg.GRIPPER_HOLD_PWM_ON_DISARM is True
+
+    left, right = ControlService._diff_mix_norm_deg(
+        cfg.GRIPPER_DISARM_PITCH,
+        cfg.GRIPPER_DISARM_YAW,
+        servo_range_deg=cfg.GRIPPER_SERVO_RANGE_DEG,
+        pitch_span_deg=cfg.GRIPPER_PITCH_SPAN_DEG,
+        wrist_span_deg=cfg.GRIPPER_WRIST_SPAN_DEG,
+        pitch_neutral_deg=cfg.GRIPPER_PITCH_NEUTRAL_DEG,
+        wrist_neutral_deg=cfg.GRIPPER_WRIST_NEUTRAL_DEG,
+        left_invert=cfg.GRIPPER_LEFT_INVERT,
+        right_invert=cfg.GRIPPER_RIGHT_INVERT,
+    )
+    assert left == pytest.approx(0.0)
+    assert right == pytest.approx(0.9)
+
 
 def test_diff_mix_right_invert_unswaps_pitch_and_roll():
     # Pure pitch with no invert -> both servos move the SAME way (mixer default).
