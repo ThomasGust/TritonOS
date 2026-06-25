@@ -922,8 +922,20 @@ class ControlService:
                 budget_modes = fresh_pilot.modes or {}
                 budget_active = bool(budget_modes.get("current_budget", True))
                 budget_max_override = budget_modes.get("current_budget_max_a")
+                budget_voltage_override = budget_modes.get("current_budget_voltage_v")
+                # The wrist/back-gripper T200 sits on the same fuse but is not a
+                # mixed thruster, so reserve its predicted draw off the budget.
+                # Computed once here and reused for the payload below.
+                wrist_cmd = self._compute_wrist_rotate(fresh_pilot)
+                budget_extra_norms = (
+                    {"wrist_rotate": float(wrist_cmd)} if self._wrist_rotate_enabled else None
+                )
                 thr, current_budget_diag = self._apply_current_budget(
-                    thr, active=budget_active, max_a_override=budget_max_override
+                    thr,
+                    active=budget_active,
+                    max_a_override=budget_max_override,
+                    voltage_override=budget_voltage_override,
+                    extra_norms=budget_extra_norms,
                 )
 
                 # Per-thruster deadband at the mix output (extra protection against creep)
@@ -986,7 +998,7 @@ class ControlService:
                 lights_val = self._compute_lights(fresh_pilot)
                 if lights_val is not None:
                     payload["lights"] = float(lights_val)
-                wrist_cmd = self._compute_wrist_rotate(fresh_pilot)
+                # wrist_cmd was already computed above for the current budget.
                 if self._wrist_rotate_enabled:
                     payload[self._wrist_rotate_cmd_key] = float(wrist_cmd)
                 if self._gripper_enabled:
@@ -1145,8 +1157,22 @@ class ControlService:
                 out[k] = float(v)
         return out
 
-    def _apply_current_budget(self, thr: Dict[Any, float], *, active: bool = True, max_a_override: Any = None) -> Tuple[Dict[Any, float], Dict[str, Any]]:
+    def _apply_current_budget(
+        self,
+        thr: Dict[Any, float],
+        *,
+        active: bool = True,
+        max_a_override: Any = None,
+        voltage_override: Any = None,
+        extra_norms: Any = None,
+    ) -> Tuple[Dict[Any, float], Dict[str, Any]]:
         """Scale thrusters so predicted total current stays under budget.
+
+        ``extra_norms`` is a mapping of non-thruster T200 commands on the same
+        fuse (the wrist / back-gripper motor) whose predicted draw is reserved
+        off the budget but not scaled here, and ``voltage_override`` lets the
+        pilot match the model to the supply voltage measured at the top of the
+        tether so the estimate tracks a real ammeter.
 
         Feed-forward (no current sensor) and fail-open: on any problem it returns
         ``thr`` unchanged. Only thruster keys (H_*/V_*) are considered/scaled;
@@ -1182,13 +1208,33 @@ class ControlService:
                         max_a = candidate
                 except (TypeError, ValueError):
                     pass
+            # The pilot can also override the assumed supply voltage live
+            # (modes["current_budget_voltage_v"]) to match a measured tether voltage.
+            voltage = self._current_budget_voltage_v
+            if voltage_override is not None:
+                try:
+                    cand_v = float(voltage_override)
+                    if math.isfinite(cand_v) and cand_v > 0.0:
+                        voltage = cand_v
+                except (TypeError, ValueError):
+                    pass
+            # Predict non-scaled extra T200 draw (e.g. wrist/back-gripper) at the
+            # SAME resolved voltage so it is reserved off the budget consistently.
+            extra = 0.0
+            if extra_norms:
+                try:
+                    for n in dict(extra_norms).values():
+                        extra += self._current_model.current_for_norm(float(n), voltage)
+                except Exception:
+                    extra = 0.0
             budget = max(0.0, max_a - self._current_budget_reserve_a)
             scale, pred_before, pred_after = current_budget_scale(
                 norms,
                 self._current_model,
-                voltage=self._current_budget_voltage_v,
+                voltage=voltage,
                 budget_a=budget,
                 min_scale=self._current_budget_min_scale,
+                extra_load_a=extra,
             )
             applied = bool(active and scale < 1.0)
             if applied:
@@ -1203,7 +1249,9 @@ class ControlService:
                 "scale": float(scale if active else 1.0),
                 "budget_a": float(budget),
                 "max_a": float(max_a),
-                "voltage_v": float(self._current_budget_voltage_v),
+                "reserve_a": float(self._current_budget_reserve_a),
+                "voltage_v": float(voltage),
+                "extra_load_a": float(extra),
                 "predicted_before_a": float(pred_before),
                 "predicted_after_a": float(pred_after if active else pred_before),
             }

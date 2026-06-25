@@ -140,20 +140,33 @@ POWER_SCALE = 1.0
 # ---------------------------------------------------------------------------
 # 2b) OPTIONAL feed-forward current budget (fuse protection). DEFAULT OFF.
 # ---------------------------------------------------------------------------
-# Predicts total thruster current from the *commanded* PWM using the bundled
-# BlueRobotics T200 performance data, and if the predicted total would exceed
-# CURRENT_BUDGET_MAX_A it scales ALL thrusters down by one shared factor. This
-# is the only limiter that bounds the SUMMED current the 25 A fuse actually
-# sees (global_limit only caps the single largest thruster).
+# Predicts total current from the *commanded* PWM using the bundled BlueRobotics
+# T200 performance data, and if the predicted total would exceed
+# CURRENT_BUDGET_MAX_A it scales ALL propulsion thrusters down by one shared
+# factor. This is the only limiter that bounds the SUMMED current the 25 A fuse
+# actually sees (global_limit only caps the single largest thruster). The
+# wrist/back-gripper T200 is on the same fuse: its predicted draw is reserved
+# off the budget (manipulation priority -- thrusters yield to it), and
+# CURRENT_BUDGET_RESERVE_A covers the remaining un-modeled electronics
+# (Pi/cameras/lights/servos). Tip: measure idle draw on a topside ammeter and
+# set RESERVE_A to it so the live estimate tracks the real fuse current.
 #
 # It is feed-forward, so it needs NO current sensor and is unaffected by the
 # Power Sense Module. It fails OPEN: any error (missing model, bad value, ...)
 # disables it for that tick and passes thrust through unchanged.
 #
-# Quick kill switch: set CURRENT_BUDGET_ENABLE = False (the default). When
-# disabled it is a true no-op -- the model is not even loaded.
-CURRENT_BUDGET_ENABLE = False         # master switch (False = zero behavior change)
-CURRENT_BUDGET_MAX_A = 22.0           # total thruster-current ceiling, before reserve (A)
+# Two layers of control:
+#   * this master switch loads the model and lets the ROV always *report* the
+#     estimate to topside, and
+#   * the live pilot toggle (modes["current_budget"]) decides whether it
+#     actually *limits* -- so you can run "monitor only" to compare the estimate
+#     against a tether ammeter before letting it clamp thrust.
+# The cap (MAX_A) and assumed voltage are also live-overridable from topside
+# (modes["current_budget_max_a"] / ["current_budget_voltage_v"]); the values
+# below are the boot defaults. Set ENABLE = False for a true no-op (model not
+# even loaded).
+CURRENT_BUDGET_ENABLE = True          # master switch (loads model + reports estimate)
+CURRENT_BUDGET_MAX_A = 22.0           # total current ceiling, before reserve (A)
 CURRENT_BUDGET_RESERVE_A = 2.0        # headroom subtracted for electronics/other draw (A)
 CURRENT_BUDGET_VOLTAGE_V = 14.0       # assumed supply voltage (PSM untrusted -> fixed).
                                       # Higher = more conservative (predicts more current).

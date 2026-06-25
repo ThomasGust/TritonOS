@@ -89,6 +89,34 @@ def test_min_scale_floor_is_respected(model):
     assert scale == pytest.approx(0.3)
 
 
+def test_extra_load_is_reserved_and_reported(model):
+    # The fixed extra load (e.g. wrist T200) eats into the budget so the scalable
+    # thrusters yield to it, and the reported totals include it.
+    norms = {"H_FL": 1.0, "H_FR": 1.0}
+    one_full = model.current_for_norm(1.0, 14.0)
+    scale_no_extra, before_no, after_no = current_budget_scale(
+        norms, model, voltage=14.0, budget_a=20.0
+    )
+    scale_extra, before_extra, after_extra = current_budget_scale(
+        norms, model, voltage=14.0, budget_a=20.0, extra_load_a=one_full
+    )
+    # Reported draw is higher by exactly the extra load.
+    assert before_extra == pytest.approx(before_no + one_full)
+    # With the extra load reserved, thrusters must scale down harder...
+    assert scale_extra < scale_no_extra
+    # ...and the post-scale total (thrusters + extra) still lands at the budget.
+    assert after_extra == pytest.approx(20.0, abs=0.6)
+
+
+def test_extra_load_alone_over_budget_floors_thrusters(model):
+    # If the fixed load alone meets the budget, thrusters are driven to the floor.
+    norms = {"H_FL": 1.0, "H_FR": 1.0}
+    scale, _, _ = current_budget_scale(
+        norms, model, voltage=14.0, budget_a=5.0, extra_load_a=6.0, min_scale=0.0
+    )
+    assert scale == pytest.approx(0.0)
+
+
 # ---- ControlService integration: safety guarantees --------------------------
 
 def _svc_with_budget(enabled, model=None, **over):
@@ -163,6 +191,43 @@ def test_bad_max_a_override_falls_back_to_config(model):
     for bad in (None, "nope", float("nan"), -5.0, 0.0):
         _, diag = ControlService._apply_current_budget(svc, dict(thr), max_a_override=bad)
         assert diag["budget_a"] == pytest.approx(20.0)
+
+
+def test_extra_norms_reserve_budget_for_wrist(model):
+    # The wrist/back-gripper T200 (passed as extra_norms) is reserved off the
+    # budget so propulsion thrusters scale to make room, and the reported draw
+    # includes it.
+    svc = _svc_with_budget(enabled=True, model=model, max_a=20.0, reserve_a=0.0)
+    thr = {"H_FL": 1.0, "H_FR": 1.0}
+
+    _, diag_no = ControlService._apply_current_budget(svc, dict(thr))
+    _, diag_wrist = ControlService._apply_current_budget(
+        svc, dict(thr), extra_norms={"wrist_rotate": 1.0}
+    )
+
+    assert diag_wrist["extra_load_a"] > 0.0
+    assert diag_wrist["predicted_before_a"] == pytest.approx(
+        diag_no["predicted_before_a"] + diag_wrist["extra_load_a"], abs=0.2
+    )
+    # Reserving the wrist forces the thrusters down harder.
+    assert diag_wrist["scale"] < diag_no["scale"]
+    # Total (thrusters + wrist) still respects the budget.
+    assert diag_wrist["predicted_after_a"] == pytest.approx(20.0, abs=0.6)
+
+
+def test_voltage_override_changes_prediction(model):
+    # A higher assumed voltage predicts more current (more conservative).
+    svc = _svc_with_budget(enabled=True, model=model, max_a=50.0, reserve_a=0.0, voltage_v=12.0)
+    thr = {"H_FL": 1.0, "H_FR": 1.0}
+
+    _, diag_default = ControlService._apply_current_budget(svc, dict(thr), active=False)
+    _, diag_high = ControlService._apply_current_budget(
+        svc, dict(thr), active=False, voltage_override=16.0
+    )
+
+    assert diag_default["voltage_v"] == pytest.approx(12.0)
+    assert diag_high["voltage_v"] == pytest.approx(16.0)
+    assert diag_high["predicted_before_a"] > diag_default["predicted_before_a"]
 
 
 def test_non_thruster_keys_untouched(model):

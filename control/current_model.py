@@ -136,9 +136,17 @@ def current_budget_scale(
     voltage: float,
     budget_a: float,
     min_scale: float = 0.0,
+    extra_load_a: float = 0.0,
     max_iter: int = 40,
 ) -> Tuple[float, float, float]:
     """Largest shared scale in ``[min_scale, 1]`` keeping predicted total <= budget.
+
+    ``extra_load_a`` is additional current draw that is *not* scaled here -- e.g.
+    the back-gripper / wrist T200, which is a manipulation-priority load on the
+    same fuse. It is reserved off the top of the budget so the scalable
+    propulsion thrusters yield to it (rather than the gripper weakening). The
+    returned totals INCLUDE ``extra_load_a`` so the topside readout reflects the
+    full predicted draw the fuse actually sees.
 
     Returns ``(scale, predicted_before_a, predicted_after_a)``. Because each
     thruster's current is monotonic in ``|command|`` and scaling moves every
@@ -148,24 +156,29 @@ def current_budget_scale(
     """
     min_scale = _clamp(float(min_scale), 0.0, 1.0)
     budget_a = max(0.0, float(budget_a))
+    extra = max(0.0, float(extra_load_a))
 
     def total(s: float) -> float:
         return sum(model.current_for_norm(s * float(n), voltage) for n in norms.values())
 
     base = total(1.0)
-    if base <= budget_a or base <= 0.0:
-        return 1.0, base, base
+    before = base + extra
+    # Budget left for the scalable thrusters after the fixed (priority) load.
+    thr_budget = budget_a - extra
+    if base <= thr_budget or base <= 0.0:
+        return 1.0, before, before
 
     floor_total = total(min_scale)
-    if floor_total >= budget_a:
-        # Even the floor exceeds budget; clamp to the floor (best we can do).
-        return min_scale, base, floor_total
+    if thr_budget <= 0.0 or floor_total >= thr_budget:
+        # The fixed load alone meets/exceeds budget, or even the thruster floor
+        # does; clamp thrusters to the floor (best we can do) and report it.
+        return min_scale, before, floor_total + extra
 
     lo, hi = min_scale, 1.0
     for _ in range(int(max_iter)):
         mid = 0.5 * (lo + hi)
-        if total(mid) > budget_a:
+        if total(mid) > thr_budget:
             hi = mid
         else:
             lo = mid
-    return lo, base, total(lo)
+    return lo, before, total(lo) + extra
