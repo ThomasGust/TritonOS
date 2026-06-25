@@ -41,43 +41,6 @@ MANAGEMENT_RPC_ENABLE = True
 MANAGEMENT_RPC_ENDPOINT = "tcp://0.0.0.0:5556"  # ROV config/reference management RPC
 
 # ---------------------------------------------------------------------------
-# 1b) video bring-up / camera USB recovery
-# ---------------------------------------------------------------------------
-# All four exploreHD cameras hang off one USB2 bus through chained hubs, so at
-# power-on they enumerate one-by-one over a few seconds. These knobs control how
-# the video RPC recovers when a topside start_stream arrives before a camera's
-# /dev/v4l node exists yet. The goal is a smooth, near-simultaneous bring-up
-# WITHOUT ever disturbing a camera that is already streaming. None of this
-# touches the encode/transport pipeline (bitrate, GOP, decoder, jitter buffer).
-
-# Per-port USB rebind attempts when a single camera's start fails. The rebind is
-# narrow (only that camera's hub port), so it is safe to run while the other
-# cameras stream. Kept short so one late camera barely delays the others on the
-# single-threaded video RPC socket.
-VIDEO_USB_REBIND_RETRIES = 2
-VIDEO_USB_REBIND_DELAY_S = 0.5
-
-# Broad parent-hub reset (re-enumerates EVERY camera on the hub). This recovers a
-# wedged hub but would interrupt any live stream, so it is only ever attempted at
-# a true cold start when NO stream is currently running (see start_stream_with_
-# recovery). Set False to disable the broad reset entirely.
-VIDEO_USB_HUB_RESET_ENABLE = True
-
-# Boot-time camera warmup: a background thread started with the video service
-# that front-loads USB enumeration so the first topside start_stream succeeds on
-# the first try instead of racing the cameras. It only reads the /dev/v4l node
-# set and, for any configured port that has not appeared after KICK_AFTER_S,
-# issues a NARROW per-port rebind (never a hub reset, and nothing is streaming
-# yet at boot, so it cannot disturb live video).
-VIDEO_CAMERA_WARMUP_ENABLE = True
-# Physical USB hub ports of the cameras (match data/streams.json device paths).
-VIDEO_CAMERA_PORT_HINTS = ["1.2.1", "1.2.2", "1.2.4", "1.2.5"]
-VIDEO_CAMERA_WARMUP_TIMEOUT_S = 25.0
-VIDEO_CAMERA_WARMUP_POLL_S = 0.5
-VIDEO_CAMERA_WARMUP_KICK_MISSING = True
-VIDEO_CAMERA_WARMUP_KICK_AFTER_S = 6.0
-
-# ---------------------------------------------------------------------------
 # 2) control loop
 # ---------------------------------------------------------------------------
 

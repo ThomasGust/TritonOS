@@ -66,26 +66,6 @@ def start_video_service():
     video_rpc_endpoint = getattr(cfg, "VIDEO_RPC_ENDPOINT", DEFAULT_VIDEO_RPC_ENDPOINT)
     print(f"[rov/main] video RPC started on {video_rpc_endpoint}")
 
-    # Front-load USB camera enumeration so the first topside start_stream lands on
-    # an already-present camera (smooth, near-simultaneous bring-up) instead of
-    # racing the cameras as they appear on the shared USB bus. Best-effort and
-    # fully isolated: a failure here must never stop the video RPC from serving.
-    if bool(getattr(cfg, "VIDEO_CAMERA_WARMUP_ENABLE", True)):
-        try:
-            from video import camera_warmup
-
-            camera_warmup.start_in_thread(
-                expected_hints=list(getattr(cfg, "VIDEO_CAMERA_PORT_HINTS", []) or []),
-                timeout_s=float(getattr(cfg, "VIDEO_CAMERA_WARMUP_TIMEOUT_S", 25.0)),
-                poll_s=float(getattr(cfg, "VIDEO_CAMERA_WARMUP_POLL_S", 0.5)),
-                kick_missing=bool(getattr(cfg, "VIDEO_CAMERA_WARMUP_KICK_MISSING", True)),
-                kick_after_s=float(getattr(cfg, "VIDEO_CAMERA_WARMUP_KICK_AFTER_S", 6.0)),
-                rebind_fn=gst_streamer_rpc.usb_rebind_port,
-            )
-            print("[rov/main] camera warmup started")
-        except Exception as e:
-            print("[rov/main] camera warmup disabled:", e)
-
 
 def start_management_service(*, depth_sensor=None, control_service=None, attitude_estimator=None):
     """Start the management RPC server when enabled in `rov_config`.
