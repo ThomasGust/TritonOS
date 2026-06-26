@@ -805,6 +805,12 @@ GRIPPER_PITCH_NEUTRAL_DEG = 45.0 # symmetric: at +/-100 full wrist is reachable 
 GRIPPER_WRIST_NEUTRAL_DEG = 45.0
 GRIPPER_PITCH_INVERT = 1.0
 GRIPPER_YAW_INVERT = 1.0
+# Normalized physical-axis limits applied after pitch/yaw inversion, before
+# differential mixing. Keep these inside [-1, +1] to fence off mechanical stops.
+GRIPPER_PITCH_MIN = -1.0
+GRIPPER_PITCH_MAX = 1.0
+GRIPPER_YAW_MIN = -1.0
+GRIPPER_YAW_MAX = 1.0
 # Per-servo inversion. The two servos FACE EACH OTHER across a bevel-gear
 # differential (a perpendicular output gear meshes between them). Because they are
 # mirrored, commanding both the same way ROLLS the output while opposite commands

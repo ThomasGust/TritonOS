@@ -405,6 +405,14 @@ class ControlService:
         self._gripper_right_key = str(getattr(cfg, "GRIPPER_RIGHT_CMD_KEY", "gripper_right"))
         self._gripper_pitch_invert = float(getattr(cfg, "GRIPPER_PITCH_INVERT", 1.0))
         self._gripper_yaw_invert = float(getattr(cfg, "GRIPPER_YAW_INVERT", 1.0))
+        self._gripper_pitch_min, self._gripper_pitch_max = self._ordered_norm_pair(
+            getattr(cfg, "GRIPPER_PITCH_MIN", -1.0),
+            getattr(cfg, "GRIPPER_PITCH_MAX", 1.0),
+        )
+        self._gripper_yaw_min, self._gripper_yaw_max = self._ordered_norm_pair(
+            getattr(cfg, "GRIPPER_YAW_MIN", -1.0),
+            getattr(cfg, "GRIPPER_YAW_MAX", 1.0),
+        )
         # Per-servo inversion for the facing-servo bevel differential (invert one
         # servo to un-swap pitch/roll). See rov_config.GRIPPER_*_INVERT.
         self._gripper_left_invert = float(getattr(cfg, "GRIPPER_LEFT_INVERT", 1.0))
@@ -418,8 +426,8 @@ class ControlService:
         self._gripper_wrist_neutral_deg = float(getattr(cfg, "GRIPPER_WRIST_NEUTRAL_DEG", 45.0))
         arm_pitch = float(getattr(cfg, "GRIPPER_ARM_PITCH", getattr(cfg, "GRIPPER_DISARM_PITCH", 0.0)) or 0.0)
         arm_yaw = float(getattr(cfg, "GRIPPER_ARM_YAW", getattr(cfg, "GRIPPER_DISARM_YAW", 0.0)) or 0.0)
-        self._gripper_park_pitch = max(-1.0, min(1.0, arm_pitch))
-        self._gripper_park_yaw = max(-1.0, min(1.0, arm_yaw))
+        self._gripper_park_pitch = max(self._gripper_pitch_min, min(self._gripper_pitch_max, arm_pitch))
+        self._gripper_park_yaw = max(self._gripper_yaw_min, min(self._gripper_yaw_max, arm_yaw))
         self._gripper_park_left, self._gripper_park_right = self._diff_mix_norm(
             self._gripper_park_pitch,
             self._gripper_park_yaw,
@@ -1305,6 +1313,14 @@ class ControlService:
 
         pitch_invert = _tune("pitch_invert", self._gripper_pitch_invert)
         yaw_invert = _tune("yaw_invert", self._gripper_yaw_invert)
+        pitch_min, pitch_max = self._ordered_norm_pair(
+            _tune("pitch_min", self._gripper_pitch_min),
+            _tune("pitch_max", self._gripper_pitch_max),
+        )
+        yaw_min, yaw_max = self._ordered_norm_pair(
+            _tune("yaw_min", self._gripper_yaw_min),
+            _tune("yaw_max", self._gripper_yaw_max),
+        )
 
         # gripper_pitch / gripper_yaw are absolute POSITION commands in [-1..1].
         # A *present* key (even 0.0) is applied directly so the pilot can hold any
@@ -1330,6 +1346,8 @@ class ControlService:
                 yaw = last_yaw
         else:
             yaw = last_yaw if self._gripper_hold_last else 0.0
+        pitch = max(pitch_min, min(pitch_max, pitch))
+        yaw = max(yaw_min, min(yaw_max, yaw))
 
         left, right = self._diff_mix_norm(pitch, yaw, overrides=tune)
 
@@ -1338,6 +1356,21 @@ class ControlService:
         self._gripper_last_left = left
         self._gripper_last_right = right
         return left, right
+
+    @staticmethod
+    def _float_or_default(value, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    @classmethod
+    def _ordered_norm_pair(cls, minimum, maximum) -> Tuple[float, float]:
+        lo = max(-1.0, min(1.0, cls._float_or_default(minimum, -1.0)))
+        hi = max(-1.0, min(1.0, cls._float_or_default(maximum, 1.0)))
+        if lo > hi:
+            lo, hi = hi, lo
+        return lo, hi
 
     @staticmethod
     def _diff_mix_norm_deg(

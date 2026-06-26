@@ -27,6 +27,10 @@ def _make_gripper_svc(**overrides):
     svc._gripper_right_key = "gripper_right"
     svc._gripper_pitch_invert = 1.0
     svc._gripper_yaw_invert = 1.0
+    svc._gripper_pitch_min = -1.0
+    svc._gripper_pitch_max = 1.0
+    svc._gripper_yaw_min = -1.0
+    svc._gripper_yaw_max = 1.0
     svc._gripper_left_invert = 1.0
     svc._gripper_right_invert = 1.0
     svc._gripper_deadzone = 0.01
@@ -84,6 +88,10 @@ def test_current_repo_geometry_reaches_full_pitch_wrist_square():
     assert cfg.GRIPPER_SERVO_RANGE_DEG == 100.0
     assert cfg.GRIPPER_PITCH_SPAN_DEG == 90.0
     assert cfg.GRIPPER_PITCH_NEUTRAL_DEG == 45.0
+    assert cfg.GRIPPER_PITCH_MIN == pytest.approx(-1.0)
+    assert cfg.GRIPPER_PITCH_MAX == pytest.approx(1.0)
+    assert cfg.GRIPPER_YAW_MIN == pytest.approx(-1.0)
+    assert cfg.GRIPPER_YAW_MAX == pytest.approx(1.0)
 
     geo = dict(
         servo_range_deg=cfg.GRIPPER_SERVO_RANGE_DEG,
@@ -249,6 +257,48 @@ def test_compute_gripper_diff_applies_live_pitch_neutral_override():
     assert abs(right - 65.0 / 70.0) < 1e-6
 
 
+def test_compute_gripper_diff_applies_configured_pitch_roll_limits():
+    svc = _make_gripper_svc(
+        _gripper_pitch_min=-0.50,
+        _gripper_pitch_max=0.25,
+        _gripper_yaw_min=-0.25,
+        _gripper_yaw_max=0.50,
+    )
+    left, right = ControlService._compute_gripper_diff(
+        svc, SimpleNamespace(aux={"gripper_pitch": 1.0, "gripper_yaw": -1.0}, modes={})
+    )
+    exp_l, exp_r = ControlService._diff_mix_norm_deg(0.25, -0.25, **GEO)
+
+    assert svc._gripper_last_pitch == pytest.approx(0.25)
+    assert svc._gripper_last_yaw == pytest.approx(-0.25)
+    assert left == pytest.approx(exp_l)
+    assert right == pytest.approx(exp_r)
+
+
+def test_compute_gripper_diff_applies_live_pitch_roll_limit_override():
+    svc = _make_gripper_svc()
+    left, right = ControlService._compute_gripper_diff(
+        svc,
+        SimpleNamespace(
+            aux={"gripper_pitch": -1.0, "gripper_yaw": 1.0},
+            modes={
+                "arm_tune": {
+                    "pitch_min": -0.20,
+                    "pitch_max": 0.20,
+                    "yaw_min": -0.40,
+                    "yaw_max": 0.40,
+                }
+            },
+        ),
+    )
+    exp_l, exp_r = ControlService._diff_mix_norm_deg(-0.20, 0.40, **GEO)
+
+    assert svc._gripper_last_pitch == pytest.approx(-0.20)
+    assert svc._gripper_last_yaw == pytest.approx(0.40)
+    assert left == pytest.approx(exp_l)
+    assert right == pytest.approx(exp_r)
+
+
 def test_compute_gripper_diff_holds_last_when_arm_keys_absent():
     # No arm keys on the wire -> hold the last commanded servo pose.
     svc = _make_gripper_svc(_gripper_last_left=0.3, _gripper_last_right=-0.1)
@@ -336,6 +386,42 @@ def test_send_gripper_park_pose_slews_toward_target(monkeypatch):
     assert svc._hw_sink.writes[-1]["gripper_left"] == pytest.approx(FULL_AXIS)
     assert svc._gripper_last_left == pytest.approx(FULL_AXIS)
     assert svc._gripper_last_right == pytest.approx(FULL_AXIS)
+
+
+def test_arm_and_disarm_use_slow_park_settle(monkeypatch):
+    class State:
+        def __init__(self):
+            self.armed = False
+
+        def set_armed(self, value):
+            self.armed = bool(value)
+
+    park_calls = []
+    sync_calls = []
+    set_park_calls = []
+
+    svc = object.__new__(ControlService)
+    svc._autopilot = None
+    svc.state = State()
+    svc._gripper_park_settle_s = 0.85
+    svc._armed_since = None
+    svc._sync_sink_armed = lambda force=False: sync_calls.append(bool(force))
+    svc._set_gripper_park_pose = lambda: set_park_calls.append(True)
+    monkeypatch.setattr(
+        ControlService,
+        "_send_gripper_park_pose",
+        lambda self, *, settle_s=0.0: park_calls.append(float(settle_s)),
+    )
+
+    ControlService._arm_with_gripper_park(svc)
+    assert svc.state.armed is True
+
+    ControlService._disarm_with_gripper_park(svc)
+    assert svc.state.armed is False
+
+    assert park_calls == pytest.approx([0.85, 0.85])
+    assert sync_calls == [True, True]
+    assert set_park_calls == [True]
 
 
 def test_compute_wrist_rotate_scales_live_back_gripper_gain():

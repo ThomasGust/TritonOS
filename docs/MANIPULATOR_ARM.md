@@ -39,6 +39,10 @@ integrator. It no longer caps the reachable range on the ROV. Keyboard `A`
 walks the configured park pose through a slower Pilot-side park rate; keyboard
 `W`/`S`/`D` are not bound to manipulator motion.
 
+`GRIPPER_PITCH_MIN/MAX` and `GRIPPER_YAW_MIN/MAX` are normalized post-invert
+limits for the physical pitch and wrist-roll axes. TritonOS applies them before
+the differential mixer, and Vehicle Setup can stream/test/save them while tuning.
+
 ## Kinematics & reachable range
 
 With a 1:1 differential each servo travels `pitch ± wrist` degrees and is limited
@@ -67,6 +71,7 @@ The current build therefore uses the symmetric, center-of-square neutral:
 - `GRIPPER_SERVO_RANGE_DEG = 100.0`
 - `GRIPPER_PITCH_SPAN_DEG = 90.0`, `GRIPPER_PITCH_NEUTRAL_DEG = 45.0`
 - `GRIPPER_WRIST_SPAN_DEG = 90.0`, `GRIPPER_WRIST_NEUTRAL_DEG = 45.0`
+- `GRIPPER_PITCH_MIN/MAX = -1.0/+1.0`, `GRIPPER_YAW_MIN/MAX = -1.0/+1.0`
 
 `GRIPPER_SERVO_PULSE_HALFSPAN_US` stays at the measured pulse half-span (800 µs), so
 reprogramming the servo to ±100° only remaps the fixed 700–2300 µs travel to more
@@ -216,9 +221,10 @@ The configured arm/disarm park pose is `flat-wrist-90`
 after a disarm. If wrist 0 packages better on the real hardware, switch
 `GRIPPER_DISARM_YAW` and `GRIPPER_ARM_YAW` to `-1.0`; Vehicle Setup can now edit
 and save those normalized park-pose values. Vehicle Setup also refreshes the
-topside keyboard `A` park target from the ROV config. For a fallback before the
-management page has refreshed, set TritonPilot's `TRITON_ARM_PARK_WRIST` and
-`TRITON_ARM_INIT_WRIST` to the same value.
+topside keyboard `A` park target from the ROV config and exposes the pitch /
+wrist-roll command limits. For a fallback before the management page has
+refreshed, set TritonPilot's `TRITON_ARM_PARK_WRIST` and `TRITON_ARM_INIT_WRIST`
+to the same value.
 
 ## Smoothness
 
