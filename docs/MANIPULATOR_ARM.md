@@ -233,5 +233,8 @@ units/sec) in `ThrustWriter` ([motion/pwm.py](../motion/pwm.py)). It is set high
 enough to feel instant (~full travel in 0.33 s) while absorbing per-frame jitter.
 Explicit TritonOS arm/disarm park writes use `GRIPPER_PARK_SLEW_NORM_PER_S` and
 `GRIPPER_PARK_SETTLE_S` so the tucked pose can move more gently without slowing
-every live arm command. Primary live-motion smoothing still comes from the
-pilot-side position integrator.
+every live arm command. TritonPilot also makes the same arm/disarm edge frame
+report the park pose as the held `gripper_pitch` / `gripper_yaw` command, so
+normal control resumes from park instead of snapping back to the pre-disarm
+target. Primary live-motion smoothing still comes from the pilot-side position
+integrator.
