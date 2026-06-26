@@ -141,6 +141,8 @@ GRIPPER_PITCH_NEUTRAL_DEG = 45.0   # symmetric; +/-100 reaches full wrist across
 GRIPPER_US_PER_DEG = GRIPPER_SERVO_PULSE_HALFSPAN_US / GRIPPER_SERVO_RANGE_DEG
 GRIPPER_SERVO_CENTER_US = 1500
 GRIPPER_SLEW_NORM_PER_S = 3.0      # servo-output smoothing
+GRIPPER_PARK_SLEW_NORM_PER_S = 1.2 # slower explicit arm/disarm park moves
+GRIPPER_PARK_SETTLE_S = 0.85       # wait long enough for the tucked pose to settle
 ```
 
 TritonPilot sends `PilotFrame.modes["back_gripper_gain"]` and

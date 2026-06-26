@@ -301,6 +301,43 @@ def test_send_gripper_park_pose_writes_folded_servo_targets():
     assert abs(svc._hw_sink.writes[0]["gripper_right"] + FULL_AXIS) < 1e-6
 
 
+def test_send_gripper_park_pose_slews_toward_target(monkeypatch):
+    class FakeSink:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, payload):
+            self.writes.append(dict(payload))
+
+    monkeypatch.setattr("control.control_service.time.sleep", lambda _seconds: None)
+
+    svc = _make_gripper_svc(
+        _gripper_park_on_arm_disarm=True,
+        _gripper_park_pitch=1.0,
+        _gripper_park_yaw=0.0,
+        _gripper_park_left=FULL_AXIS,
+        _gripper_park_right=FULL_AXIS,
+        _gripper_park_slew_norm_per_s=0.5,
+        _gripper_last_left=0.0,
+        _gripper_last_right=0.0,
+        period=0.05,
+        dry_run=False,
+        _sink_armed=True,
+        _warned_dry_run=False,
+        _warned_no_sink=False,
+        _warned_sink_disarmed=False,
+    )
+    svc._hw_sink = FakeSink()
+
+    ControlService._send_gripper_park_pose(svc, settle_s=0.1)
+
+    assert len(svc._hw_sink.writes) > 1
+    assert 0.0 < svc._hw_sink.writes[0]["gripper_left"] < FULL_AXIS
+    assert svc._hw_sink.writes[-1]["gripper_left"] == pytest.approx(FULL_AXIS)
+    assert svc._gripper_last_left == pytest.approx(FULL_AXIS)
+    assert svc._gripper_last_right == pytest.approx(FULL_AXIS)
+
+
 def test_compute_wrist_rotate_scales_live_back_gripper_gain():
     svc = object.__new__(ControlService)
     svc._wrist_rotate_enabled = True

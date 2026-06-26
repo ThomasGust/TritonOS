@@ -430,6 +430,10 @@ class ControlService:
         self._gripper_hold_last = bool(getattr(cfg, "GRIPPER_HOLD_LAST_POSITION", True))
         self._gripper_park_on_arm_disarm = bool(getattr(cfg, "GRIPPER_PARK_ON_ARM_DISARM", True))
         self._gripper_park_settle_s = float(getattr(cfg, "GRIPPER_PARK_SETTLE_S", 0.50))
+        self._gripper_park_slew_norm_per_s = max(
+            0.0,
+            float(getattr(cfg, "GRIPPER_PARK_SLEW_NORM_PER_S", getattr(cfg, "GRIPPER_SLEW_NORM_PER_S", 0.0))),
+        )
         self._gripper_last_pitch = self._gripper_park_pitch
         self._gripper_last_yaw = self._gripper_park_yaw
         self._gripper_last_left = self._gripper_park_left
@@ -1424,15 +1428,51 @@ class ControlService:
             self._gripper_right_key: float(self._gripper_last_right),
         }
 
+    def _gripper_payload_for_outputs(self, left: float, right: float) -> Dict[str, float]:
+        if not self._gripper_enabled:
+            return {}
+        return {
+            self._gripper_left_key: float(left),
+            self._gripper_right_key: float(right),
+        }
+
     def _send_gripper_park_pose(self, *, settle_s: float = 0.0) -> None:
         if not self._gripper_park_on_arm_disarm:
             return
-        payload = self._gripper_park_payload()
-        if not payload:
+        if not self._gripper_enabled:
             return
-        self._send_to_hw(payload)
-        if settle_s > 0.0 and (not self.dry_run) and self._hw_sink is not None:
-            time.sleep(float(settle_s))
+
+        start_left = float(getattr(self, "_gripper_last_left", self._gripper_park_left))
+        start_right = float(getattr(self, "_gripper_last_right", self._gripper_park_right))
+        target_left = float(self._gripper_park_left)
+        target_right = float(self._gripper_park_right)
+        rate = float(getattr(self, "_gripper_park_slew_norm_per_s", 0.0) or 0.0)
+        settle = max(0.0, float(settle_s))
+
+        can_sleep = (not self.dry_run) and self._hw_sink is not None
+        max_dist = max(abs(target_left - start_left), abs(target_right - start_right))
+        if rate > 0.0 and max_dist > 1e-6 and settle > 0.0 and can_sleep:
+            duration = max(settle, max_dist / max(rate, 1e-6))
+            step_s = max(0.02, min(0.05, float(getattr(self, "period", 0.02) or 0.02)))
+            steps = max(1, int(math.ceil(duration / step_s)))
+            sleep_s = duration / float(steps)
+            for idx in range(1, steps + 1):
+                frac = float(idx) / float(steps)
+                left = start_left + (target_left - start_left) * frac
+                right = start_right + (target_right - start_right) * frac
+                payload = self._gripper_payload_for_outputs(left, right)
+                if payload:
+                    self._send_to_hw(payload)
+                if idx < steps:
+                    time.sleep(sleep_s)
+            self._set_gripper_park_pose()
+            return
+
+        payload = self._gripper_park_payload()
+        if payload:
+            self._send_to_hw(payload)
+        if settle > 0.0 and can_sleep and max_dist > 1e-6:
+            time.sleep(settle)
 
     def _arm_with_gripper_park(self) -> None:
         if self._autopilot is not None:
@@ -1440,9 +1480,8 @@ class ControlService:
         self.state.set_armed(True)
         hold_s = float(getattr(cfg, "ARM_HW_INIT_HOLD_S", 0.0) or 0.0)
         self._armed_since = time.time() + hold_s
-        self._set_gripper_park_pose()
         self._sync_sink_armed(force=True)
-        self._send_gripper_park_pose(settle_s=0.0)
+        self._send_gripper_park_pose(settle_s=self._gripper_park_settle_s)
 
     def _disarm_with_gripper_park(self) -> None:
         if self._autopilot is not None:

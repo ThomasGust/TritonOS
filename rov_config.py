@@ -838,6 +838,8 @@ GRIPPER_SERVO_MAX_US = int(round(GRIPPER_SERVO_CENTER_US + GRIPPER_SERVO_RANGE_D
 # Slew-rate limit on the servo outputs, normalized units/sec. High enough to feel
 # instant (3.0 ~= full travel in 0.33s) but absorbs frame jitter and park jumps.
 GRIPPER_SLEW_NORM_PER_S = 3.0
+# Slower explicit park moves, used when TritonOS commands the arm/disarm park pose.
+GRIPPER_PARK_SLEW_NORM_PER_S = 1.2
 
 GRIPPER_ALLOW_WHEN_DISARMED = False
 GRIPPER_CENTER_ON_DISARM = True
@@ -845,7 +847,7 @@ GRIPPER_CENTER_ON_DISARM = True
 GRIPPER_HOLD_PWM_ON_DISARM = True # if False, the servos will be unpowered on disarm (arm will go limp)
 # Explicitly command the folded pose when arming and right before disarming.
 GRIPPER_PARK_ON_ARM_DISARM = True
-GRIPPER_PARK_SETTLE_S = 0.50
+GRIPPER_PARK_SETTLE_S = 0.85
 # Park pose as normalized POSITION (same -1..1 mapping as live commands):
 #   pitch -1 = flat/folded against the ROV, yaw +1 = 90 deg wrist roll.
 GRIPPER_DISARM_PITCH = -1.0

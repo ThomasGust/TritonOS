@@ -20,7 +20,7 @@ output driven by the triggers and is not part of this differential.
 ```
 TritonPilot                              TritonOS
 -----------                              --------
-RB + right stick / W A S D
+RB + right stick
   -> arm position integrator
   -> PilotFrame.aux["gripper_pitch"]     ControlService._compute_gripper_diff
                     ["gripper_yaw"]   ->   _diff_mix_norm (degrees, pitch-priority clip)
@@ -34,8 +34,10 @@ RB + right stick / W A S D
 - `gripper_pitch` −1 → `0°` (flat), +1 → `GRIPPER_PITCH_SPAN_DEG` (90° down in the current config).
 - `gripper_yaw`   −1 → `0°`, +1 → `GRIPPER_WRIST_SPAN_DEG` (90° roll).
 
-`arm_gain` (pilot keys 6/7) scales the *speed* of the pilot-side integrator. It no
-longer caps the reachable range on the ROV.
+`arm_gain` (pilot keys 6/7) scales the *speed* of the pilot-side controller-stick
+integrator. It no longer caps the reachable range on the ROV. Keyboard `A`
+walks the configured park pose through a slower Pilot-side park rate; keyboard
+`W`/`S`/`D` are not bound to manipulator motion.
 
 ## Kinematics & reachable range
 
@@ -212,15 +214,18 @@ The configured arm/disarm park pose is `flat-wrist-90`
 (`GRIPPER_DISARM_PITCH = -1.0`, `GRIPPER_DISARM_YAW = 1.0`) and
 `GRIPPER_HOLD_PWM_ON_DISARM = True`, so the servos keep holding that tucked pose
 after a disarm. If wrist 0 packages better on the real hardware, switch
-`GRIPPER_DISARM_YAW` to `-1.0`; `GRIPPER_ARM_YAW` follows that value by default.
-Also set TritonPilot's `ARM_INIT_WRIST` / `TRITON_ARM_INIT_WRIST` to `-1.0` so
-the startup pilot target matches the ROV park pose.
+`GRIPPER_DISARM_YAW` and `GRIPPER_ARM_YAW` to `-1.0`; Vehicle Setup can now edit
+and save those normalized park-pose values. Vehicle Setup also refreshes the
+topside keyboard `A` park target from the ROV config. For a fallback before the
+management page has refreshed, set TritonPilot's `TRITON_ARM_PARK_WRIST` and
+`TRITON_ARM_INIT_WRIST` to the same value.
 
 ## Smoothness
 
 The servo (aux) outputs are rate-limited by `GRIPPER_SLEW_NORM_PER_S` (normalized
 units/sec) in `ThrustWriter` ([motion/pwm.py](../motion/pwm.py)). It is set high
-enough to feel instant (~full travel in 0.33 s) while absorbing per-frame jitter
-and park jumps; the slew history resets on arm/disarm so deliberate park moves are
-not throttled. Primary motion smoothing comes from the pilot-side position
-integrator; this slew is a backstop against wire jitter.
+enough to feel instant (~full travel in 0.33 s) while absorbing per-frame jitter.
+Explicit TritonOS arm/disarm park writes use `GRIPPER_PARK_SLEW_NORM_PER_S` and
+`GRIPPER_PARK_SETTLE_S` so the tucked pose can move more gently without slowing
+every live arm command. Primary live-motion smoothing still comes from the
+pilot-side position integrator.
