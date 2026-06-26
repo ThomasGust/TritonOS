@@ -115,6 +115,11 @@ This mixer solves coupled vehicle motion from measured thruster geometry, so
 use the TritonPilot Thrusters tab to compare `cmd_final`, raw thrusters, and
 final horizontal/vertical outputs while validating signs.
 
+TritonPilot's live `PilotFrame.modes["max_gain"]` now applies twice on the ROV:
+it scales pilot DOF intent before mixing, and it also caps final mixed thruster
+outputs to `min(THRUSTER_MAX_ABS, max_gain)` before current-budget limiting and
+PWM conversion.
+
 Pilot axis mapping:
 
 ```python

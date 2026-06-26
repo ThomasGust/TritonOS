@@ -122,7 +122,9 @@ AXIS_YAW_INVERT   = 1.0
 AXIS_DEADZONE = 0.10  # 10% stick deadzone
 
 # Overall thrust cap (0..1). 1.0 = full output.
-# Set this lower (e.g. 0.6) to retduce peak current draw / brownouts while tuning.
+# TritonPilot's live max_gain can lower this at runtime; the effective final
+# mixed-thruster cap is min(THRUSTER_MAX_ABS, PilotFrame.modes["max_gain"]).
+# Set this lower (e.g. 0.6) to reduce peak current draw / brownouts while tuning.
 THRUSTER_MAX_ABS = 1.0
 
 # Per-thruster deadband applied after mixing (extra protection against creep).

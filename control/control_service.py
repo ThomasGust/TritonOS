@@ -875,6 +875,7 @@ class ControlService:
             else:
                 # Pilot runtime max gain cap (Y/A on topside) scales overall power.
                 self._apply_pilot_gain(fresh_pilot)
+                thruster_max_abs = self._live_thruster_max_abs(fresh_pilot)
 
                 if self._mix_mode == 'simple_groups':
                     cmd2 = build_2axis(fresh_pilot, self.gains)
@@ -882,7 +883,7 @@ class ControlService:
                     cmd_final: Dict[str, float] = dict(cmd2)
                     raw_thr = self.mixer.mix(cmd2['surge'], cmd2['heave'])
                     mixer_diag_raw: Dict[str, Any] = {}
-                    thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
+                    thr = global_limit(raw_thr, max_abs=thruster_max_abs)
                     thr_limited = dict(thr)
                     mixer_diag_limited: Dict[str, Any] = {}
                     thr = self._channels_to_named(thr)
@@ -922,7 +923,7 @@ class ControlService:
                     cmd_final = dict(cmd6)
                     raw_thr = self.mixer.mix(cmd6)
                     mixer_diag_raw = self._mixer_diagnostics(cmd6, raw_thr)
-                    thr = global_limit(raw_thr, max_abs=float(getattr(cfg, 'THRUSTER_MAX_ABS', 1.0)))
+                    thr = global_limit(raw_thr, max_abs=thruster_max_abs)
                     thr_limited = dict(thr)
                     mixer_diag_limited = self._mixer_diagnostics(cmd6, thr_limited)
 
@@ -1041,15 +1042,17 @@ class ControlService:
                             "base_power_scale": float(self._base_power_scale),
                             "pilot_max_gain": float(self._last_pilot_max_gain),
                             "effective_power_scale": float(self.gains.power_scale),
+                            "configured_thruster_max_abs": float(self._configured_thruster_max_abs()),
+                            "effective_thruster_max_abs": float(thruster_max_abs),
                         },
                     }
                 )
 
                 if self.debug and (now - self._last_log) > self.log_every_s:
                     if self._mix_mode == "simple_groups":
-                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% (k={self.gains.power_scale:.2f})"
+                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd2={cmd2} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% cap={thruster_max_abs:.2f} (k={self.gains.power_scale:.2f})"
                     else:
-                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% (k={self.gains.power_scale:.2f})"
+                        msg = f"[rov/control] APPLY seq={fresh_pilot.seq} age={fresh_age:.3f}s cmd6={cmd6} thr={thr} | gain={self._last_pilot_max_gain*100:.0f}% cap={thruster_max_abs:.2f} (k={self.gains.power_scale:.2f})"
                         try:
                             ap = self._last_autopilot_status or {}
                             st = dict(ap.get("depth_hold") or self._last_depth_status or {})
@@ -1127,6 +1130,19 @@ class ControlService:
         mult = self._pilot_gain_multiplier(pilot)
         self._last_pilot_max_gain = float(mult)
         self.gains.power_scale = float(self._base_power_scale) * float(mult)
+
+    @staticmethod
+    def _configured_thruster_max_abs() -> float:
+        """Return the configured final normalized thruster cap in [0..1]."""
+        try:
+            value = float(getattr(cfg, "THRUSTER_MAX_ABS", 1.0))
+        except Exception:
+            value = 1.0
+        return max(0.0, min(1.0, value))
+
+    def _live_thruster_max_abs(self, pilot: Optional[PilotFrame]) -> float:
+        """Cap final mixed thruster outputs by both config and pilot max gain."""
+        return min(self._configured_thruster_max_abs(), self._pilot_gain_multiplier(pilot))
 
     @staticmethod
     def _neutral() -> Dict[str, float]:
