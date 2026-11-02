@@ -1,5 +1,19 @@
 # TritonOS
 
+Onboard software for the underwater robot (ROV) built by Triton Robotics, a student team from Seattle that competes in the [MATE ROV Competition](https://materovcompetition.org/) (Ranger class). This software ran the team's 2026 vehicle, which placed 2nd overall at the 2026 MATE ROV World Championship.
+
+The vehicle's software is split across three repositories:
+
+| Repository | Runs on | Role |
+| --- | --- | --- |
+| **TritonOS** (this repo) | Raspberry Pi on the ROV | Control loop, thruster output, sensor telemetry, camera streams |
+| [TritonPilot](https://github.com/ThomasGust/TritonPilot) | Pilot computer | Controller input, live video and telemetry, logging |
+| [TritonAnalysis](https://github.com/ThomasGust/TritonAnalysis) | Separate analysis laptop | Stereo measurement, 3D reconstruction, mission tools |
+
+Written and maintained by Thomas Gust, Triton's software and electrical lead.
+
+## Overview
+
 TritonOS is the onboard runtime for Triton's ROV. It runs on the vehicle
 computer, listens for pilot commands from TritonPilot, drives the vehicle's PWM
 outputs, publishes sensor telemetry, manages camera streams, and exposes a
